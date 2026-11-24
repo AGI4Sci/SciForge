@@ -194,7 +194,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   installationId: '',
   locale: 'en',
   theme: 'system',
-  uiFontScale: 'small',
+  uiFontScale: 'medium',
   performanceMode: false,
   modelRouter: defaultModelRouterSettings(),
   agentCapabilities: defaultAgentCapabilitySettings(),

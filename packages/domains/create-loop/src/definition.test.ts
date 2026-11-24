@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import packageJson from '../package.json' with { type: 'json' }
 import {
   WORKFLOW_AUTOMATION_CAPABILITY_FACTORY_CONTRIBUTION,
   WORKFLOW_AUTOMATION_CAPABILITY_EVAL_CONTRIBUTION,
@@ -16,7 +17,7 @@ import {
 test('declares the canonical Create Loop package identity', () => {
   assert.equal(WORKFLOW_AUTOMATION_DOMAIN_PACKAGE_NAME, '@sciforge/domain-create-loop')
   assert.equal(WORKFLOW_AUTOMATION_DOMAIN_MODULE_ID, 'sciforge.create-loop')
-  assert.equal(domainPackageDefinition.module.version, '1.1.4')
+  assert.equal(domainPackageDefinition.module.version, packageJson.version)
 })
 
 test('owns main runtime, capability evaluation, and command-driven renderer contributions', () => {

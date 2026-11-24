@@ -179,6 +179,8 @@ module.exports = {
   },
   files: [
     'out/**/*',
+    'scripts/electron-entry.mjs',
+    'scripts/electron-entry-guard.mjs',
     'package.json',
     ...dshRuntimeFileSets(),
     'node_modules/playwright-core/**/*',

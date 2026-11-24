@@ -179,7 +179,7 @@ describe('development external plugin service', () => {
       await service.attachCapabilityRegistry(registry)
       await service.setEnabled('@sciforge/migration-p5-ws-scope', true)
       const definition = registry.require('fixture.ws.echo')
-      const caller = { caller: { workspaceId: '/caller/workspace' } } as never
+      const caller = { caller: { workspaceId: '/caller/workspace' }, assertPrincipalCurrent: () => {} } as never
       invoke.mockClear()
       await expect(definition.handler({ workspaceRoot: '/foreign/path' }, caller))
         .rejects.toThrow('rejects a workspaceRoot outside the authenticated caller workspace')

@@ -100,7 +100,7 @@ function JsonValue({ value, depth = 0 }: Readonly<{ value: unknown; depth?: numb
       <ol className="flex flex-col gap-1 pl-4">
         {visible.map((entry, index) => (
           <li key={index} className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-2">
-            <span className="font-mono text-[10px] text-ds-faint">{index}</span>
+            <span className="font-mono text-ds-2xs text-ds-faint">{index}</span>
             <JsonValue value={entry} depth={depth + 1} />
           </li>
         ))}
@@ -119,7 +119,7 @@ function JsonValue({ value, depth = 0 }: Readonly<{ value: unknown; depth?: numb
       <dl className="grid min-w-0 grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] gap-x-3 gap-y-1.5">
         {visible.map(([key, entry]) => (
           <div key={key} className="contents">
-            <dt className="break-words font-mono text-[10.5px] text-ds-faint">{key}</dt>
+            <dt className="break-words font-mono text-ds-2xs text-ds-faint">{key}</dt>
             <dd className="min-w-0"><JsonValue value={entry} depth={depth + 1} /></dd>
           </div>
         ))}
@@ -143,23 +143,23 @@ function PayloadSection({
   const raw = serialized?.trim() ?? ''
   return (
     <section className="min-w-0 rounded-lg border border-ds-border bg-ds-card p-3">
-      <h3 className="mb-2 text-[11px] font-semibold uppercase text-ds-faint">{label}</h3>
+      <h3 className="mb-2 text-ds-xs font-semibold uppercase text-ds-faint">{label}</h3>
       {raw ? (
         <>
-          <div className="min-w-0 text-[11.5px] leading-5 text-ds-muted">
+          <div className="min-w-0 text-ds-xs leading-5 text-ds-muted">
             <JsonValue value={parsed} />
           </div>
           <details className="mt-3 border-t border-ds-border pt-2">
-            <summary className="cursor-pointer text-[11px] font-medium text-ds-muted">
+            <summary className="cursor-pointer text-ds-xs font-medium text-ds-muted">
               {t('workflowInspectorRawPayload')}
             </summary>
-            <pre className="mt-2 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-ds-subtle p-3 font-mono text-[11px] leading-5 text-ds-muted">
+            <pre className="mt-2 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-ds-subtle p-3 font-mono text-ds-xs leading-5 text-ds-muted">
               {raw}
             </pre>
           </details>
         </>
       ) : (
-        <p className="text-[11.5px] text-ds-faint">{t('workflowInspectorNoPayload')}</p>
+        <p className="text-ds-xs text-ds-faint">{t('workflowInspectorNoPayload')}</p>
       )}
     </section>
   )
@@ -176,7 +176,7 @@ export function WorkflowNodeRunDetailsPanel({
   const { t } = useTranslation('common')
   if (!node) {
     return (
-      <div className="flex h-full items-center justify-center px-6 text-center text-[12.5px] text-ds-faint">
+      <div className="flex h-full items-center justify-center px-6 text-center text-ds-sm text-ds-faint">
         {t('workflowInspectorNoSelection')}
       </div>
     )
@@ -195,19 +195,19 @@ export function WorkflowNodeRunDetailsPanel({
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-start gap-3 border-b border-ds-border px-4 py-3">
-        <span className={`mt-0.5 inline-flex items-center gap-1 text-[11.5px] font-medium ${presentation.className}`}>
+        <span className={`mt-0.5 inline-flex items-center gap-1 text-ds-xs font-medium ${presentation.className}`}>
           {presentation.icon}
           {t(presentation.labelKey)}
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="break-words text-[13px] font-semibold leading-5 text-ds-ink">{node.name}</h2>
-          <p className="text-[10.5px] text-ds-faint">{node.type}</p>
+          <h2 className="break-words text-ds-md font-semibold leading-5 text-ds-ink">{node.name}</h2>
+          <p className="text-ds-2xs text-ds-faint">{node.type}</p>
         </div>
         <button
           type="button"
           disabled={running || effectiveStatus === 'running' || node.disabled}
           onClick={() => onRunNode(node.id)}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-ds-border bg-ds-card px-2.5 text-[11.5px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-50"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-ds-border bg-ds-card px-2.5 text-ds-xs font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-50"
         >
           <Play className="h-3.5 w-3.5" />
           {t('workflowRunNode')}
@@ -216,10 +216,10 @@ export function WorkflowNodeRunDetailsPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <section className="mb-3 rounded-lg border border-ds-border bg-ds-card p-3">
-          <h3 className="mb-2 text-[11px] font-semibold uppercase text-ds-faint">
+          <h3 className="mb-2 text-ds-xs font-semibold uppercase text-ds-faint">
             {t('workflowInspectorOverview')}
           </h3>
-          <dl className="grid min-w-0 grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11.5px]">
+          <dl className="grid min-w-0 grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-ds-xs">
             <dt className="text-ds-faint">{t('workflowInspectorNodeId')}</dt>
             <dd className="break-all font-mono text-ds-muted">{node.id}</dd>
             <dt className="text-ds-faint">{t('workflowInspectorUpstream')}</dt>
@@ -239,10 +239,10 @@ export function WorkflowNodeRunDetailsPanel({
 
         {result?.message || result?.error ? (
           <section className={`mb-3 rounded-lg border p-3 ${result.error ? 'border-red-300/70 bg-red-500/5' : 'border-ds-border bg-ds-card'}`}>
-            <h3 className="mb-1 text-[11px] font-semibold uppercase text-ds-faint">
+            <h3 className="mb-1 text-ds-xs font-semibold uppercase text-ds-faint">
               {result.error ? t('workflowResultError') : t('workflowResultMessage')}
             </h3>
-            <p className={`whitespace-pre-wrap break-words text-[11.5px] leading-5 ${result.error ? 'text-red-600' : 'text-ds-muted'}`}>
+            <p className={`whitespace-pre-wrap break-words text-ds-xs leading-5 ${result.error ? 'text-red-600' : 'text-ds-muted'}`}>
               {result.error || result.message}
             </p>
           </section>
@@ -251,17 +251,17 @@ export function WorkflowNodeRunDetailsPanel({
         {result && (artifactRefs.length > 0 || attempts.length > 0 || result.retries) ? (
           <section className="mb-3 rounded-lg border border-ds-border bg-ds-card p-3">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="mr-auto inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase text-ds-faint">
+              <h3 className="mr-auto inline-flex items-center gap-1.5 text-ds-xs font-semibold uppercase text-ds-faint">
                 <FileOutput className="h-3.5 w-3.5" />
                 {t('workflowInspectorArtifacts')}
               </h3>
               {attempts.length > 0 ? (
-                <span className="rounded-md bg-ds-subtle px-2 py-1 text-[10.5px] text-ds-muted">
+                <span className="rounded-md bg-ds-subtle px-2 py-1 text-ds-2xs text-ds-muted">
                   {t('workflowInspectorAttemptCount', { count: attempts.length })}
                 </span>
               ) : null}
               {result.retries ? (
-                <span className="rounded-md bg-amber-500/10 px-2 py-1 text-[10.5px] text-amber-700 dark:text-amber-300">
+                <span className="rounded-md bg-amber-500/10 px-2 py-1 text-ds-2xs text-amber-700 dark:text-amber-300">
                   {t('workflowInspectorRetryCount', { count: result.retries })}
                 </span>
               ) : null}
@@ -271,7 +271,7 @@ export function WorkflowNodeRunDetailsPanel({
                 {artifactRefs.map((artifact, index) => (
                   <li
                     key={`${artifact.ref}-${index}`}
-                    className="grid min-w-0 grid-cols-[4.5rem_minmax(0,1fr)] gap-2 rounded-md border border-ds-border/70 bg-ds-subtle/50 px-2 py-1.5 text-[10.5px]"
+                    className="grid min-w-0 grid-cols-[4.5rem_minmax(0,1fr)] gap-2 rounded-md border border-ds-border/70 bg-ds-subtle/50 px-2 py-1.5 text-ds-2xs"
                   >
                     <span className="font-medium uppercase text-ds-faint">{artifact.kind}</span>
                     <span className="min-w-0 break-all font-mono text-ds-muted">{artifact.ref}</span>

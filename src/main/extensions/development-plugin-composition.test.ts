@@ -8,20 +8,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isDomainMainRuntimeLifecycleContribution } from '@sciforge/domain-sdk/host'
 import { artifactVersionCommitResultV1Schema } from '@sciforge/domain-artifact-versions/contract'
 import { createDomainMainEntry, type ArtifactVersionsCapabilityOptions } from '@sciforge/domain-artifact-versions/main'
-import { createDomainHostServiceResolver, type EvidenceDomainHostServiceOptions } from '@sciforge/domain-evidence-dag/host-services'
+import { createDomainHostServiceResolver, type ArtifactVersionsHostServiceOptions } from '@sciforge/domain-artifact-versions/host-services'
 import type { HostServiceRequest, PluginAdapterContract } from '@sciforge/plugin-sdk'
 import { createInstalledDomainHostServiceResolution } from '../modules/installed-domain-main'
 import { createAgentThreadsHostServiceResolver } from './agent-threads-host-service'
+import { createAgentDiscussionHostServiceResolver } from './agent-discussion-host-service'
 import { createReadGrantedHostServicePorts, mergeHostServiceResolutions, type HostServiceResolution } from './host-service-resolution'
 import type { AgentRuntimeThreadSnapshot } from '../../shared/agent-runtime-contract'
 import { CapabilityBroker } from '../capabilities/broker'
 import { CapabilityRegistry, defineCapability } from '../capabilities/registry'
 import type { CapabilityInvocationResult } from '../../shared/capability-broker'
-import { projectAgentRuntimeThreadSnapshot } from '../runtime/agent-runtime/thread-wire-projection'
 import { DevelopmentExternalPluginService } from './development-external-plugins'
 import { canonicalWorkspacePath, createWorkspaceAuthority } from './workspace-authority'
 import { createVisualCaptureHostServiceResolver } from './visual-capture-host-service'
 import { composeNativeExecutionHostServices } from './native-execution-composition'
+import { createDomainHostCapabilityInvoker } from './domain-host-capability-invoker'
 
 // Execute the actual startup block, including creation of the package resolver
 // before the Runtime Host is available. Electron and its UI protocol stay inert.
@@ -63,7 +64,7 @@ afterEach(async () => {
 async function fixture(broker?: CapabilityBroker, mode: 'development' | 'installed' = 'development', packaged = false) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'sciforge-plugin-composition-'))
   roots.push(root)
-  let options: EvidenceDomainHostServiceOptions | undefined
+  let options: ArtifactVersionsHostServiceOptions | undefined
   let resolution: HostServiceResolution | undefined
   let readAgentSnapshot: ((input: { runtimeId: string; threadId: string; signal: AbortSignal }) => Promise<AgentRuntimeThreadSnapshot>) | undefined
   const agentRuntimeHostRef: { current: unknown } = { current: null }
@@ -97,16 +98,18 @@ async function fixture(broker?: CapabilityBroker, mode: 'development' | 'install
       return createAgentThreadsHostServiceResolver(input)
     },
     createVisualCaptureHostServiceResolver,
+    createAgentDiscussionHostServiceResolver,
     visibleContextService: { boundSurface: vi.fn(), registeredTargetRef: vi.fn(), resolveRegisteredTarget: vi.fn(), currentRegisteredTargetSnapshot: vi.fn() },
     registeredTargetVisualCapture: { captureRegisteredTarget: vi.fn() },
     visualCaptureInstanceId: 'test-instance',
     agentRuntimeHostRef,
     capabilityBrokerForDomainServices: broker,
+    createDomainHostCapabilityInvoker,
     pluginDshConfigs: {},
     pluginContractPins: {},
     authorizeHostService: (input: { packageName: string; version: string; serviceId: string }) =>
       input.serviceId === 'artifact-versions.workspace' && input.packageName === '@sciforge/plugin-scientific-plotting' && input.version === '0.2.2',
-    createInstalledDomainHostServiceResolution: (input: EvidenceDomainHostServiceOptions) => {
+    createInstalledDomainHostServiceResolution: (input: ArtifactVersionsHostServiceOptions) => {
       options = input
       return createInstalledDomainHostServiceResolution(input)
     },
@@ -115,8 +118,6 @@ async function fixture(broker?: CapabilityBroker, mode: 'development' | 'install
     store: { load: vi.fn(async () => ({ workspaceRoot: root, write: { workspaces: [] as string[] } })) },
     workspaceHostSessions: { list: () => [] },
     createWorkspaceAuthority,
-    createEvidenceModelReasoner: () => vi.fn(),
-    projectAgentRuntimeThreadSnapshot,
     DevelopmentExternalPluginService,
     HOST_BUSINESS_INVOKE_TIMEOUT_MS: 1_000,
     installDevelopmentPluginUiProtocol: vi.fn(),
@@ -134,30 +135,31 @@ async function fixture(broker?: CapabilityBroker, mode: 'development' | 'install
 }
 
 function request(operation: string, input: unknown, workspaceRoot: string, overrides: Partial<HostServiceRequest> = {}): HostServiceRequest {
-  const identity = { pluginId: '@sciforge/plugin-evidence-dag', version: '1.0.0', profileId: workspaceRoot }
+  const identity = { pluginId: 'ordinary-consumer', version: '1.0.0', profileId: workspaceRoot }
   const scope = { runtimeId: 'codex', threadId: 'thread-1', workspaceRoot }
   return {
-    requestId: 'host-request-1', serviceId: 'evidenceDagPorts', operation,
+    requestId: 'host-request-1', serviceId: 'artifact-versions.workspace', operation,
     owner: { ...identity, connectionId: 'connection-1', packageName: identity.pluginId, generation: 1, invocationId: 'outer-invocation', authority: {
       caller: { audience: 'agent', callerId: 'canonical-agent', workspaceId: workspaceRoot },
       ordinarySession: { runtimeId: scope.runtimeId, threadId: scope.threadId },
       originalContext: { runtimeId: scope.runtimeId, threadId: scope.threadId, callId: 'original-call' },
       effect: 'workspace-write'
     } },
-    input: { protocol: 'sciforge-evidence-ports.v1', requestId: 'request-1', identity, operation, scope, input },
+    input: { workspaceRoot, input },
     signal: new AbortController().signal, assertCurrent: vi.fn(),
     ...overrides
   }
 }
 
-function providerFor(options: EvidenceDomainHostServiceOptions, root: string) {
-  const resolver = createDomainHostServiceResolver({
-    ...options,
-    environment: { SCIFORGE_EVIDENCE_PYTHON: '/unused/python', SCIFORGE_EVIDENCE_WHEEL_PATH: '/unused/wheel', SCIFORGE_EVIDENCE_WHEEL_SHA256: '0'.repeat(64), SCIFORGE_EVIDENCE_CLIENT_MODULE: '/unused/client' }
-  })
-  const provider = resolver.resolve('@sciforge/plugin-evidence-dag', '1.0.0', 1)?.evidenceDagPorts
+function providerFor(options: ArtifactVersionsHostServiceOptions, root: string) {
+  const resolver = createDomainHostServiceResolver({ ...options })
+  const provider = resolver.resolve('@sciforge/plugin-scientific-plotting', '0.2.2', 1)?.['artifact-versions.workspace']
   if (!provider) throw new Error('Package-owned Host service was not resolved.')
-  return async (operation: string, input: unknown, overrides: Partial<HostServiceRequest> = {}) => provider.operations[operation](request(operation, input, root, overrides))
+  return async (operation: string, input: unknown, overrides: Partial<HostServiceRequest> = {}) => {
+    const base = request(operation, input, root)
+    const owner = { ...base.owner, pluginId: '@sciforge/plugin-scientific-plotting', packageName: '@sciforge/plugin-scientific-plotting', version: '0.2.2' }
+    return provider.operations[operation]({ ...base, owner, ...overrides })
+  }
 }
 
 describe('production development plugin composition', () => {
@@ -246,7 +248,7 @@ describe('production development plugin composition', () => {
   it('merges the controlled visual service with existing providers and rechecks exact approved grants', async () => {
     const { resolution, contracts } = await fixture()
     expect(resolution.hostServiceIds).toContain('visualCapture')
-    expect(resolution.hostServiceIds).toContain('evidenceDagPorts')
+    expect(resolution.hostServiceIds).toContain('agentThreads')
     expect(resolution.resolveHostServiceProviders('example-plugin', '1.0.0', 1)?.visualCapture).toBeDefined()
     expect(resolution.resolveHostServiceClients('example-plugin', '1.0.0', 1)).toContainEqual(expect.objectContaining({
       serviceId: 'visualCapture', modulePath: expect.stringContaining(join('packages', 'plugin-sdk', 'src', 'host-service-client.mjs'))
@@ -290,19 +292,6 @@ describe('production development plugin composition', () => {
     contracts.set('neutral-plugin@1.0.0', { ...contract, dshAuthorization: { ...contract.dshAuthorization!, packageName: 'foreign-plugin' } })
     expect(ports('neutral-plugin', '1.0.0')).toBeUndefined()
   })
-  it('composes before Runtime Host publication and reads the published Host at invocation', async () => {
-    const { root, options, agentRuntimeHostRef } = await fixture()
-    const scope = { runtimeId: 'codex', threadId: 'thread-1', workspaceRoot: root }
-    const context = { caller: {}, signal: new AbortController().signal, assertCurrent() {}, ordinarySession: { runtimeId: 'codex', threadId: 'thread-1' } }
-    await expect(options.threads.read(scope, context)).rejects.toThrow('not ready for extension invocation')
-    agentRuntimeHostRef.current = {
-      readThreadSnapshot: vi.fn(async () => ({ id: scope.threadId, runtimeId: scope.runtimeId, workspace: root, latestSeq: 0, turns: [] })),
-      listThreads: vi.fn(async () => [{ id: scope.threadId, runtimeId: scope.runtimeId, workspace: root }, { id: 'foreign-thread', runtimeId: scope.runtimeId, workspace: root }])
-    }
-    await expect(options.threads.read(scope, context)).resolves.toMatchObject({ ...scope, trace: [] })
-    await expect(options.threads.list(scope, context)).resolves.toEqual([scope])
-  })
-
   it('routes package-owned artifact contracts through the real Broker with caller, Session and idempotency intact', async () => {
     const registry = new CapabilityRegistry()
     const broker = new CapabilityBroker(registry)
@@ -334,12 +323,12 @@ describe('production development plugin composition', () => {
     })
     try {
       const call = providerFor(options, root)
-      const input = { idempotencyKey: ' evidence-commit-1 ', candidates: [{ candidateId: 'figure', expectedCurrentVersionId: null, kind: 'figure', intent: 'rerun', content: { mode: 'snapshot', dataBase64: 'YQ==' }, accessPolicy: { visibility: 'restricted', principals: ['canonical-agent'], allowExport: false } }] }
-      const first = await call('artifacts.commit', input)
+      const input = { idempotencyKey: ' artifact-commit-1 ', candidates: [{ candidateId: 'figure', expectedCurrentVersionId: null, kind: 'figure', intent: 'rerun', content: { mode: 'snapshot', dataBase64: 'YQ==' }, accessPolicy: { visibility: 'restricted', principals: ['canonical-agent'], allowExport: false } }] }
+      const first = await call('commit', input)
       expect(first).toMatchObject({ ok: true })
-      const second = await call('artifacts.commit', input)
+      const second = await call('commit', input)
       expect(second).toEqual(first)
-      const invocationId = `evidence-artifacts:${createHash('sha256').update(input.idempotencyKey).digest('hex')}`
+      const invocationId = `plugin-artifacts:${createHash('sha256').update(`@sciforge/plugin-scientific-plotting\u0000${input.idempotencyKey.trim()}`).digest('hex')}`
       expect(invoke.mock.calls[0]).toMatchObject([
         { audience: 'agent', callerId: 'canonical-agent', workspaceId: root },
         { input: { ...input, idempotencyKey: input.idempotencyKey.trim() }, invocationId },
@@ -348,16 +337,15 @@ describe('production development plugin composition', () => {
       ])
       const receipt = artifactVersionCommitResultV1Schema.parse(first)
       if (!receipt.ok) throw new Error(receipt.issue.message)
-      await expect(call('artifacts.listEvents', { afterSequence: 0, limit: 100 })).resolves.toMatchObject({ ok: true, value: { events: expect.any(Array) } })
-      await expect(call('artifacts.read', { versionId: receipt.value.versions[0].version.versionId })).resolves.toMatchObject({ ok: true, value: { dataBase64: 'YQ==' } })
+      await expect(call('read', { versionId: receipt.value.versions[0].version.versionId })).resolves.toMatchObject({ ok: true, value: { dataBase64: 'YQ==' } })
       const before = invoke.mock.calls.length
-      await expect(call('artifacts.commit', { ...input, unexpected: true })).rejects.toThrow()
+      await expect(call('commit', { ...input, unexpected: true })).rejects.toThrow()
       expect(invoke).toHaveBeenCalledTimes(before)
-      await expect(call('artifacts.commit', { ...input, candidates: [{ ...input.candidates[0], content: { mode: 'snapshot', dataBase64: 'Yg==' } }] })).rejects.toThrow(/idempotency|different/i)
-      const owner = request('artifacts.read', {}, root).owner
-      await expect(call('artifacts.read', { versionId: receipt.value.versions[0].version.versionId }, { owner: { ...owner, authority: { ...owner.authority, caller: { audience: 'agent', callerId: 'foreign-agent', workspaceId: root } } } })).resolves.toMatchObject({ ok: false })
-      await expect(call('artifacts.commit', input, { owner: { ...owner, authority: { ...owner.authority, effect: 'read' } } })).rejects.toThrow(/not authorized by capability effect/)
-      await expect(call('artifacts.read', { versionId: receipt.value.versions[0].version.versionId }, { owner: { ...owner, authority: { ...owner.authority, originalContext: { runtimeId: 'codex', threadId: 'foreign-thread' } } } })).rejects.toThrow(/does not match the authenticated Session/)
+      await expect(call('commit', { ...input, candidates: [{ ...input.candidates[0], content: { mode: 'snapshot', dataBase64: 'Yg==' } }] })).rejects.toThrow(/idempotency|different/i)
+      const owner = { ...request('read', {}, root).owner, pluginId: '@sciforge/plugin-scientific-plotting', packageName: '@sciforge/plugin-scientific-plotting', version: '0.2.2' }
+      await expect(call('read', { versionId: receipt.value.versions[0].version.versionId }, { owner: { ...owner, authority: { ...owner.authority, caller: { audience: 'agent', callerId: 'foreign-agent', workspaceId: root } } } })).resolves.toMatchObject({ ok: false })
+      await expect(call('commit', input, { owner: { ...owner, authority: { ...owner.authority, effect: 'read' } } })).rejects.toThrow(/not authorized by capability effect/)
+      await expect(call('read', { versionId: receipt.value.versions[0].version.versionId }, { owner: { ...owner, authority: { ...owner.authority, originalContext: { runtimeId: 'codex', threadId: 'foreign-thread' } } } })).rejects.toThrow(/does not match the authenticated Session/)
     } finally {
       if (typeof deactivate === 'function') await deactivate()
     }
@@ -371,7 +359,7 @@ describe('production development plugin composition', () => {
     const { options } = await fixture(broker)
     const abort = new AbortController()
     abort.abort(new Error('cancelled'))
-    const context = { caller: {}, signal: abort.signal, assertCurrent() {}, ordinarySession: { runtimeId: 'codex', threadId: 'thread-1' } }
+    const context = { caller: { audience: 'agent' as const, callerId: 'canonical-agent' }, signal: abort.signal, assertCurrent() {}, ordinarySession: { runtimeId: 'codex', threadId: 'thread-1' } }
     await expect(options.capabilities.invoke({ actionId: 'neutral.read', input: {} }, context)).rejects.toThrow('cancelled')
     expect(invoke).not.toHaveBeenCalled()
     const active = new AbortController()

@@ -1,10 +1,10 @@
 import type { DomainMainPackageSecretStoreHost } from '@sciforge/domain-sdk/package-storage'
+import { createHash } from 'node:crypto'
 
 import { SiYuanError } from './client.js'
 
-/** One key, one secret: the API token of the service this package talks to.
+/** One endpoint-scoped key per service token.
  * The value never leaves the main process and is never echoed by a capability. */
-const TOKEN_KEY = 'siyuan.service.token'
 
 export type SiYuanTokenState = 'configured' | 'absent' | 'unavailable'
 
@@ -34,36 +34,41 @@ const normalizedToken = (token: string): string => {
  * token in plain text.
  */
 export function createSiYuanTokenStore(
-  secrets?: DomainMainPackageSecretStoreHost
+  secrets: DomainMainPackageSecretStoreHost | undefined,
+  serviceUrl: string
 ): SiYuanTokenStore {
+  const key = 'siyuan.service.token.' + createHash('sha256').update(serviceUrl).digest('hex')
   return Object.freeze({
     available: () => secrets !== undefined,
     state: async () => {
       if (!secrets) return 'unavailable'
       try {
-        return (await secrets.has(TOKEN_KEY)) ? 'configured' : 'absent'
+        return (await secrets.has(key)) ? 'configured' : 'absent'
       } catch {
-        // A broken keychain must not break the page: report it, and let the
-        // environment variable remain a working fallback.
+        // Introspection can report an unavailable store; endpoint resolution
+        // uses read(), which fails explicitly rather than guessing credentials.
         return 'unavailable'
       }
     },
     read: async () => {
       if (!secrets) return undefined
       try {
-        const value = await secrets.read(TOKEN_KEY)
+        const value = await secrets.read(key)
         return value?.trim() || undefined
       } catch {
-        return undefined
+        throw new SiYuanError('secure_storage_unavailable')
       }
     },
     write: async (token) => {
       if (!secrets) throw new SiYuanError('secure_storage_unavailable')
-      await secrets.write(TOKEN_KEY, normalizedToken(token))
+      const value = normalizedToken(token)
+      try { await secrets.write(key, value) }
+      catch { throw new SiYuanError('secure_storage_unavailable') }
     },
     clear: async () => {
       if (!secrets) throw new SiYuanError('secure_storage_unavailable')
-      await secrets.remove(TOKEN_KEY)
+      try { await secrets.remove(key) }
+      catch { throw new SiYuanError('secure_storage_unavailable') }
     }
   })
 }

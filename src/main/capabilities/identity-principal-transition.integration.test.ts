@@ -18,6 +18,7 @@ import {
   createDomainMainEntry,
   type IdentityCapabilityFactory
 } from '@sciforge/domain-identity-access/main'
+import { domainPackageDefinition as identityDefinition } from '@sciforge/domain-identity-access/definition'
 import {
   definePrincipalContextSnapshot,
   type DomainMainPrincipalProvider,
@@ -369,6 +370,7 @@ function identityBrokerFixture(root: string) {
     getDeviceId: () => 'device-integration-1',
     internalServices: createIsolatedInternalServicesForTest(),
     packageSecrets: memorySecrets(),
+    packageSettings: createNonSecretPackageStorageForTest()({ moduleId: identityDefinition.module.id, moduleVersion: identityDefinition.module.version }).settings,
     defineCapability: (options) => defineCapability(
       options as DefineCapabilityOptions<z.ZodType, z.ZodType>
     )
@@ -480,7 +482,9 @@ function cloudIdentityBrokerFixture() {
       options as unknown as DefineCapabilityOptions<z.ZodType, z.ZodType>
     ),
     getService: () => ({}) as never,
-    getCloudRuntime: () => runtime as never
+    getCloudRuntime: () => runtime as never,
+    getCloudConfiguration: async () => cloudConfigurationFixture(),
+    configureCloud: async () => cloudConfigurationFixture()
   })
   const definitions = factory.createDefinitions().map((definition) => ({
     ...definition,
@@ -591,6 +595,18 @@ function memorySecrets() {
     remove: async (key: string) => {
       values.delete(key)
     }
+  }
+}
+
+function cloudConfigurationFixture() {
+  return {
+    configured: false,
+    oidcIssuer: null,
+    cloudBaseUrl: null,
+    source: { oidcIssuer: null, cloudBaseUrl: null },
+    missing: ['oidcIssuer', 'cloudBaseUrl'] as const,
+    invalid: [] as const,
+    storage: 'available' as const
   }
 }
 

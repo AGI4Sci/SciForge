@@ -57,6 +57,7 @@ import type {
 import { extractScientificObjectMetadata } from '@shared/scientific-objects'
 import type { LocalRuntimeMemoryRecordJson } from './local-runtime-contract'
 import { getDisplayThreadTitle } from '../lib/thread-title'
+import { effectiveTurnOptions } from '../lib/runtime-effective-turn-options'
 import {
   describeRuntimeError,
   isExecutionIntegrityErrorCode
@@ -64,7 +65,6 @@ import {
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 
 type LegacyCapabilities = ReturnType<AgentProvider['getCapabilities']>
-type SendUserMessageOptions = NonNullable<Parameters<AgentProvider['sendUserMessage']>[2]>
 type AgentRuntimeThreadMetadata = Partial<Pick<
   NormalizedThread,
   | 'threadSource'
@@ -202,19 +202,6 @@ function legacyCapabilities(capabilities: AgentRuntimeCapabilities): LegacyCapab
     checkpoints: capabilities.storage.checkpoints?.available === true,
     sideConversations: capabilities.controls.fork === true
   }
-}
-
-function turnOptionsForRuntime(runtimeId: AgentRuntimeId, options: SendUserMessageOptions): SendUserMessageOptions {
-  if (runtimeId === 'dsh') {
-    // DSH's model is selected by the Host ModelRouter, not inherited composer
-    // hints from another runtime. The neutral default agent mode needs no ACP
-    // override; retain other modes so unsupported requests still fail closed.
-    const { model: _model, reasoningEffort: _reasoning, serviceTier: _tier, mode, ...rest } = options
-    return { ...rest, ...(mode && mode !== 'agent' ? { mode } : {}) }
-  }
-  if (runtimeId !== 'claude') return options
-  const { model: _model, ...rest } = options
-  return rest
 }
 
 function unresolvedInteraction(feature: string, requestId: string): Error {
@@ -772,6 +759,7 @@ function normalizeSharedMemoryRecord(value: unknown): LocalRuntimeMemoryRecordJs
   return {
     id: stringValue(record.id),
     content: stringValue(record.content) || stringValue(record.text),
+    ...(record.research !== undefined ? { research: structuredClone(record.research as AgentRuntimeMemoryRecord['research']) } : {}),
     scope: normalizeMemoryScope(record.scope),
     ...(stringValue(record.workspace) ? { workspace: stringValue(record.workspace) } : {}),
     ...(stringValue(record.project) ? { project: stringValue(record.project) } : {}),
@@ -1038,7 +1026,7 @@ export class AgentRuntimeProvider implements AgentProvider {
         targetThreadId: threadId,
         text,
         ...(title ? { title } : {}),
-        ...(await turnOptionsForRuntime(activeRuntimeId, placedTurnOptions))
+        ...(effectiveTurnOptions(activeRuntimeId, placedTurnOptions))
       }, runtimeId, workspaceLocator)
       const targetThread = this.normalizeRememberedThread(result.targetThread)
       this.rememberThreadRuntime(
@@ -1056,7 +1044,7 @@ export class AgentRuntimeProvider implements AgentProvider {
       runtimeId,
       threadId,
       text,
-      ...(await turnOptionsForRuntime(runtimeId, placedTurnOptions))
+      ...(effectiveTurnOptions(runtimeId, placedTurnOptions))
     })
   }
 

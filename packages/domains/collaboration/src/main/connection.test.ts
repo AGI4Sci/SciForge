@@ -122,6 +122,14 @@ test('automatically reconnects and resumes the outbox after OIDC authority retur
       }
       throw new Error(`Unexpected authenticated request ${request.type}`)
     },
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Object staging is unused.') },
     readObject: async () => { throw new Error('Object reads are unused.') }
   })
@@ -210,6 +218,14 @@ test('a configured Desktop joins once Identity recovers after startup', async (c
         }
         throw new Error(`Unexpected authenticated request ${request.type}`)
       },
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Object staging is unused.') },
       readObject: async () => { throw new Error('Object reads are unused.') }
     }),
@@ -1414,6 +1430,14 @@ function userTransport(
       const request = restRequestSchema.parse(input.payload)
       return { contractVersion: 1, status: 200, body: await execute(request, options) as never }
     },
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Object staging is unused.') },
     readObject: async () => { throw new Error('Object reads are unused.') }
   })

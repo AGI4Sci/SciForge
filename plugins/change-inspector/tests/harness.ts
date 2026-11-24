@@ -27,7 +27,7 @@ import { EXPECTED_HOST_GRANTS } from '../src/dsh-adapter/tools.js'
 
 export const PACKAGE_NAME = '@sciforge/plugin-change-inspector'
 export const PACKAGE_VERSION: string = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version
-export const DSH_RUNTIME_VERSION = '0.2.0-rc.2'
+export const DSH_RUNTIME_VERSION = '0.2.1-rc.4'
 export const PLUGIN_SOURCE = fileURLToPath(new URL('..', import.meta.url))
 /** What the manifest asks the host to grant. */
 export const DECLARED_IDS = Object.values(EXPECTED_HOST_GRANTS).map((grant) => grant.id).sort()

@@ -63,6 +63,22 @@ test('Identity declares its private vault as a main-bundle native addon', async 
   })
 })
 
+test('reports only strict license archives, never silently skips empty or partial packages', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-main-native-addon-'))
+  const archived = join(root, 'packages', 'domains', 'archive')
+  try {
+    await mkdir(archived, {recursive:true})
+    await writeFile(join(archived, 'LICENSE'), 'Synthetic attribution text')
+    const skipped = []
+    const input = {repositoryRoot:root, mainOutputDirectory:join(root,'out/main'), platform:'darwin', onSkipPackageDirectory:name=>skipped.push(name)}
+    assert.deepEqual(await stageDomainMainNativeAddons(input), [])
+    assert.deepEqual(skipped, ['archive'])
+    await writeFile(join(archived,'runtime.ts'),'export const unexpected = true')
+    await assert.rejects(stageDomainMainNativeAddons(input), {code:'ENOENT'})
+    await assert.rejects(stageDomainMainNativeAddons({...input,onSkipPackageDirectory:true}), /must be a function/)
+  } finally {await rm(root,{recursive:true,force:true})}
+})
+
 test('rejects a domain native addon path that escapes its package', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-main-native-addon-'))
   const packageRoot = join(root, 'packages', 'domains', 'unsafe-fixture')

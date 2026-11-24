@@ -26,86 +26,256 @@ export type ToolbarAction = {
   expanded?: boolean
 }
 
+/** Size of one square icon-only rail pill. */
+export const TOOLBAR_ACTION_SIZE = 44
+
+/**
+ * Rendered width of the vertical toolbar rail. Kept in sync with the
+ * `--ds-sidebar-rail-width` token so the right rail and the collapsed left
+ * sidebar read as one symmetrical pair. `AdaptiveToolbar.test.ts` asserts the
+ * token still matches.
+ */
+export const TOOLBAR_RAIL_WIDTH = 56
+
+/**
+ * How many items fit in `available` space before a reserved trailing item.
+ * Shared by the rail's height fit and unit-tested on its own; the caller owns
+ * the meaning of "size" (the rail only ever passes heights).
+ */
 export function fittingToolbarActions(
-  width: number,
-  widths: readonly number[],
-  trailingWidth: number,
+  available: number,
+  sizes: readonly number[],
+  trailingSize: number,
   gap: number
 ): number {
-  let used = trailingWidth
+  let used = trailingSize
   let count = 0
-  for (const itemWidth of widths) {
-    used += itemWidth + gap
-    if (used > width) break
+  for (const itemSize of sizes) {
+    used += itemSize + gap
+    if (used > available) break
     count++
   }
   return count
 }
 
-/** One ordered action list drives both the toolbar and its overflow menu. */
+export type ToolbarFitPlan = {
+  /** Actions rendered in the rail; the rest live in the "More tools" menu. */
+  visibleCount: number
+}
+
+export type VerticalToolbarFitInput = {
+  /** Height available inside the rail's padding box. */
+  height: number
+  /** Measured height of every action pill, in order. */
+  itemHeights: readonly number[]
+  /** Measured height of the customization pill (the non-overflow tail). */
+  customizeTailHeight: number
+  /** Measured height of the "More tools" pill. */
+  moreTailHeight: number
+  /** Row gap between stacked pills. */
+  gap: number
+}
+
+/**
+ * Vertical fit rule — the rail never squeezes horizontally, it only ever hands
+ * the tail of the ordered action list to the "More tools" menu:
+ *
+ * 1. every action plus the customization pill fits → render the whole set;
+ * 2. otherwise the tail becomes "More tools", the deepest prefix that still
+ *    fits stays in the rail and the remainder moves into the menu. At least one
+ *    action always stays in the menu, so "More" never opens an empty panel.
+ *
+ * The plan is pure: the component feeds it measured heights, so it is unit
+ * tested without a DOM.
+ */
+export function planVerticalToolbarFit(input: VerticalToolbarFitInput): ToolbarFitPlan {
+  const count = input.itemHeights.length
+  if (count === 0) return { visibleCount: 0 }
+  const fitting = (tailHeight: number): number =>
+    fittingToolbarActions(input.height, input.itemHeights, tailHeight, input.gap)
+  if (fitting(input.customizeTailHeight) === count) return { visibleCount: count }
+  return { visibleCount: Math.max(0, Math.min(count - 1, fitting(input.moreTailHeight))) }
+}
+
+export type ToolbarPopupAnchor = {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+export type ToolbarPopupPlacementInput = {
+  anchor: ToolbarPopupAnchor
+  viewport: { width: number; height: number }
+  preferredWidth: number
+  preferredMaxHeight?: number
+  gap?: number
+  margin?: number
+}
+
+export type ToolbarPopupPlacement = {
+  left: number
+  top: number
+  width: number
+  maxHeight: number
+}
+
+const POPUP_MIN_HEIGHT = 160
+
+/**
+ * One placement rule for every toolbar popup (overflow menu, editor picker,
+ * customizer). It derives the side from the anchor's geometry instead of
+ * assuming the toolbar is a horizontal row: a trigger on the right edge opens
+ * its panel to the left, a trigger in the top bar opens below, and a trigger
+ * without room below opens upwards. Shared by every toolbar popup so the
+ * vertical rail did not have to fork the portal positioning code.
+ */
+export function placeToolbarPopup(input: ToolbarPopupPlacementInput): ToolbarPopupPlacement {
+  const margin = input.margin ?? 8
+  const gap = input.gap ?? 8
+  const width = Math.max(0, Math.min(input.preferredWidth, input.viewport.width - margin * 2))
+  const clampLeft = (candidate: number): number =>
+    Math.min(Math.max(margin, candidate), Math.max(margin, input.viewport.width - margin - width))
+
+  const roomRight = input.viewport.width - margin - input.anchor.right - gap
+  const roomLeft = input.anchor.left - gap - margin
+  const left = roomRight >= width
+    ? clampLeft(input.anchor.right + gap)
+    : roomLeft >= width
+      ? clampLeft(input.anchor.left - gap - width)
+      : clampLeft(input.anchor.left)
+
+  const belowTop = Math.max(margin, input.anchor.bottom + gap)
+  const roomBelow = input.viewport.height - margin - belowTop
+  const roomAbove = input.anchor.top - gap - margin
+  const preferredMaxHeight = Math.min(
+    input.preferredMaxHeight ?? Number.POSITIVE_INFINITY,
+    input.viewport.height - margin * 2
+  )
+  if (roomBelow >= Math.min(POPUP_MIN_HEIGHT, preferredMaxHeight) || roomBelow >= roomAbove) {
+    return {
+      left,
+      top: belowTop,
+      width,
+      maxHeight: Math.max(44, Math.min(preferredMaxHeight, roomBelow))
+    }
+  }
+  const maxHeight = Math.max(44, Math.min(preferredMaxHeight, roomAbove))
+  return {
+    left,
+    top: Math.max(margin, input.anchor.top - gap - maxHeight),
+    width,
+    maxHeight
+  }
+}
+
+/**
+ * The workbench toolbar: one vertical rail docked at the right edge. Every
+ * action is an icon-only pill whose accessible name and tooltip carry the full
+ * label; when the available height runs out the tail of the list moves into
+ * the "More tools" menu rendered from the same ordered action list.
+ *
+ * `presentation: 'menu'` renders only the "More tools" pill for hosts that
+ * already have their own chrome (a canvas header); it still opens the same
+ * action list, so both presentations stay one implementation.
+ */
 export function AdaptiveToolbar({
   actions,
   customization,
-  presentation = 'adaptive',
+  presentation = 'rail',
   preserveTextSelection = false
 }: {
   actions: readonly ToolbarAction[]
   customization: ReactElement<{ className?: string }>
-  presentation?: 'adaptive' | 'menu'
+  presentation?: 'rail' | 'menu'
   preserveTextSelection?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const rootRef = useRef<HTMLDivElement>(null)
   const measureRef = useRef<HTMLDivElement>(null)
+  const tailMeasureRef = useRef<HTMLDivElement>(null)
+  const tailRef = useRef<HTMLSpanElement>(null)
   const moreRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const pendingFocusRef = useRef<string | null>(null)
-  const [visibleCount, setVisibleCount] = useState(presentation === 'menu' ? 0 : actions.length)
+  // The tail renders "More" while actions overflow and the customization trigger
+  // otherwise, so its height is not constant. Reserve the tallest tail ever
+  // measured rather than the current one: the reservation then only ever grows,
+  // so swapping the tail cannot flip the fit decision back and forth.
+  const tailHeightRef = useRef(0)
+  const [plan, setPlan] = useState<ToolbarFitPlan>(() => ({
+    visibleCount: presentation === 'menu' ? 0 : actions.length
+  }))
   const [open, setOpen] = useState(false)
-  const [position, setPosition] = useState({
+  const [position, setPosition] = useState<ToolbarPopupPlacement>({
     left: 0,
     top: 0,
     width: 280,
     maxHeight: 400
   })
-  const hidden = actions.slice(visibleCount)
+  const hidden = actions.slice(plan.visibleCount)
   const overflow = hidden.length > 0
 
   useLayoutEffect(() => {
-    if (presentation === 'menu') { setVisibleCount(0); return }
+    if (presentation === 'menu') {
+      setPlan((current) => (current.visibleCount === 0 ? current : { visibleCount: 0 }))
+      return
+    }
     const root = rootRef.current
-    const measure = measureRef.current
-    if (!root || !measure) return
+    if (!root) return
     const update = (): void => {
-      const widths = Array.from(measure.children, (child) => (child as HTMLElement).offsetWidth)
-      const gap = Number.parseFloat(getComputedStyle(root).columnGap) || 0
-      const next = fittingToolbarActions(
-        root.clientWidth,
-        widths.slice(0, -1),
-        widths.at(-1) ?? 44,
-        gap
+      const itemHeights = Array.from(
+        measureRef.current?.children ?? [],
+        (child) => (child as HTMLElement).offsetHeight
       )
+      // Before the first real layout (hidden pane, collapsed container) every
+      // measurement is zero; keep the current plan instead of collapsing the
+      // whole rail into "More" until the ResizeObserver reports a real height.
+      if (root.clientHeight === 0 && itemHeights.every((height) => height === 0)) return
+      const computed = getComputedStyle(root)
+      const gap = Number.parseFloat(computed.rowGap) || 0
+      const paddingTop = Number.parseFloat(computed.paddingTop) || 0
+      const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0
+      const availableHeight = Math.max(0, root.clientHeight - paddingTop - paddingBottom)
+      const measuredTailHeight = tailRef.current?.offsetHeight ?? 0
+      if (measuredTailHeight > 0) {
+        tailHeightRef.current = Math.max(tailHeightRef.current, measuredTailHeight)
+      }
+      const moreMeasure = tailMeasureRef.current?.firstElementChild as HTMLElement | null
+      const next = planVerticalToolbarFit({
+        height: availableHeight,
+        itemHeights: actions.map((_, index) => itemHeights[index] || TOOLBAR_ACTION_SIZE),
+        customizeTailHeight: tailHeightRef.current || TOOLBAR_ACTION_SIZE,
+        moreTailHeight: moreMeasure?.offsetHeight || TOOLBAR_ACTION_SIZE,
+        gap
+      })
       const focused = document.activeElement as HTMLElement | null
       const focusedIndex = focused
         ? actions.findIndex((action) => action.id === focused.dataset.actionId)
         : -1
-      if (focusedIndex >= next && root.contains(focused)) pendingFocusRef.current = 'more'
-      if (focusedIndex >= 0 && focusedIndex < next && panelRef.current?.contains(focused)) {
+      if (focusedIndex >= next.visibleCount && root.contains(focused)) pendingFocusRef.current = 'more'
+      if (focusedIndex >= 0 && focusedIndex < next.visibleCount && panelRef.current?.contains(focused)) {
         pendingFocusRef.current = actions[focusedIndex].id
       }
-      if (focused === moreRef.current && next === actions.length)
+      if (focused === moreRef.current && next.visibleCount === actions.length)
         pendingFocusRef.current = 'customize'
       if (focused?.classList.contains('toolbar-customize')) {
-        if (root.contains(focused) && next < actions.length) pendingFocusRef.current = 'more'
-        if (panelRef.current?.contains(focused) && next === actions.length)
+        if (root.contains(focused) && next.visibleCount < actions.length) pendingFocusRef.current = 'more'
+        if (panelRef.current?.contains(focused) && next.visibleCount === actions.length)
           pendingFocusRef.current = 'customize'
       }
-      setVisibleCount(next)
+      setPlan((current) => (
+        current.visibleCount === next.visibleCount ? current : next
+      ))
     }
     update()
     const observer = new ResizeObserver(update)
     observer.observe(root)
-    for (const child of measure.children) observer.observe(child)
+    if (tailRef.current) observer.observe(tailRef.current)
+    for (const row of [measureRef.current, tailMeasureRef.current]) {
+      if (!row) continue
+      for (const child of row.children) observer.observe(child)
+    }
     return () => observer.disconnect()
   }, [actions, presentation])
 
@@ -122,20 +292,29 @@ export function AdaptiveToolbar({
       target?.focus()
       pendingFocusRef.current = null
     }
-  }, [visibleCount])
+  }, [plan.visibleCount])
 
   useLayoutEffect(() => {
     if (!open || !overflow) return
     const update = (): void => {
-      const rect = moreRef.current?.getBoundingClientRect()
-      if (!rect) return
-      const scale = rect.width / (moreRef.current?.offsetWidth || rect.width) || 1
-      setPosition({
-        left: Math.max(8, Math.min(rect.left / scale, window.innerWidth / scale - 288)),
-        width: Math.min(280, window.innerWidth / scale - 16),
-        top: rect.bottom / scale + 8,
-        maxHeight: Math.max(44, (window.innerHeight - rect.bottom) / scale - 16)
-      })
+      const anchor = moreRef.current
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      const scale = anchor.offsetWidth > 0 ? rect.width / anchor.offsetWidth : 1
+      setPosition(placeToolbarPopup({
+        anchor: {
+          left: rect.left / scale,
+          right: rect.right / scale,
+          top: rect.top / scale,
+          bottom: rect.bottom / scale
+        },
+        viewport: {
+          width: window.innerWidth / scale,
+          height: window.innerHeight / scale
+        },
+        preferredWidth: 280,
+        preferredMaxHeight: 420
+      }))
     }
     update()
     if (document.activeElement === moreRef.current) {
@@ -165,7 +344,7 @@ export function AdaptiveToolbar({
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
     }
-  }, [open, overflow, visibleCount])
+  }, [open, overflow, plan.visibleCount])
 
   useLayoutEffect(() => {
     if (!overflow && open) {
@@ -179,6 +358,29 @@ export function AdaptiveToolbar({
   const retainSelection = (event: ReactPointerEvent<HTMLButtonElement>): void => {
     if (preserveTextSelection && window.getSelection()?.toString()) event.preventDefault()
   }
+
+  /** The same icon + label markup renders in the rail, the menu and the measure column. */
+  const content = (action: ToolbarAction): ReactElement => (
+    <>
+      <span className="relative inline-flex shrink-0">
+        {action.icon}
+        {action.badge}
+        {action.attention ? <span className="toolbar-attention" /> : null}
+      </span>
+      <span className="toolbar-action-label">{action.label}</span>
+    </>
+  )
+
+  /** The trailing "More tools" pill; the hidden measure column carries its height. */
+  const moreContent = (attention: boolean): ReactElement => (
+    <>
+      <span className="relative inline-flex shrink-0">
+        <Ellipsis className="h-4 w-4" />
+        {attention ? <span className="toolbar-attention" /> : null}
+      </span>
+      <span className="toolbar-action-label">{t('workbenchToolbarMore')}</span>
+    </>
+  )
 
   const button = (action: ToolbarAction, inMenu: boolean): ReactElement => (
     <button
@@ -201,35 +403,48 @@ export function AdaptiveToolbar({
       }}
       className={`toolbar-action ${inMenu ? 'toolbar-menu-action' : ''} ${action.active ? 'is-active' : ''}`}
     >
-      <span className="relative inline-flex shrink-0">
-        {action.icon}
-        {action.badge}
-        {action.attention ? <span className="toolbar-attention" /> : null}
-      </span>
-      {inMenu ? <span>{action.label}</span> : null}
+      {content(action)}
     </button>
   )
 
+  const moreAttention = hidden.some((action) => action.attention)
+  const anyAttention = actions.some((action) => action.attention)
+  // Only the rail is a toolbar: menu presentation is a single trigger pill that
+  // hosts drop into their own chrome.
+  const railRole = presentation === 'rail'
+    ? { role: 'toolbar' as const, 'aria-orientation': 'vertical' as const }
+    : {}
+
   return (
-    <div ref={rootRef} className="chat-workbench-topbar ds-no-drag">
+    <div
+      ref={rootRef}
+      className={presentation === 'menu'
+        ? 'chat-workbench-toolbar-menu ds-no-drag'
+        : 'chat-workbench-topbar ds-no-drag'}
+      {...railRole}
+    >
+      {/*
+        Heights come from a hidden column, so the measurement can never depend on
+        how many actions the rail currently renders.
+      */}
       <div ref={measureRef} className="toolbar-measure" aria-hidden="true" inert>
         {actions.map((action) => (
           <span key={action.id} className="toolbar-action">
-            {action.icon}
+            {content(action)}
           </span>
         ))}
-        <span className="toolbar-action" />
       </div>
-      {actions.slice(0, visibleCount).map((action) => button(action, false))}
-      <span className="toolbar-tail">
+      <div ref={tailMeasureRef} className="toolbar-measure" aria-hidden="true" inert>
+        <span className="toolbar-action">{moreContent(anyAttention)}</span>
+      </div>
+      {actions.slice(0, plan.visibleCount).map((action) => button(action, false))}
+      <span ref={tailRef} className="toolbar-tail">
         <button
           ref={moreRef}
           type="button"
-          className={`toolbar-action ${overflow ? '' : 'hidden'} ${hidden.some((action) => action.active) ? 'is-active' : ''}`}
+          className={`toolbar-action toolbar-more ${overflow ? '' : 'hidden'} ${hidden.some((action) => action.active) ? 'is-active' : ''}`}
           aria-label={
-            hidden.some((action) => action.attention)
-              ? t('workbenchToolbarMoreAttention')
-              : t('workbenchToolbarMore')
+            moreAttention ? t('workbenchToolbarMoreAttention') : t('workbenchToolbarMore')
           }
           title={t('workbenchToolbarMore')}
           aria-haspopup="dialog"
@@ -237,10 +452,7 @@ export function AdaptiveToolbar({
           onPointerDown={retainSelection}
           onClick={() => setOpen((value) => !value)}
         >
-          <Ellipsis className="h-4 w-4" />
-          {hidden.some((action) => action.attention) ? (
-            <span className="toolbar-attention" />
-          ) : null}
+          {moreContent(moreAttention)}
         </button>
         {!overflow
           ? cloneElement(customization, {
@@ -252,7 +464,7 @@ export function AdaptiveToolbar({
         ? createPortal(
             <div
               ref={panelRef}
-              role="dialog"
+              data-native-view-occluder="true" role="dialog"
               aria-label={t('workbenchToolbarMore')}
               className="toolbar-overflow ds-card-strong"
               aria-hidden={!open}

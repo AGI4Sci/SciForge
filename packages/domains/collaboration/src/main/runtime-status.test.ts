@@ -141,6 +141,14 @@ test('status polling every eight seconds completes after a slow shared Dashboard
       await gate
       return { contractVersion: 1, status: 200, body: { protocolVersion: '1.0', type: 'rest.project_page', requestId: request.requestId, limit: 250, projects: [], observedAt: '2026-10-20T00:00:00.000Z' } }
     },
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('unused') },
     readObject: async () => { throw new Error('unused') }
   })

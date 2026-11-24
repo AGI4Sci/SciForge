@@ -97,6 +97,27 @@ test('actual dispatch cancellation and trusted acceptance preserve exact retry r
   assert.equal(displayed.height, 2)
 })
 
+test('cold dispatch replays accepted receipt exactly and cannot reuse it to reject or accept different bytes', async t => {
+  const f = await fixture(t)
+  const added = await f.add()
+  const input = { documentId: 'figure', operationId: 'accept-cold', expectedDocumentRevision: 2, revisionId: added.result.revisionId }
+  const preflight = await f.call('preflightAccept', input) as Record<string, unknown>
+  const accepted = await f.call('acceptCandidate', input, { preflight, approvalGranted: true, confirmationId: 'approval-cold' })
+  const before = await f.read()
+  // dispatch constructs a fresh disk-backed store for each call; no live service cache survives.
+  const cold = (action: string, value: Record<string, unknown>) => dispatch({ action, input: value, workspaceRoot: f.root })
+  assert.deepEqual(await cold('preflightAccept', input), { alreadyCompleted: accepted })
+  assert.deepEqual(await cold('read', { documentId: 'figure' }), before)
+  assert.equal(before.acceptances.length, 1)
+  assert.equal(before.acceptances[0].confirmationId, 'approval-cold')
+  await assert.rejects(cold('rejectCandidate', input), /different input/)
+  await assert.rejects(cold('preflightAccept', { ...input, revisionId: f.imported.revisionId }), /different input/)
+  assert.deepEqual(await f.read(), before)
+  const current = before.revisions.find(item => item.metadata.revisionId === before.currentRevisionId)!.metadata
+  assert.equal(current.image.sha256, createHash('sha256').update(f.candidateBytes).digest('hex'))
+  assert.deepEqual(await readFile(join(f.root, '.scientific-figures', current.image.path)), f.candidateBytes)
+})
+
 test('actual dispatch stale confirmation and stale candidate fail without pointer changes', async t => {
   const f = await fixture(t)
   const added = await f.add()
@@ -110,6 +131,37 @@ test('actual dispatch stale confirmation and stale candidate fail without pointe
   await f.call('acceptCandidate', refreshed, { preflight: updatedPreflight, approvalGranted: true })
   await assert.rejects(f.call('preflightAccept', { ...input, operationId: 'accept-second', expectedDocumentRevision: 4, revisionId: second.result.revisionId }), /Stale candidate baseline/)
   assert.equal((await f.read()).currentRevisionId, added.result.revisionId)
+})
+
+test('approval preflight rejects candidate and baseline hash changes without accepting', async t => {
+  for (const which of ['candidate', 'baseline'] as const) {
+    await t.test(which, async t => {
+      const f = await fixture(t)
+      const added = await f.add()
+      const input = { documentId: 'figure', operationId: 'hash-change', expectedDocumentRevision: 2, revisionId: added.result.revisionId }
+      const preflight = await f.call('preflightAccept', input) as Record<string, unknown>
+      const before = await f.read()
+      const revision = before.revisions.find(r => r.metadata.revisionId === (which === 'candidate' ? added.result.revisionId : f.imported.revisionId))!.metadata
+      await writeFile(join(f.root, '.scientific-figures', revision.image.path), which === 'candidate' ? f.originalBytes : f.candidateBytes)
+      await assert.rejects(f.call('acceptCandidate', input, { preflight, approvalGranted: true }), /corrupt/)
+      // Restore the fixture bytes to inspect the canonical immutable operation state.
+      await writeFile(join(f.root, '.scientific-figures', revision.image.path), which === 'candidate' ? f.candidateBytes : f.originalBytes)
+      assert.deepEqual(await f.read(), before)
+    })
+  }
+})
+
+test('rejectCandidate replay is exact and cannot become acceptance', async t => {
+  const f = await fixture(t)
+  const added = await f.add()
+  const input = { documentId: 'figure', operationId: 'reject', expectedDocumentRevision: 2, revisionId: added.result.revisionId }
+  const rejected = await f.call('rejectCandidate', input)
+  assert.deepEqual(await f.call('rejectCandidate', input), rejected)
+  await assert.rejects(f.call('preflightAccept', input), /different input/)
+  const doc = await f.read()
+  assert.equal(doc.currentRevisionId, f.imported.revisionId)
+  assert.equal(doc.acceptances.length, 0)
+  assert.equal(doc.revisions[1].status, 'rejected')
 })
 
 test('actual dispatch verifies rejected images and immutable metadata without fallback', async t => {

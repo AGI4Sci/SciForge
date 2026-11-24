@@ -1,3 +1,6 @@
+import { deliveryValidationReferenceSchema } from './delivery-validation-contract.js'
+import { leaderProposalSchema, leaderPlanningStatusSchema } from './leader-planning-contract.js'
+import { resultAssessmentSchema } from './result-assessment-contract.js'
 import {
   agentIdSchema,
   deliveryAdoptionCommandSchema,
@@ -9,9 +12,15 @@ import {
   displayNameSchema,
   humanAnswerCommandSchema,
   humanNeededCreateCommandSchema,
+  humanNeededDeferCommandSchema,
   humanNeededSchema,
   inboxMessageIdSchema,
   projectCompletionTargetSchema,
+  projectRenameCommandSchema,
+  projectExecutionModeSetCommandSchema,
+  projectDispatchAuthorizeCommandSchema,
+  taskContentUpdateCommandSchema,
+  taskContentDecideCommandSchema,
   projectCreateCommandSchema,
   projectDeleteCommandSchema,
   projectFinalSummaryHistorySchema,
@@ -51,6 +60,13 @@ const safeReasonSchema = z.string().trim().min(1).max(2_000)
 
 export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   workspaceRead: 'collaboration.workspace.read',
+  leaderProposalRetry: 'collaboration.leader-proposal.retry',
+  leaderProposalDefer: 'collaboration.leader-proposal.defer',
+  projectRename: 'collaboration.project.rename',
+  projectExecutionModeSet: 'collaboration.project.execution-mode.set',
+  projectDispatchAuthorize: 'collaboration.project.dispatch.authorize',
+  taskContentUpdate: 'collaboration.task.content.update',
+  taskContentDecide: 'collaboration.task.content.decide',
   projectCreate: 'collaboration.project.create',
   projectDelete: 'collaboration.project.delete',
   projectActivationAcknowledge: 'collaboration.project-activation.acknowledge',
@@ -67,6 +83,7 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   membershipRemove: 'collaboration.membership.remove',
   humanNeededCreate: 'collaboration.human-needed.create',
   humanAnswer: 'collaboration.human-needed.answer',
+  humanNeededDefer: 'collaboration.human-needed.defer',
   coordinatorTransfer: 'collaboration.coordinator.transfer',
   deliveryRead: 'collaboration.delivery.read',
   driveList: 'collaboration.delivery.drive.list',
@@ -327,7 +344,8 @@ export const projectCoordinatorRequirementsCompleteResultSchema =
     }).strict().readonly(),
     z.object({
       status: z.literal('failed'),
-      reason: projectCoordinatorRequirementsCompletionFailureReasonSchema
+      reason: projectCoordinatorRequirementsCompletionFailureReasonSchema,
+      invalidFields: z.array(z.string().min(1).max(500)).max(5).optional()
     }).strict().readonly()
   ])
 
@@ -402,6 +420,7 @@ export const projectCoordinatorHumanNeededCreateInputSchema = z.object({
   expectedCoordinatorAuthorityEpoch: projectSchema.shape.coordinatorAuthorityEpoch,
   requiredAssurance: humanNeededCreateCommandSchema.shape.requiredAssurance.exclude(['basic']),
   prompt: humanNeededCreateCommandSchema.shape.prompt,
+  interaction: humanNeededCreateCommandSchema.shape.interaction,
   expiresAt: humanNeededCreateCommandSchema.shape.expiresAt
 }).strict().readonly()
 
@@ -413,6 +432,11 @@ export const projectCoordinatorHumanAnswerInputSchema = humanAnswerCommandSchema
 }).extend({
   projectId: projectIdSchema
 }).strict().readonly()
+
+export const projectCoordinatorHumanNeededDeferInputSchema = humanNeededDeferCommandSchema.omit({
+  protocolVersion: true, requestId: true, type: true, idempotencyKey: true
+}).extend({ projectId: projectIdSchema }).strict().readonly()
+export type ProjectCoordinatorHumanNeededDeferInput = z.infer<typeof projectCoordinatorHumanNeededDeferInputSchema>
 
 /**
  * The Owner chooses only the exact successor Agent. Cloud CAS facts are
@@ -472,7 +496,7 @@ export const projectCoordinatorDriveListInputSchema = deliveryDriveListQuerySche
 }).strict().readonly()
 export const projectCoordinatorAdoptionInputSchema = deliveryAdoptionCommandSchema.omit({
   protocolVersion: true, requestId: true, type: true, idempotencyKey: true
-}).strict().readonly()
+}).extend({ deliveryValidation: deliveryValidationReferenceSchema.optional() }).strict().readonly()
 export const projectCoordinatorRevisionRequestInputSchema = deliveryRevisionRequestCommandSchema.omit({
   protocolVersion: true, requestId: true, type: true, idempotencyKey: true
 }).strict().readonly()
@@ -546,6 +570,10 @@ export const projectCoordinatorTaskViewSchema = z.object({
 
 export const projectCoordinatorProjectSchema = z.object({
   project: projectSchema,
+  leaderProposal: leaderProposalSchema.nullable().optional(),
+  leaderPlanningStatus: leaderPlanningStatusSchema.nullable().optional(),
+  leaderSession: z.object({ runtimeId: z.string().min(1), threadId: z.string().min(1) }).strict().nullable().optional(),
+  resultAssessments: z.array(resultAssessmentSchema).max(1000).optional(),
   coordinatorTransferFeedback: projectCoordinatorTransferFeedbackSchema.nullable().default(null),
   plan: projectCoordinatorPlanViewSchema.nullable(),
   requirementsDraft: projectRequirementsDocumentSchema.nullable().default(null),
@@ -581,6 +609,14 @@ export const projectCoordinatorProjectSchema = z.object({
       path: ['coordinatorTransferFeedback'],
       message: 'Coordinator transfer feedback must match the current Project authority.'
     })
+  }
+  for (const [index, entry] of (view.resultAssessments ?? []).entries()) {
+    if (entry.projectId !== projectId || entry.principalUserId !== view.project.ownerUserId ||
+        entry.coordinatorAgentId !== view.project.coordinatorAgentId ||
+        entry.coordinatorAuthorityEpoch !== view.project.coordinatorAuthorityEpoch ||
+        entry.projectRevision > view.project.revision) {
+      context.addIssue({ code: 'custom', path: ['resultAssessments', index], message: 'Result observation must match exact current Project authority.' })
+    }
   }
   if (view.plan && view.plan.plan.projectId !== projectId) {
     context.addIssue({ code: 'custom', path: ['plan'], message: 'Plan must belong to this Project.' })
@@ -764,28 +800,46 @@ export const projectCoordinatorProjectCreateReceiptSchema = z.object({
   }
 }).readonly()
 
-export const projectCoordinatorProjectCreateResultSchema =
+/** Bounded local preparation failures; Cloud and Principal failures remain errors. */
+export const projectCoordinatorProjectCreatePendingReasonSchema = z.enum([
+  'session_preparation_unavailable',
+  'runtime_not_found',
+  'runtime_path_invalid',
+  'runtime_not_executable',
+  'runtime_version_unsupported',
+  'runtime_architecture_incompatible',
+  'runtime_probe_failed',
+  'runtime_not_ready'
+])
+
+export const projectCoordinatorProjectCreateResultSchema = z.discriminatedUnion('initializationState', [
   projectCoordinatorProjectCreateReceiptSchema.unwrap().extend({
+    initializationState: z.literal('ready'),
     coordinatorSession: projectCoordinatorOrdinarySessionSchema.unwrap().extend({
       projectId: projectIdSchema
     }).strict().readonly(),
     activationRequestId: projectCoordinatorActivationRequestIdSchema
-  }).strict().superRefine((result, context) => {
-    if (result.workspace.focusedProjectId !== result.createdProjectId) {
-      context.addIssue({
-        code: 'custom',
-        path: ['workspace', 'focusedProjectId'],
-        message: 'Project creation must focus the exact new Project.'
-      })
-    }
-    if (result.coordinatorSession.projectId !== result.createdProjectId) {
-      context.addIssue({
-        code: 'custom',
-        path: ['coordinatorSession', 'projectId'],
-        message: 'Project creation must bind the exact new Project.'
-      })
-    }
-  }).readonly()
+  }).strict(),
+  projectCoordinatorProjectCreateReceiptSchema.unwrap().extend({
+    initializationState: z.literal('session_pending'),
+    reason: projectCoordinatorProjectCreatePendingReasonSchema
+  }).strict()
+]).superRefine((result, context) => {
+  if (result.workspace.focusedProjectId !== result.createdProjectId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['workspace', 'focusedProjectId'],
+      message: 'Project creation must focus the exact new Project.'
+    })
+  }
+  if (result.initializationState === 'ready' && result.coordinatorSession.projectId !== result.createdProjectId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['coordinatorSession', 'projectId'],
+      message: 'Project creation must bind the exact new Project.'
+    })
+  }
+}).readonly()
 
 export type ProjectCoordinatorConnection = z.infer<typeof projectCoordinatorConnectionSchema>
 export type ProjectCoordinatorCoordinatorSessionBindingRecord = z.infer<
@@ -883,3 +937,31 @@ export type ProjectCoordinatorDriveListInput = z.infer<typeof projectCoordinator
 export type ProjectCoordinatorAdoptionInput = z.infer<typeof projectCoordinatorAdoptionInputSchema>
 export type ProjectCoordinatorRevisionRequestInput = z.infer<typeof projectCoordinatorRevisionRequestInputSchema>
 export type ProjectCoordinatorResultPublishInput = z.infer<typeof projectCoordinatorResultPublishInputSchema>
+
+export const projectCoordinatorProjectRenameInputSchema = projectRenameCommandSchema.omit({ protocolVersion: true, requestId: true, type: true, idempotencyKey: true }).readonly()
+export type ProjectCoordinatorProjectRenameInput = z.infer<typeof projectCoordinatorProjectRenameInputSchema>
+
+export const projectCoordinatorProjectExecutionModeSetInputSchema = projectExecutionModeSetCommandSchema.omit({ protocolVersion: true, requestId: true, type: true, idempotencyKey: true }).readonly()
+export type ProjectCoordinatorProjectExecutionModeSetInput = z.infer<typeof projectCoordinatorProjectExecutionModeSetInputSchema>
+
+export const projectCoordinatorProjectDispatchAuthorizeInputSchema = projectDispatchAuthorizeCommandSchema.omit({ protocolVersion: true, requestId: true, type: true, idempotencyKey: true }).readonly()
+export type ProjectCoordinatorProjectDispatchAuthorizeInput = z.infer<typeof projectCoordinatorProjectDispatchAuthorizeInputSchema>
+
+export const projectCoordinatorTaskContentUpdateInputSchema = taskContentUpdateCommandSchema.omit({ protocolVersion: true, requestId: true, type: true, idempotencyKey: true }).readonly()
+export type ProjectCoordinatorTaskContentUpdateInput = z.infer<typeof projectCoordinatorTaskContentUpdateInputSchema>
+
+export const projectCoordinatorTaskContentDecideInputSchema = taskContentDecideCommandSchema.omit({ protocolVersion: true, requestId: true, type: true, idempotencyKey: true }).readonly()
+export type ProjectCoordinatorTaskContentDecideInput = z.infer<typeof projectCoordinatorTaskContentDecideInputSchema>
+
+export const projectCoordinatorLeaderProposalDeferInputSchema = z.object({ projectId: projectIdSchema, key: leaderProposalSchema.shape.key }).strict().readonly()
+export type ProjectCoordinatorLeaderProposalDeferInput = z.infer<typeof projectCoordinatorLeaderProposalDeferInputSchema>
+
+export const projectCoordinatorLeaderProposalRetryInputSchema = z.object({ projectId: projectIdSchema }).strict().readonly()
+export type ProjectCoordinatorLeaderProposalRetryInput = z.infer<typeof projectCoordinatorLeaderProposalRetryInputSchema>
+
+export const projectCoordinatorWorkspaceReadContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
+  effect: 'read' as const,
+  inputSchema: projectCoordinatorWorkspaceReadInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})

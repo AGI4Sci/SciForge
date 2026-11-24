@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.research-dossier",
     "displayName": "Research",
-    "version": "1.6.0",
+    "version": "1.9.0",
     "hostApi": {
       "minimum": "1.1.0",
       "maximumExclusive": "2.0.0"
@@ -37,6 +37,11 @@
         "surface": "right-panel",
         "contributionId": "research-dossier.workbench-right-panel"
       }
+    },
+    "research-dossier.audit-workspace": {
+      "location": "research.audit-workspace",
+      "order": 0,
+      "sideContributionId": "research-dossier.workbench-right-panel"
     }
   },
   "entrypoints": [
@@ -67,6 +72,11 @@
         {
           "kind": "renderer.i18n-resource",
           "id": "research-dossier.translations",
+          "priority": 172
+        },
+        {
+          "kind": "renderer.extension",
+          "id": "research-dossier.audit-workspace",
           "priority": 172
         }
       ]

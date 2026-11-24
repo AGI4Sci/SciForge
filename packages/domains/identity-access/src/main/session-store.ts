@@ -2,12 +2,21 @@ import type { IdentityPrivateVault } from './private-vault.js'
 
 const SESSION_SECRET_KEY = 'oidc-session' as const
 
+export type PendingDesktopRefresh = Readonly<{
+  accessToken: string
+  idToken?: string
+  refreshToken?: string
+}>
+
 export type StoredDesktopIdentitySession = Readonly<{
   version: 1
   issuer: string
   clientId: string
   refreshToken: string
   idToken?: string
+  /** Unverified token response escrow; never an authenticated session. */
+  pendingRefresh?: PendingDesktopRefresh
+  identity?: Readonly<{ subject: string; userId: string }>
 }>
 
 export interface DesktopIdentitySessionStore {
@@ -62,6 +71,19 @@ export class PrivateVaultDesktopIdentitySessionStore implements DesktopIdentityS
   }
 }
 
+export function parsePendingDesktopRefresh(value: unknown): PendingDesktopRefresh {
+  const record = requireRecord(value, 'Pending refresh response')
+  if (Object.keys(record).some((key) => !['accessToken', 'idToken', 'refreshToken'].includes(key)) ||
+    !validString(record.accessToken, 1, 100_000) ||
+    (record.idToken !== undefined && !validString(record.idToken, 1, 100_000)) ||
+    (record.refreshToken !== undefined && !validString(record.refreshToken, 1, 100_000))) {
+    throw new DesktopIdentitySessionStoreError('The pending refresh response has an unsupported format.')
+  }
+  return { accessToken: record.accessToken,
+    ...(record.idToken === undefined ? {} : { idToken: record.idToken }),
+    ...(record.refreshToken === undefined ? {} : { refreshToken: record.refreshToken }) }
+}
+
 function parseSession(value: unknown): StoredDesktopIdentitySession {
   const record = requireRecord(value, 'Saved login session')
   if (
@@ -75,12 +97,18 @@ function parseSession(value: unknown): StoredDesktopIdentitySession {
       'The saved login session has an unsupported format.'
     )
   }
+  const identity = record.identity === undefined ? undefined : requireRecord(record.identity, 'Saved identity binding')
+  if (identity && (!validString(identity.subject, 1, 2048) || !validString(identity.userId, 1, 2048))) {
+    throw new DesktopIdentitySessionStoreError('The saved identity binding has an unsupported format.')
+  }
   return {
     version: 1,
     issuer: record.issuer,
     clientId: record.clientId,
     refreshToken: record.refreshToken,
-    ...(record.idToken === undefined ? {} : { idToken: record.idToken })
+    ...(record.idToken === undefined ? {} : { idToken: record.idToken }),
+    ...(record.pendingRefresh === undefined ? {} : { pendingRefresh: parsePendingDesktopRefresh(record.pendingRefresh) }),
+    ...(identity ? { identity: { subject: identity.subject as string, userId: identity.userId as string } } : {})
   }
 }
 

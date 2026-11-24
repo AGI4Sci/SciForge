@@ -40,7 +40,17 @@ function Harness() {
 
 beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
-  localStorage.removeItem(PAGE_DOCK_STORAGE_KEY)
+  const entries = new Map<string, string>()
+  const storage: Storage = {
+    get length() { return entries.size },
+    clear: () => entries.clear(),
+    getItem: key => entries.get(key) ?? null,
+    key: index => [...entries.keys()][index] ?? null,
+    removeItem: key => { entries.delete(key) },
+    setItem: (key, value) => { entries.set(key, String(value)) }
+  }
+  vi.stubGlobal('localStorage', storage)
+  window.localStorage.removeItem(PAGE_DOCK_STORAGE_KEY)
   mounts = []
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(800)
@@ -53,6 +63,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 const page = (id: string) => container.querySelector<HTMLElement>(`[data-dock-page="fixture.${id}"]`)!
 const content = (id: string) => container.querySelector<HTMLElement>(`[data-page-content="fixture.${id}"]`)!
@@ -135,4 +146,66 @@ it('resizes with pointer and keyboard input and releases capture and the resize 
   await act(async () => window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1 })))
   expect(container.querySelector('.workbench-page-dock-resize-shield')).toBeNull()
   expect(document.body.style.cursor).toBe('')
+})
+
+it('drags a title to an edge with a docking preview and preserves page state', async () => {
+  await act(async () => layout.openPage('fixture.notes'))
+  await act(async () => content('notes').click())
+  const rect = { x: 0, y: 0, left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800, toJSON() {} }
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+  const header = page('notes').querySelector('header')!
+  await act(async () => header.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 5, clientX: 900, clientY: 20, bubbles: true })))
+  await act(async () => window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 5, clientX: 20, clientY: 200 })))
+  expect(container.querySelector('.workbench-page-drop-preview.is-left')).not.toBeNull()
+  await act(async () => window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 5, clientX: 20, clientY: 200 })))
+  expect(layout.state.pages['fixture.notes'].position).toBe('left')
+  expect(content('notes').textContent).toBe('1')
+  expect(mounts).toEqual(['fixture.notes'])
+  expect(container.querySelector('.workbench-page-drag-overlay')).toBeNull()
+})
+
+it('floats without snapping with Ctrl, resizes, cancels a drag, and returns to the previous dock', async () => {
+  await act(async () => layout.openPage('fixture.notes'))
+  const rect = { x: 0, y: 0, left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800, toJSON() {} }
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+  const header = page('notes').querySelector('header')!
+  await act(async () => header.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 6, clientX: 900, clientY: 20, bubbles: true })))
+  await act(async () => window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 6, clientX: 20, clientY: 200, ctrlKey: true })))
+  expect(container.querySelector('.workbench-page-drop-preview')).toBeNull()
+  await act(async () => window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 6, clientX: 20, clientY: 200, ctrlKey: true })))
+  expect(layout.state.pages['fixture.notes'].position).toBe('floating')
+  expect(layout.state.docked['fixture.notes']).toBe('right')
+  const before = layout.state.floating['fixture.notes'].width
+  await act(async () => page('notes').querySelector('button[aria-label="pageDockResizeFloating"]')!
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })))
+  expect(layout.state.floating['fixture.notes'].width).toBe(before - 24)
+  await act(async () => header.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 7, clientX: 100, clientY: 20, bubbles: true })))
+  await act(async () => window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 7, clientX: 1180, clientY: 200 })))
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+  expect(container.querySelector('.workbench-page-drag-overlay')).toBeNull()
+  expect(layout.state.pages['fixture.notes'].position).toBe('floating')
+  await act(async () => (page('notes').querySelector('button[aria-label="pageDockReturn"]') as HTMLElement).click())
+  expect(layout.state.pages['fixture.notes'].position).toBe('right')
+})
+
+it('sidebar toggles main and docked contributions without discarding their mounted state', async () => {
+  for (const id of ['team', 'notes']) {
+    const key = `fixture.${id}`
+    expect(layout.isOpen(key)).toBe(false)
+    await act(async () => layout.togglePage(key))
+    expect(layout.isOpen(key)).toBe(true)
+    await act(async () => content(id).click())
+    await act(async () => layout.togglePage(key))
+    expect(layout.isOpen(key)).toBe(false)
+    expect(content(id).dataset.active).toBe('false')
+    expect(content(id).textContent).toBe('1')
+    await act(async () => layout.togglePage(key))
+    expect(layout.isOpen(key)).toBe(true)
+    expect(content(id).textContent).toBe('1')
+    // Explicit navigation remains idempotent, unlike a sidebar click.
+    await act(async () => layout.openPage(key))
+    expect(layout.isOpen(key)).toBe(true)
+    await act(async () => layout.closePage(key))
+  }
+  expect(mounts).toEqual(['fixture.team', 'fixture.notes'])
 })

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { domainRendererSelectionSnapshotSchema, type DomainRendererSelectionSnapshot, type DomainRendererWorkbenchHost } from '@sciforge/domain-sdk/host'
 import { domainWorkbenchOpenResourceInputSchema } from '@sciforge/domain-sdk/renderer'
+import { MessageSquare, Plus, X } from 'lucide-react'
 import type { ResearchRecordScope } from '../research-record-contract'
 
 /** Match both ends to the same smallest owned item; never guess from a parent group. */
@@ -45,8 +46,9 @@ export function ResearchRecordSelection({ root, scope, revision, active, onDiscu
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const epoch = useRef(0)
+  const locked = useRef(false)
   useEffect(() => {
-    epoch.current++; setBusy(false); setSelection(null); setNotice('')
+    epoch.current++; locked.current = false; setBusy(false); setSelection(null); setNotice('')
     if (!active) return
     const inspect = () => {
       if (!root.current) return
@@ -57,26 +59,35 @@ export function ResearchRecordSelection({ root, scope, revision, active, onDiscu
       } catch (error) { setSelection(null); setNotice(error instanceof Error ? error.message : String(error)) }
     }
     document.addEventListener('selectionchange', inspect)
-    return () => document.removeEventListener('selectionchange', inspect)
+    return () => { epoch.current++; document.removeEventListener('selectionchange', inspect) }
   }, [active, root, scope, revision])
   if (!active || (!selection && !notice)) return null
+  const perform = async (job: () => Promise<void>) => {
+    if (!selection || locked.current) return
+    const version = epoch.current; locked.current = true; setBusy(true)
+    try { await job() }
+    catch (error) { if (version === epoch.current) setNotice(error instanceof Error ? error.message : String(error)) }
+    finally { if (version === epoch.current) { locked.current = false; setBusy(false) } }
+  }
   const annotate = async () => {
     if (!selection) return
-    const version = epoch.current; setBusy(true)
-    try { await openRecordSelection(selection, workbench); if (version === epoch.current) setNotice('已打开批注草稿。请填写正文并保存；选区尚未保存。') }
-    catch (error) { if (version === epoch.current) setNotice(error instanceof Error ? error.message : String(error)) }
-    finally { if (version === epoch.current) setBusy(false) }
+    const version = epoch.current
+    await openRecordSelection(selection, workbench)
+    if (version === epoch.current) setNotice('已打开批注草稿，填写后保存。')
   }
   const copy = async () => {
     if (!selection) return
-    try { await navigator.clipboard.writeText(JSON.stringify(selection, null, 2)); setNotice('选区定位已复制。打开“锚定批注”插件面板，粘贴定位并填写批注后保存。尚未保存批注。') }
-    catch (error) { setNotice('复制失败：' + (error instanceof Error ? error.message : String(error))) }
+    const version = epoch.current
+    await navigator.clipboard.writeText(JSON.stringify(selection, null, 2))
+    if (version === epoch.current) setNotice('定位已复制，尚未保存批注。')
   }
-  return <section aria-label="研究选区操作" className="absolute inset-x-2 bottom-2 z-30 max-h-[40%] overflow-auto rounded-lg border border-ds-border bg-ds-sidebar px-3 py-2 record-caption shadow-lg">
-    {selection && <><p className="truncate" title={selection.label}>选区：{selection.label}</p><blockquote className="max-h-16 overflow-auto whitespace-pre-wrap break-words">{selection.quote}</blockquote>
-      <div className="mt-1 flex flex-wrap gap-2"><button disabled={busy} className="rounded border border-ds-border px-2 py-1" onClick={() => void annotate()}>添加批注</button><button disabled={busy} className="rounded border border-ds-border px-2 py-1" onClick={() => { setBusy(true); void onDiscuss(selection).finally(() => setBusy(false)) }}>讨论选区</button>
-      <button className="rounded border border-ds-border px-2 py-1" onClick={() => void copy()}>复制批注定位</button>
-      <button className="px-2 py-1" onClick={() => { setSelection(null); setNotice('') }}>取消选区</button></div></>}
+  const dismiss = () => { epoch.current++; locked.current = false; setBusy(false); setSelection(null); setNotice('') }
+  return <section data-native-view-occluder="true" aria-label="研究选区操作" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss() } }} className="absolute inset-x-2 bottom-2 z-30 max-h-[40%] overflow-auto rounded-xl border border-ds-border bg-ds-sidebar px-3 py-2 record-caption shadow-lg">
+    <div className="flex min-w-0 items-center gap-2"><p className="min-w-0 flex-1 truncate font-medium" title={selection?.label}>{selection?.label || '选区提示'}</p><button type="button" className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label="关闭选区操作" onClick={dismiss}><X size={13} /></button></div>
+    {selection && <><blockquote className="my-1 line-clamp-2 whitespace-pre-wrap break-words text-ds-muted">{selection.quote}</blockquote>
+      <div className="flex flex-wrap items-center gap-1"><button disabled={busy} className="inline-flex items-center gap-1 rounded px-2 py-1 hover:bg-ds-hover disabled:opacity-50" onClick={() => void perform(() => onDiscuss(selection))}><MessageSquare size={13} />讨论选区</button>
+      <button disabled={busy} className="inline-flex items-center gap-1 rounded px-2 py-1 hover:bg-ds-hover disabled:opacity-50" onClick={() => void perform(annotate)}><Plus size={13} />添加批注</button>
+      <details className="text-ds-muted"><summary className="cursor-pointer px-2 py-1">定位</summary><p className="break-words">{selection.revision}</p><button disabled={busy} className="px-2 py-1 hover:bg-ds-hover" onClick={() => void perform(copy)}>复制批注定位</button></details></div></>}
     {notice && <p role="status" className="mt-1 break-words">{notice}</p>}
   </section>
 }

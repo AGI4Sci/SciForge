@@ -147,5 +147,48 @@ describe('format runtime error', () => {
     expect(view.code).toBe('unsupported_reasoning_effort')
     expect(view.summary).toBe(i18n.t('common:runtimeUnsupportedReasoningEffort'))
   })
+
+  it.each([
+    ['429 Too Many Requests: {"code":"upstream_http_429"}', 'runtimeUpstreamRateLimited'],
+    ['upstream request failed: upstream_http_429_exhausted', 'runtimeUpstreamRateLimited'],
+    ['model service is rate limiting this key', 'runtimeUpstreamRateLimited'],
+    ['unexpected status 504 Gateway Timeout', 'runtimeUpstreamTimedOut'],
+    ['{"code":"upstream_timeout","message":"Upstream request timed out."}', 'runtimeUpstreamTimedOut']
+  ])('maps the retried upstream failure %s to a model-service message', (raw, key) => {
+    const view = describeRuntimeError(new Error(raw))
+
+    expect(view.summary).toBe(i18n.t(`common:${key}`))
+    expect(view.retryable).toBe(true)
+    // The raw upstream text stays available for support and diagnostics.
+    expect(view.detail).toBeTruthy()
+  })
+
+  it('localizes the rate limit and timeout failures in Chinese', async () => {
+    await i18n.changeLanguage('zh')
+
+    expect(formatRuntimeError(new Error('unexpected status 429 Too Many Requests')))
+      .toContain('已自动重试仍失败')
+    expect(formatRuntimeError(new Error('{"code":"upstream_timeout"}')))
+      .toContain('已自动重试仍失败')
+  })
+
+  it('reports a DSH prompt idle expiry as silence rather than a timeout', async () => {
+    const view = describeRuntimeError(new Error('runtime_prompt_idle_timeout'))
+    expect(view.code).toBe('runtime_prompt_idle_timeout')
+    expect(view.summary).toBe(i18n.t('common:runtimePromptIdleTimeout'))
+    // A paused-but-resumable turn is not an upstream retryable failure.
+    expect(view.retryable).toBeUndefined()
+    expect(view.settingsAction).toBeUndefined()
+
+    await i18n.changeLanguage('zh')
+    expect(formatRuntimeError(new Error('runtime_request_idle_timeout')))
+      .toContain('长时间没有输出')
+  })
+
+  it('keeps non-upstream failures generic and non-retryable', () => {
+    const view = describeRuntimeError(new Error('the workspace folder disappeared'))
+    expect(view.summary).toBe('the workspace folder disappeared')
+    expect(view.retryable).toBeUndefined()
+  })
 })
 

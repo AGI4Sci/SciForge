@@ -1,5 +1,11 @@
 # `@sciforge/domain-sdk`
 
+Host API `1.19.0` adds lifecycle-scoped `wakeups.schedule(at, callback)`. The Host
+only supplies a cancellable clock notification; packages retain durable intent,
+restore registrations on activation, and revalidate current authority before
+execution. Lifecycle disposal fences late callbacks. A wakeup grants no tool or
+external-write authority.
+
 This package defines the pure-data boundary for SciForge domain packages. A single strict
 `sciforge.domain.json` contract represents both trusted packages selected at build time and
 sandboxed packages installed at runtime. It does not locate packages, verify signatures, grant
@@ -175,6 +181,29 @@ stable section slug, placement, translated label, description, and order; the re
 only its optional icon and `{ render }` function. The workspace owner filters by `workspaceId` and
 rejects duplicate sections. Contributors therefore remain independently installable and never
 require a Host feature map, domain-ID switch, or renderer import between domain packages.
+
+Host API `1.18.0` supplies an optional current `session` in the browser-only main-area render
+context. Its runtime and stable conversation identity (including unsent drafts) let packages
+keep their own per-conversation view state without reading Host-private stores or using another
+domain's global selection. The Host updates this public context when the active conversation changes.
+
+Visible-context contributions can bind registrations to a session and register a question-time
+refresh callback. The Host bounds refresh work with an abort signal and excludes registrations
+owned by another active session, so a hidden document cannot become context for a different chat.
+
+Host API `1.15.0` adds post-commit native-input notifications through
+`turnLifecycle.subscribeAcceptedInput` and read-only composer `resolveDraft`, `active`, and
+`search` providers. Packages own reference resolution and durable association; the Host
+publishes accepted input with its receipt and principal context, so replay can be handled
+idempotently. Browser-only main-area render context/value types, including the actual
+`ownerDocument`, are exported from `@sciforge/domain-sdk/renderer`; cross-environment contracts
+do not require DOM globals.
+
+Host API `1.14.0` adds `renderer.extension` contributions at `workbench.settings-section`.
+The strict contract contains `location`, `contractVersion: '1.0.0'` and `label`; the
+package supplies `{ render }`. The Host appends installed sections after its built-in
+Settings categories in contribution order. Packages own their forms, persistence and
+save feedback; domain credentials never enter the Host's application-settings form.
 
 A package contributes a full-page surface as a `renderer.extension` at the generic
 `workbench.main-area` location. The strict contract carries only the version and the translated
@@ -409,3 +438,22 @@ Session-owning navigation contributions must publish durable local ownership wit
 waiting for Cloud or other external services. Network-backed labels and access
 projections may enrich that ownership, but must not determine when the Host can
 render unrelated local sessions or turn owned history into local history.
+
+Host API `1.18.0` accepts the narrow autonomous-write declaration `human-decision-request`
+for a capability that only creates a human decision request. It does not authorize answering,
+approving, changing authority or executing the requested action. The external-write effect is
+preserved; the governance schema rejects incompatible effects and delegated or system execution.
+
+### Native surface visibility
+
+`measureNativeViewViewport(element, active)` measures clipped bounds in the
+owning document. The panel/session owner supplies `active`; neither pixel hit
+testing nor ARIA roles infer whether a native view should be displayed.
+
+Host and domain overlays explicitly opt into occlusion by mounting
+`data-native-view-occluder="true"` on their actual modal/menu overlay. Remove
+the marker, unmount, or set `hidden` / `data-state="closed"` when dismissed.
+Only visible, intersecting marked overlays hide a native view; a view contained
+inside that overlay remains available. Do not mark ordinary panels or content.
+Consumers observe `data-native-view-occluder`, `data-state`, `hidden`, style and
+class changes, together with resize/scroll/visibility events, then remeasure.

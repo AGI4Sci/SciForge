@@ -69,6 +69,9 @@ test('current state defaults the persisted Project unavailable fence collection'
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
     schemaVersion: 4,
+    taskChatAssociations: [],
+    taskChatClosedSessions: [],
+    taskChatAcceptedInputs: [],
     revision: 4,
     lastInboxSequence: 8,
     user: userPrincipalFixture,

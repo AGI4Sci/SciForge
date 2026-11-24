@@ -167,7 +167,7 @@ describe('DSH plugin workspace binding', () => {
       )).rejects.toThrow(/rejects a workspaceRoot/)
       const result = await probe.handler(
         { workspaceRoot: harness.callerWorkspace },
-        { caller: { workspaceId: harness.callerWorkspace } } as never
+        { caller: { workspaceId: harness.callerWorkspace }, assertPrincipalCurrent: () => {} } as never
       ) as { output: { workspaceRoot: string } }
       expect(result.output.workspaceRoot).toBe(harness.callerWorkspace)
     } finally {

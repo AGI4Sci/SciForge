@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
+import { access, mkdir, open, readdir, readFile, realpath, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -105,10 +105,81 @@ async function assertDevDependenciesInstalled() {
       missing.push(relativePath)
     }
   }
-  if (missing.length === 0) return
-  throw new Error(
-    'SciForge development dependencies are not installed. Run `npm install` in the project root, then run `npm run dev` again.'
+  if (missing.length > 0) {
+    throw new Error(
+      'SciForge development dependencies are not installed. Run `npm install` in the project root, then run `npm run dev` again.'
+    )
+  }
+  const unlinked = await findUnlinkedWorkspacePackages(projectRoot)
+  if (unlinked.length === 0) return
+  throw new Error(describeUnlinkedWorkspacePackages(unlinked))
+}
+
+export function describeUnlinkedWorkspacePackages(unlinked) {
+  const shown = unlinked.slice(0, 5).join(', ')
+  const more = unlinked.length > 5 ? `, and ${unlinked.length - 5} more` : ''
+  return (
+    `SciForge workspace packages are missing from node_modules (${unlinked.length} unlinked: ${shown}${more}). ` +
+    'Installed dependencies are older than the workspace list, so Vite cannot resolve them. ' +
+    'Run `npm install` in the project root, then run `npm run dev` again.'
   )
+}
+
+/**
+ * npm links every workspace package into `node_modules/<name>`. When
+ * `node_modules` predates the current lockfile those links are simply absent,
+ * and the failure only surfaces later as a Rollup error inside the generated
+ * `src/shared/installed-domain-packages.ts`, which names no fix (#219).
+ */
+export async function listWorkspacePackageNames(root = projectRoot) {
+  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  const patterns = Array.isArray(manifest.workspaces)
+    ? manifest.workspaces
+    : manifest.workspaces?.packages ?? []
+  const names = new Set()
+  for (const directory of await expandWorkspacePatterns(root, patterns)) {
+    let declared
+    try {
+      declared = JSON.parse(await readFile(join(root, directory, 'package.json'), 'utf8')).name
+    } catch {
+      continue
+    }
+    if (typeof declared === 'string' && declared.length > 0) names.add(declared)
+  }
+  return [...names].sort()
+}
+
+export async function findUnlinkedWorkspacePackages(root = projectRoot) {
+  const unlinked = []
+  for (const name of await listWorkspacePackageNames(root)) {
+    try {
+      await access(join(root, 'node_modules', ...name.split('/')))
+    } catch {
+      unlinked.push(name)
+    }
+  }
+  return unlinked
+}
+
+async function expandWorkspacePatterns(root, patterns) {
+  const found = new Set()
+  const walk = async (base, segments, index) => {
+    if (index === segments.length) {
+      found.add(base)
+      return
+    }
+    const segment = segments[index]
+    if (segment === '*') {
+      const entries = await readdir(join(root, base), { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        if (entry.isDirectory()) await walk(`${base}/${entry.name}`, segments, index + 1)
+      }
+      return
+    }
+    await walk(base ? `${base}/${segment}` : segment, segments, index + 1)
+  }
+  for (const pattern of patterns) await walk('', pattern.split('/').filter(Boolean), 0)
+  return [...found]
 }
 
 function ensureElectronBinaryInstalled() {

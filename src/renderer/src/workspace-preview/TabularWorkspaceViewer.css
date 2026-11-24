@@ -64,7 +64,7 @@
   overflow: hidden;
   margin: 0;
   color: var(--ds-text);
-  font-size: 15px;
+  font-size: var(--ds-text-xl);
   font-weight: 650;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -74,7 +74,7 @@
 .workspace-preview-tabular-viewer__header p {
   margin: 3px 0 0;
   color: var(--ds-text-faint);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
 }
 
 .workspace-preview-tabular-viewer__viewport {
@@ -96,7 +96,7 @@
 
 .workspace-preview-tabular-viewer__grid-heading > strong {
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: var(--ds-text-md);
   font-weight: 650;
 }
 
@@ -104,7 +104,7 @@
   overflow: hidden;
   margin: 0;
   color: var(--ds-text-faint);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
   line-height: 1.5;
   text-align: right;
   text-overflow: ellipsis;
@@ -143,7 +143,7 @@
 .workspace-preview-tabular-viewer__column-insert-editor label > span,
 .workspace-preview-tabular-viewer__cell-editor label > span {
   color: var(--ds-text-faint);
-  font-size: 11px;
+  font-size: var(--ds-text-xs);
   font-weight: 600;
 }
 
@@ -167,7 +167,7 @@
   max-width: 250px;
   padding-bottom: 7px;
   color: var(--ds-text-faint);
-  font-size: 11px;
+  font-size: var(--ds-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -194,7 +194,7 @@
 .workspace-preview-tabular-viewer__column-insert-controls::before {
   margin-right: 1px;
   color: var(--ds-text-faint);
-  font-size: 11px;
+  font-size: var(--ds-text-xs);
   font-weight: 600;
 }
 
@@ -225,7 +225,7 @@
   border-collapse: separate;
   table-layout: auto;
   color: var(--ds-text);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
 }
 
 .workspace-preview-tabular-viewer__grid-scroll th,
@@ -313,7 +313,7 @@
 .workspace-preview-tabular-viewer__grid-scroll thead th > button[data-sort-column-index] small {
   margin-left: 8px;
   color: var(--ds-accent);
-  font-size: 10px;
+  font-size: var(--ds-text-2xs);
 }
 
 .workspace-preview-tabular-viewer__grid-scroll button[data-tabular-column-insert-after],
@@ -336,13 +336,13 @@
 .workspace-preview-tabular-viewer__grid-scroll button[data-tabular-column-insert-after]::before,
 .workspace-preview-tabular-viewer__grid-scroll button[data-tabular-row-insert-after]::before {
   content: '+';
-  font-size: 16px;
+  font-size: var(--ds-text-xl);
 }
 
 .workspace-preview-tabular-viewer__grid-scroll button[data-tabular-column-delete]::before,
 .workspace-preview-tabular-viewer__grid-scroll button[data-tabular-row-delete]::before {
   content: '\00d7';
-  font-size: 17px;
+  font-size: var(--ds-text-2xl);
 }
 
 .workspace-preview-tabular-viewer__grid-scroll th:hover > button,
@@ -372,7 +372,7 @@
   flex: 0 0 auto;
   border-color: transparent;
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: var(--ds-text-xs);
   opacity: 0;
 }
 
@@ -471,7 +471,7 @@
 
 .workspace-preview-tabular-viewer__agent-summary {
   color: var(--ds-text-muted);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
   line-height: 1.6;
 }
 
@@ -481,7 +481,7 @@
 
 .workspace-preview-tabular-viewer__section h4 {
   margin: 0 0 10px;
-  font-size: 13px;
+  font-size: var(--ds-text-md);
 }
 
 .workspace-preview-tabular-viewer__section dl,
@@ -494,7 +494,7 @@
 .workspace-preview-tabular-viewer__section dl > div {
   margin-top: 6px;
   color: var(--ds-text-muted);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
 }
 
 .workspace-preview-tabular-viewer__grid-scroll td[data-selected="true"] {

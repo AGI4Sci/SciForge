@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/plugin-scientific-plotting",
-  "version": "0.4.0-mvp.11",
+  "version": "0.4.0-mvp.13",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/figure-store/*.test.ts src/sciforge/*.test.ts tests/mvp-*.test.ts"
+    "test": "node --import tsx --test scripts/*.test.mjs src/figure-store/*.test.ts src/sciforge/*.test.ts tests/mvp-*.test.ts"
   },
   "exports": {
     ".": "./dist/main.js",

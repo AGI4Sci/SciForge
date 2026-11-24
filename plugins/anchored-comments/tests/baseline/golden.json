@@ -3,7 +3,7 @@
     "threads": []
   },
   "upsert": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "id": "thread-baseline-1",
     "workspaceKey": "/workspace/example",
     "purpose": "research",
@@ -59,7 +59,7 @@
   },
   "get": {
     "thread": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "thread-baseline-1",
       "workspaceKey": "/workspace/example",
       "purpose": "research",
@@ -117,7 +117,7 @@
   "list-by-target": {
     "threads": [
       {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "id": "thread-baseline-1",
         "workspaceKey": "/workspace/example",
         "purpose": "research",

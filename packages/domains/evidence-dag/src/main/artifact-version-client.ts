@@ -338,10 +338,10 @@ async function pinTraceItem(
 }
 
 type VerifiedArtifactVersionRef =
-  | Readonly<{ ok: true; record: EvidenceDagArtifactVersionRecordV1 }>
+  | Readonly<{ ok: true; record: EvidenceDagArtifactVersionRecordV1; bytes: Buffer }>
   | Readonly<{ ok: false; issue: ArtifactVersionIssueV1 }>
 
-async function verifyArtifactVersionRef(
+export async function verifyArtifactVersionRef(
   expectedRef: ArtifactVersionRefV1,
   workspaceRoot: string,
   readPort: (workspaceRoot: string) => ArtifactVersionReadPortV1
@@ -375,6 +375,7 @@ async function verifyArtifactVersionRef(
     }
     return {
       ok: true,
+      bytes,
       record: {
         ref: result.value.ref,
         artifact: result.value.artifact,

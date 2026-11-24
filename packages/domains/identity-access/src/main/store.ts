@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '@sciforge/domain-sdk/node/sqlite-runtime'
 import { principalIdentityVersionSchema } from '@sciforge/domain-sdk/principal'
 import {
   MAX_LOCAL_ACCOUNTS,
@@ -208,6 +208,38 @@ export class IdentityStore {
     })
   }
 
+  deleteAccount(accountId: string): IdentityAvailableState {
+    return this.transaction(() => {
+      const current = this.state()
+      if (!this.accountRow(accountId)) {
+        throw new IdentityValidationError('account-not-found', 'Local Account was not found.')
+      }
+      requireNextIdentityVersion(current.identityVersion)
+      if (current.currentAccount?.userId === accountId) {
+        // Selection is a foreign key into `accounts`, so it has to move before
+        // the row disappears. The oldest remaining account is the deterministic
+        // fallback; the last deletion leaves Identity with no selection, the
+        // same state as exit-account.
+        const replacement = this.database.prepare(`
+          SELECT user_id FROM accounts
+          WHERE user_id <> ?
+          ORDER BY created_at ASC, user_id ASC
+          LIMIT 1
+        `).get(accountId) as { user_id: string } | undefined
+        this.database.prepare(`
+          UPDATE identity_state SET current_user_id = ? WHERE singleton_id = 1
+        `).run(replacement?.user_id ?? null)
+      }
+      this.database.prepare('DELETE FROM accounts WHERE user_id = ?').run(accountId)
+      this.database.prepare(`
+        UPDATE identity_state
+        SET identity_version = identity_version + 1
+        WHERE singleton_id = 1
+      `).run()
+      return this.state()
+    })
+  }
+
   exitAccount(): IdentityAvailableState {
     return this.transaction(() => {
       const current = this.state()
@@ -292,13 +324,18 @@ export class IdentityStore {
           : this.createCloudAccountRow(input.displayName, current.accountCount)
       }
 
+      const display = this.uniqueCloudUsername(input.displayName, target.user_id)
+      if (target.username !== display.username) {
+        this.database.prepare('UPDATE accounts SET username = ?, username_key = ?, updated_at = ? WHERE user_id = ?')
+          .run(display.username, display.usernameKey, new Date().toISOString(), target.user_id)
+      }
       const mappingChanged =
         target.cloud_user_id !== parsedLink.cloudUserId ||
         target.cloud_oidc_identity_id !== parsedLink.oidcIdentityId ||
         target.cloud_issuer !== parsedLink.issuer ||
         target.cloud_subject !== parsedLink.subject
       const selectionChanged = current.currentAccount?.userId !== target.user_id
-      if (!mappingChanged && !selectionChanged) return current
+      if (!mappingChanged && !selectionChanged) return this.state()
 
       requireNextIdentityVersion(current.identityVersion)
       if (mappingChanged) {
@@ -430,7 +467,7 @@ export class IdentityStore {
     return this.accountRow(userId)!
   }
 
-  private uniqueCloudUsername(displayName: string): ReturnType<typeof normalizeUsername> {
+  private uniqueCloudUsername(displayName: string, excludeUserId = ''): ReturnType<typeof normalizeUsername> {
     const sanitized = Array.from(displayName.normalize('NFC'))
       .map((character) => /[\p{L}\p{N} _-]/u.test(character) ? character : ' ')
       .join('')
@@ -442,8 +479,8 @@ export class IdentityStore {
       const candidate = `${Array.from(base).slice(0, 64 - suffixText.length).join('')}${suffixText}`
       const normalized = normalizeUsername(candidate)
       const exists = this.database.prepare(
-        'SELECT 1 FROM accounts WHERE username_key = ?'
-      ).get(normalized.usernameKey)
+        'SELECT 1 FROM accounts WHERE username_key = ? AND user_id != ?'
+      ).get(normalized.usernameKey, excludeUserId)
       if (!exists) return normalized
     }
     throw new IdentityValidationError('username-conflict', 'Could not allocate a Local Account name.')

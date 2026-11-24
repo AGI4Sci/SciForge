@@ -2,6 +2,7 @@ import { humanAnswerFixture } from '@sciforge/collaboration-contracts/testing'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { z } from 'zod'
+import { validateWorkerFollowupTime } from '../task-followup.js'
 import {
   WORKER_RESULT_SUMMARY_MAX_CODE_POINTS,
   parseWorkerRuntimeResult,
@@ -12,6 +13,18 @@ import {
   workerResultRepairPrompt,
   workerTaskPrompt
 } from './worker-runtime-result.js'
+
+test('deferred results carry a bounded revisit, never an inactive summary or an executable command', () => {
+  const followup = { key: 'training-result', at: '2026-11-16T00:02:00Z', about: 'Read the already submitted job result.' }
+  const result = { schemaVersion: 1, outcome: 'deferred', followup }
+  assert.deepEqual(parseWorkerRuntimeResult(JSON.stringify({ result })), result)
+  for (const invalid of [{ ...result, summary: 'done' }, { ...result, followup: { ...followup, command: 'restart-training' } }, { ...result, followup: { ...followup, key: '../other-task' } }]) {
+    assert.throws(() => parseWorkerRuntimeResult(JSON.stringify({ result: invalid })))
+  }
+  validateWorkerFollowupTime(followup.at, new Date('2026-11-16T00:00:00Z'))
+  assert.throws(() => validateWorkerFollowupTime(followup.at, new Date('2026-11-16T00:01:30Z')))
+  assert.throws(() => validateWorkerFollowupTime(followup.at, new Date('2026-11-01T00:00:00Z')))
+})
 
 test('Worker Runtime result is strict and never accepts Markdown-wrapped or extra fields', () => {
   assert.deepEqual(parseWorkerRuntimeResult(JSON.stringify({
@@ -358,7 +371,7 @@ test('Worker Runtime output schema closes the envelope used by the parser', () =
   assert.ok(Array.isArray(properties.result.oneOf ?? properties.result.anyOf))
 
   const branches = (properties.result.oneOf ?? properties.result.anyOf) as Array<Record<string, unknown>>
-  assert.equal(branches.length, 2)
+  assert.equal(branches.length, 3)
   for (const branch of branches) {
     assert.equal(branch.type, 'object')
     assert.equal(branch.additionalProperties, false)

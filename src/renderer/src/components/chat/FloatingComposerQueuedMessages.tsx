@@ -52,7 +52,7 @@ export function FloatingComposerQueuedMessages({
 
   if (messages.length === 0) {
     return (
-      <div className="mb-2 flex items-start gap-1.5 rounded-2xl border border-amber-400/50 bg-amber-50/90 px-3 py-2 text-[12px] leading-4 text-amber-700 shadow-sm dark:bg-amber-950/30 dark:text-amber-300">
+      <div className="mb-2 flex items-start gap-1.5 rounded-2xl border border-amber-400/50 bg-amber-50/90 px-3 py-2 text-ds-sm leading-4 text-amber-700 shadow-sm dark:bg-amber-950/30 dark:text-amber-300">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>{t('queuedMessagesPersistenceDegraded')}</span>
       </div>
@@ -87,19 +87,19 @@ export function FloatingComposerQueuedMessages({
   return (
     <div className="mb-2 rounded-[22px] border border-ds-border bg-ds-card/88 px-4 py-3 shadow-sm backdrop-blur-xl">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="inline-flex items-center gap-2 text-[13px] font-medium text-ds-ink">
+        <div className="inline-flex items-center gap-2 text-ds-md font-medium text-ds-ink">
           <Clock3 className="h-3.5 w-3.5 text-ds-muted" strokeWidth={1.9} />
           <span role={readonlyOnly ? 'status' : undefined} data-testid={readonlyOnly ? 'session-output-validation' : undefined}>
             {readonlyOnly ? t('queuedMessageOutputPending') : t('queuedMessagesTitle', { count: queuedCount })}
           </span>
         </div>
         <div className="inline-flex items-center gap-3">
-          {!readonlyOnly ? <div className="text-[12px] text-ds-muted">{t('queuedMessagesHint')}</div> : null}
+          {!readonlyOnly ? <div className="text-ds-sm text-ds-muted">{t('queuedMessagesHint')}</div> : null}
           {onClearAll ? (
             <button
               type="button"
               onClick={onClearAll}
-              className="rounded-full px-2 py-0.5 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              className="rounded-full px-2 py-0.5 text-ds-sm font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
               aria-label={t('queuedMessagesClearAll')}
               title={t('queuedMessagesClearAll')}
             >
@@ -109,7 +109,7 @@ export function FloatingComposerQueuedMessages({
         </div>
       </div>
       {persistenceDegraded ? (
-        <div className="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 px-2.5 py-2 text-[12px] leading-4 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+        <div className="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 px-2.5 py-2 text-ds-sm leading-4 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{t('queuedMessagesPersistenceDegraded')}</span>
         </div>
@@ -130,18 +130,18 @@ export function FloatingComposerQueuedMessages({
           return (
             <div
               key={message.id}
-              className={`flex min-w-0 max-w-full items-start gap-2 rounded-2xl border px-3 py-2 text-[13px] text-ds-ink ${failureMessage ? 'border-amber-400/50 bg-amber-50/80 dark:bg-amber-950/20' : 'border-ds-border-muted bg-ds-main/80'}`}
+              className={`flex min-w-0 max-w-full items-start gap-2 rounded-2xl border px-3 py-2 text-ds-md text-ds-ink ${failureMessage ? 'border-amber-400/50 bg-amber-50/80 dark:bg-amber-950/20' : 'border-ds-border-muted bg-ds-main/80'}`}
             >
             {!readOnly ? <span className="mt-1 shrink-0 text-ds-faint">{messages.slice(0, index + 1).filter((entry) => !isReadonlyInput(entry)).length}.</span> : null}
             {readOnly ? (
               <div className="min-w-0 flex-1">
                 {!readonlyOnly ? (
-                  <span role="status" data-testid="session-output-validation" className="block text-[12px] leading-4 text-ds-muted">
+                  <span role="status" data-testid="session-output-validation" className="block text-ds-sm leading-4 text-ds-muted">
                     {t('queuedMessageOutputPending')}
                   </span>
                 ) : null}
                 <details className="mt-1" data-testid="session-current-input-details">
-                  <summary className="cursor-pointer text-[12px] leading-4 text-ds-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                  <summary className="cursor-pointer text-ds-sm leading-4 text-ds-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
                     {t('queuedMessageViewCurrentInput')}
                   </summary>
                   <span className="mt-2 block max-h-32 overflow-y-auto whitespace-pre-wrap break-words leading-5">{message.displayText ?? message.text}</span>
@@ -163,14 +163,14 @@ export function FloatingComposerQueuedMessages({
                   {message.displayText ?? message.text}
                 </span>
                 {(message.createdAt || message.modelLabel || message.model) ? (
-                  <span className="mt-1 block text-[11px] text-ds-faint">
+                  <span className="mt-1 block text-ds-xs text-ds-faint">
                     {[message.createdAt ? new Date(message.createdAt).toLocaleString() : '', message.modelLabel ?? message.model ?? '']
                       .filter(Boolean)
                       .join(' · ')}
                   </span>
                 ) : null}
                 {failureMessage ? (
-                  <span className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-4 text-amber-700 dark:text-amber-300">
+                  <span className="mt-1.5 flex items-start gap-1.5 text-ds-sm leading-4 text-amber-700 dark:text-amber-300">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span><strong>{failureLabel}</strong> {failureMessage}</span>
                   </span>

@@ -446,6 +446,155 @@ describe('CodexRuntimeService model access selection', () => {
   })
 })
 
+describe('Codex workspace mutation', () => {
+  it('keeps a workspace mutation when an earlier event finishes persisting afterward', async () => {
+    const storageRoot = await tempRoot()
+    const workspace = await realpath(await tempRoot())
+    const store = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(store, {
+      guiThreadId: 'existing', codexThreadId: 'native-existing', workspace: '/old', title: 'Research'
+    })
+    const client = controllableClient()
+    client.request = vi.fn(async () => ({ status: 'unsubscribed' })) as typeof client.request
+    client.resumeThread = vi.fn(async () => ({ thread: { id: 'native-existing', cwd: workspace } }))
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    capabilityTurnServices.add(service)
+    const eventStore = (service as unknown as { eventStore: CodexEventStore }).eventStore
+    const append = eventStore.append.bind(eventStore)
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    vi.spyOn(eventStore, 'append').mockImplementationOnce(async (...args) => {
+      entered()
+      await blocked
+      return append(...args)
+    })
+    const pending = service.publishSyntheticEvent({
+      runtimeId: 'codex', threadId: 'existing', kind: 'runtime_status', phase: 'turn_start_sent'
+    })
+    await started
+    try {
+      await expect(service.updateThreadWorkspace('existing', workspace)).resolves.toEqual({ ok: true })
+    } finally {
+      release()
+    }
+    await pending
+    expect(await new CodexThreadStore({ rootDir: storageRoot }).get('existing')).toMatchObject({
+      workspace, title: 'Research', codexThreadId: 'native-existing'
+    })
+  })
+
+  it('releases a warm thread before restoring its workspace override', async () => {
+    const storageRoot = await tempRoot()
+    const workspace = await realpath(await tempRoot())
+    const store = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(store, {
+      guiThreadId: 'existing', codexThreadId: 'native-existing', workspace: '/old'
+    })
+    const client = controllableClient()
+    let loaded = true
+    client.request = vi.fn(async (method) => {
+      if (method === 'thread/unsubscribe') loaded = false
+      return { status: 'unsubscribed' }
+    }) as typeof client.request
+    client.resumeThread = vi.fn(async () => ({ thread: {
+      id: 'native-existing', cwd: loaded ? '/old' : workspace
+    } }))
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    capabilityTurnServices.add(service)
+    await expect(service.updateThreadWorkspace('existing', workspace)).resolves.toEqual({ ok: true })
+    expect(client.request).toHaveBeenCalledWith('thread/unsubscribe', { threadId: 'native-existing' })
+    expect(loaded).toBe(false)
+    expect(client.startThread).not.toHaveBeenCalled()
+  })
+
+  it('leaves the stored workspace unchanged when native restoration fails', async () => {
+    const storageRoot = await tempRoot()
+    const workspace = await realpath(await tempRoot())
+    const store = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(store, {
+      guiThreadId: 'existing', codexThreadId: 'native-existing', workspace: '/old'
+    })
+    const client = controllableClient()
+    client.resumeThread = vi.fn(async () => { throw new Error('native resume rejected') })
+    client.request = vi.fn(async () => ({ status: 'unsubscribed' })) as typeof client.request
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    capabilityTurnServices.add(service)
+    await expect(service.updateThreadWorkspace('existing', workspace)).resolves.toMatchObject({
+      ok: false, message: expect.stringContaining('native resume rejected')
+    })
+    expect(await new CodexThreadStore({ rootDir: storageRoot }).get('existing')).toMatchObject({ workspace: '/old' })
+    expect(client.startThread).not.toHaveBeenCalled()
+  })
+
+  it('does not resume or persist when the native thread cannot be released', async () => {
+    const storageRoot = await tempRoot()
+    const workspace = await realpath(await tempRoot())
+    const store = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(store, {
+      guiThreadId: 'existing', codexThreadId: 'native-existing', workspace: '/old'
+    })
+    const client = controllableClient()
+    client.resumeThread = vi.fn(async () => ({ thread: { id: 'native-existing', cwd: workspace } }))
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    capabilityTurnServices.add(service)
+    await expect(service.updateThreadWorkspace('existing', workspace)).resolves.toMatchObject({ ok: false })
+    expect(client.resumeThread).not.toHaveBeenCalled()
+    expect(await new CodexThreadStore({ rootDir: storageRoot }).get('existing')).toMatchObject({ workspace: '/old' })
+  })
+
+  it('uses the changed directory for the next turn on the same native thread', async () => {
+    const storageRoot = await tempRoot()
+    const workspace = await realpath(await tempRoot())
+    const store = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(store, {
+      guiThreadId: 'existing', codexThreadId: 'native-existing', workspace: '/old'
+    })
+    const client = controllableClient()
+    client.resumeThread = vi.fn(async () => ({ thread: { id: 'native-existing', cwd: workspace } }))
+    client.request = vi.fn(async () => ({ status: 'unsubscribed' })) as typeof client.request
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    capabilityTurnServices.add(service)
+    await expect(service.updateThreadWorkspace('existing', workspace)).resolves.toEqual({ ok: true })
+    await expect(service.startTurn({ threadId: 'existing', text: 'Check workspace' })).resolves.toMatchObject({ ok: true })
+    expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'native-existing', cwd: workspace }))
+    expect(client.startThread).not.toHaveBeenCalled()
+    await expect(service.updateThreadWorkspace('existing', '/another')).resolves.toMatchObject({ ok: false })
+  })
+
+  it('preserves session identity and persists the workspace for subsequent reads', async () => {
+    const storageRoot = await tempRoot()
+    const workspace = await realpath(await tempRoot())
+    const store = new CodexThreadStore({ rootDir: storageRoot })
+    await upsertMaterializedThread(store, {
+      guiThreadId: 'existing', codexThreadId: 'native-existing', title: 'Research', workspace: '/old'
+    })
+    const client = controllableClient()
+    client.resumeThread = vi.fn(async () => ({ thread: { id: 'native-existing', cwd: workspace } }))
+    client.request = vi.fn(async () => ({ status: 'unsubscribed' })) as typeof client.request
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    capabilityTurnServices.add(service)
+    await expect(service.updateThreadWorkspace('existing', workspace)).resolves.toEqual({ ok: true })
+    expect(client.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'native-existing', cwd: workspace }))
+    client.listThreads = vi.fn(async () => ({ threads: [{ id: 'native-existing', cwd: '/old' }] }))
+    await expect(service.listThreads()).resolves.toMatchObject({
+      ok: true, threads: [expect.objectContaining({ id: 'existing', workspace })]
+    })
+    const restored = new CodexRuntimeService({ settings: async () => settings(), storageRoot })
+    await expect(restored.listThreads({ threadId: 'existing' })).resolves.toMatchObject({
+      ok: true, threads: [{ id: 'existing', workspace, title: 'Research' }]
+    })
+    expect(await new CodexThreadStore({ rootDir: storageRoot }).get('existing')).toMatchObject({ codexThreadId: 'native-existing', workspace })
+  })
+})
+
 describe('Codex child summary index', () => {
   it('scans stored child events once and applies later child events incrementally', async () => {
     const storageRoot = await tempRoot()
@@ -3075,6 +3224,84 @@ describe('CodexRuntimeService compatibility operations', () => {
     } finally { await service.stop() }
   })
 
+  it('disables only native web search for structured JSON object turns while retaining function tools', async () => {
+    const client = controllableClient()
+    client.resumeThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId } }))
+    vi.mocked(client.request).mockResolvedValue({ status: 'unsubscribed' })
+    const current = settings()
+    current.modelRouter!.profiles.default.textReasoner.chatStructuredOutputMode = 'json_object'
+    current.modelRouter!.profiles.default.textReasoner.protocol = 'responses'
+    const service = new CodexRuntimeService({
+      settings: async () => current, storageRoot: await tempRoot(), probeRuntime: availableTestRuntime,
+      createClient: () => client,
+      capabilityAgentTools: { tools: () => [{ type: 'function', name: 'sciforge_discover', description: 'Find tools', inputSchema: { type: 'object' } }], call: async () => ({ tool: 'sciforge_discover', value: { found: true } }) }
+    })
+    try {
+      await expect(service.startThread({ allowedTools: ['sciforge_discover'] })).resolves.toMatchObject({ ok: true })
+      expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({ dynamicTools: expect.arrayContaining([expect.objectContaining({ name: 'sciforge_discover' })]) }))
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Produce result', allowedTools: ['sciforge_discover'], outputSchema: { type: 'object' } })).resolves.toMatchObject({ ok: true })
+      expect(client.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ config: { web_search: 'disabled' } }))
+      expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({ outputSchema: { type: 'object' } }))
+    } finally { await service.stop() }
+  })
+
+  it('installs structured JSON web-search policy when rebuilding a fresh thread without a rollout', async () => {
+    const queued = clientWithQueuedEvents()
+    const client = queued.client
+    const current = settings()
+    current.modelRouter!.profiles.default.textReasoner.chatStructuredOutputMode = 'json_object'
+    current.modelRouter!.profiles.default.textReasoner.protocol = 'responses'
+    let nextThread = 0
+    const loaded = new Map<string, boolean>()
+    const rollouts = new Map<string, boolean>()
+    vi.mocked(client.startThread).mockImplementation(async (params) => {
+      const id = `native-${++nextThread}`
+      loaded.set(id, (params.config as Record<string, unknown> | undefined)?.web_search === 'disabled')
+      return { thread: { id } }
+    })
+    vi.mocked(client.request).mockImplementation(async (method, params) => {
+      expect(method).toBe('thread/unsubscribe')
+      loaded.delete((params as { threadId: string }).threadId)
+      return { status: 'unsubscribed' }
+    })
+    client.resumeThread = vi.fn(async (params) => {
+      if (!rollouts.has(params.threadId!)) throw new Error('no rollout found')
+      loaded.set(params.threadId!, params.config?.web_search === 'disabled')
+      return { thread: { id: params.threadId } }
+    })
+    vi.mocked(client.startTurn).mockImplementation(async (params) => {
+      expect(loaded.get(params.threadId)).toBe(Boolean(params.outputSchema))
+      rollouts.set(params.threadId, true)
+      return { turn: { id: `turn-${rollouts.size}` } }
+    })
+    const storageRoot = await tempRoot()
+    const service = new CodexRuntimeService({ settings: async () => current, storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client,
+      capabilityAgentTools: { tools: () => [{ type: 'function', name: 'sciforge_discover', description: 'Find tools', inputSchema: { type: 'object' } }], call: async () => ({ tool: 'sciforge_discover', value: {} }) } })
+    try {
+      await service.startThread({ threadId: 'visible-session', title: 'First task', allowedTools: ['sciforge_discover'] })
+      await expect(service.startTurn({ threadId: 'visible-session', text: 'Produce result',
+        allowedTools: ['sciforge_discover'], outputSchema: { type: 'object' } }))
+        .resolves.toMatchObject({ ok: true, threadId: 'visible-session', turnId: 'turn-1' })
+      expect(client.startThread).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(client.startThread).mock.calls[1][0]).toMatchObject({
+        config: { web_search: 'disabled' }, dynamicTools: [expect.objectContaining({ name: 'sciforge_discover' })]
+      })
+      expect(client.resumeThread).toHaveBeenCalledTimes(2)
+      expect(client.request).toHaveBeenCalledTimes(1)
+      expect(client.startTurn).toHaveBeenCalledTimes(1)
+      expect(await new CodexThreadStore({ rootDir: storageRoot }).get('visible-session'))
+        .toMatchObject({ guiThreadId: 'visible-session', codexThreadId: 'native-2', title: 'First task' })
+      queued.push({ type: 'event', channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: { method: 'turn/completed', params: { threadId: 'native-2', turnId: 'turn-1' } } })
+      await vi.waitFor(() => expect((service as unknown as { activeTurns: Map<string, string> }).activeTurns.has('visible-session')).toBe(false))
+      await expect(service.startTurn({ threadId: 'visible-session', text: 'Continue normally', allowedTools: ['sciforge_discover'] }))
+        .resolves.toMatchObject({ ok: true })
+      expect(client.startThread).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(client.resumeThread).mock.calls.at(-1)![0].config).toEqual({})
+    } finally { queued.close(); await service.stop() }
+  })
+
   it('disables hosted tools at creation and never unloads a running turn to change policy', async () => {
     const client = controllableClient()
     const service = new CodexRuntimeService({
@@ -4473,6 +4700,12 @@ describe('CodexRuntimeService compatibility operations', () => {
     const launch = launches[0]
     expect(launch?.env?.CODEX_HOME).toBe(managedCodexHome)
     expect(launch?.env?.CODEX_HOME).not.toBe(persistedCodexHome)
+
+    await service.stop()
+    await expect(service.connect()).resolves.toMatchObject({ ok: true })
+    expect(launches).toHaveLength(2)
+    expect(launches[1]?.env?.CODEX_HOME).toBe(managedCodexHome)
+    await service.stop()
   })
 
   it('trusts only the exact app-owned matcher-free PreToolUse hook without a version gate', async () => {
@@ -4747,11 +4980,13 @@ process.stdout.write(JSON.stringify({
   })
 
   it.each([
-    { nativeAvailable: true, allowedTools: undefined },
-    { nativeAvailable: false, allowedTools: undefined },
-    { nativeAvailable: true, allowedTools: [] as string[] },
-    { nativeAvailable: false, allowedTools: [] as string[] }
-  ])('recovers a router alias without widening tools ($nativeAvailable, $allowedTools)', async ({ nativeAvailable, allowedTools }) => {
+    { nativeAvailable: true, allowedTools: undefined, structured: false },
+    { nativeAvailable: false, allowedTools: undefined, structured: false },
+    { nativeAvailable: true, allowedTools: [] as string[], structured: false },
+    { nativeAvailable: false, allowedTools: [] as string[], structured: false },
+    { nativeAvailable: true, allowedTools: undefined, structured: true },
+    { nativeAvailable: false, allowedTools: undefined, structured: true }
+  ])('recovers a router alias without widening tools ($nativeAvailable, $allowedTools, structured=$structured)', async ({ nativeAvailable, allowedTools, structured }) => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })
     await threadStore.upsert({
@@ -4761,12 +4996,19 @@ process.stdout.write(JSON.stringify({
       title: 'Stale Codex'
     })
     const queued = clientWithQueuedEvents()
+    const current = settings()
+    if (structured) {
+      current.modelRouter!.profiles.default.textReasoner.chatStructuredOutputMode = 'json_object'
+      current.modelRouter!.profiles.default.textReasoner.protocol = 'responses'
+    }
+    const disableWebSearch = allowedTools?.length === 0 || structured
+    const outputSchema = structured ? { type: 'object' } : undefined
     let resumeCount = 0
     vi.mocked(queued.client.request).mockResolvedValue({ status: 'unsubscribed' })
     queued.client.resumeThread = vi.fn(async () => {
       resumeCount += 1
       // The first restricted turn refreshes its policy before the alias failure.
-      if (!nativeAvailable && !(allowedTools && resumeCount === 1)) throw new Error('thread not found')
+      if (!nativeAvailable && !(disableWebSearch && resumeCount === 1)) throw new Error('thread not found')
       return { thread: { id: 'stale-codex-thread' } }
     })
     const retryThreadId = nativeAvailable ? 'stale-codex-thread' : 'replacement-codex-thread'
@@ -4781,7 +5023,7 @@ process.stdout.write(JSON.stringify({
         turn: { id: 'turn-retry', userMessageItemId: 'user-retry' }
       })
     const service = new CodexRuntimeService({
-      settings: async () => settings(),
+      settings: async () => current,
       storageRoot,
       probeRuntime: availableTestRuntime,
       createClient: () => queued.client
@@ -4792,6 +5034,7 @@ process.stdout.write(JSON.stringify({
         threadId: 'gui-thread-1',
         text: 'hello',
         allowedTools,
+        outputSchema,
         nativeVisualProofChainPending: true
       })
     ).resolves.toMatchObject({
@@ -4841,9 +5084,9 @@ process.stdout.write(JSON.stringify({
       expect(modelDeltaDedupeProbe(service).states.size).toBe(0)
     })
     expect(queued.client.resumeThread).toHaveBeenLastCalledWith(expect.objectContaining({
-      config: allowedTools ? { web_search: 'disabled' } : {}
+      config: disableWebSearch ? { web_search: 'disabled' } : {}
     }))
-    if (allowedTools && !nativeAvailable) expect(queued.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+    if (disableWebSearch && !nativeAvailable) expect(queued.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       config: { web_search: 'disabled' }
     }))
     if (!nativeAvailable) expect(vi.mocked(queued.client.startThread).mock.calls[0][0].dynamicTools ?? []).toEqual([])
@@ -4898,9 +5141,11 @@ process.stdout.write(JSON.stringify({
       2,
       expect.objectContaining({
         threadId: retryThreadId,
-        model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+        model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
+        ...(structured ? { outputSchema } : {})
       })
     )
+    expect(queued.client.request).toHaveBeenCalledTimes(disableWebSearch ? 1 : 0)
     expect(vi.mocked(queued.client.startTurn).mock.calls[0]?.[0]).not.toHaveProperty('modelProvider')
     expect(vi.mocked(queued.client.startTurn).mock.calls[1]?.[0]).not.toHaveProperty('modelProvider')
     expect(vi.mocked(queued.client.startTurn).mock.calls[0]?.[0].responsesapiClientMetadata).toEqual({

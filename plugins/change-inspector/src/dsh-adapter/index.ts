@@ -9,6 +9,9 @@ export const inject = ['tools', 'agentThreads']
 type AgentThreadsClient = Readonly<{ invoke: (operation: string, input: unknown) => Promise<unknown> }>
 
 export function apply(ctx: Context & { tools: ToolRuntime; agentThreads: AgentThreadsClient }): void {
+  if (!ctx.agentThreads || typeof ctx.agentThreads.invoke !== 'function') {
+    throw new Error('Change Inspector requires the authorized agentThreads Host service.')
+  }
   const service = new ChangeInspectorService({
     agentThreads: {
       read: async ({ runtimeId, threadId }) => await ctx.agentThreads.invoke('read', {
@@ -17,9 +20,24 @@ export function apply(ctx: Context & { tools: ToolRuntime; agentThreads: AgentTh
       }) as ChangeInspectorSessionDetail
     }
   })
-  registerChangeInspectorTools(
-    tool => ctx.tools.register(tool as never),
-    (definition: DshToolDefinition) => defineTool(definition as never),
-    () => service
-  )
+  const disposers: Array<() => void> = []
+  const disposeAll = (): void => {
+    for (const dispose of disposers.splice(0).reverse()) {
+      try { dispose() } catch { /* Complete cleanup of remaining registrations. */ }
+    }
+  }
+  try {
+    registerChangeInspectorTools(
+      tool => {
+        const dispose = ctx.tools.register(tool as never)
+        if (typeof dispose === 'function') disposers.push(dispose)
+      },
+      (definition: DshToolDefinition) => defineTool(definition as never),
+      () => service
+    )
+    ctx.effect(() => disposeAll)
+  } catch (error) {
+    disposeAll()
+    throw error
+  }
 }

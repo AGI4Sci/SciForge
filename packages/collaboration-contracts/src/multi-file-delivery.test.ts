@@ -6,6 +6,9 @@ import {
   cloudStateEntitySchema,
   deliveryCandidateHistorySchema,
   deliveryCandidateSchema,
+  deliveryAdmissionAllows,
+  deliveryAdmissionPolicy,
+  deliveryManifestOutputsSchema,
   deliveryManifestSealCommandSchema,
   deliveryManifestDigest,
   deliveryManifestSchema,
@@ -87,6 +90,23 @@ function resignedManifest(patch: Record<string, unknown>) {
 }
 
 describe('multi-file Delivery contract', () => {
+  it('separates permanent read ceilings from operator-controlled new-delivery admission', () => {
+    const MiB = 1024 * 1024
+    expect(deliveryAdmissionPolicy()).toMatchObject({ maxFileBytes: 200 * MiB, maxTotalBytes: 200 * MiB, largeCapacityEnabled: false })
+    for (const bytes of [200 * MiB, 200 * MiB + 1, 256 * MiB]) {
+      const outputs = [{ ...output, objectId: 'obj_AdmissionRead001', byteCount: bytes }]
+      expect(deliveryManifestOutputsSchema.safeParse(outputs).success).toBe(true)
+      expect(deliveryAdmissionAllows(outputs)).toBe(bytes <= 200 * MiB)
+      expect(deliveryAdmissionAllows(outputs, true)).toBe(true)
+    }
+    const multi = [0, 1, 2].map(i => ({ ...additional(i), objectId: `obj_AdmissionRead00${i}`, byteCount: 70 * MiB }))
+    expect(deliveryManifestOutputsSchema.safeParse(multi).success).toBe(true)
+    expect(deliveryAdmissionAllows(multi)).toBe(false)
+    expect(deliveryAdmissionAllows(multi, true)).toBe(true)
+    expect(deliveryAdmissionAllows([{ byteCount: 256 * MiB + 1 }], true)).toBe(false)
+    expect(deliveryAdmissionAllows([0, 1, 2].map(() => ({ byteCount: 200 * MiB })), true)).toBe(false)
+  })
+
   it('retains the original sealed bundle payload and digest only through read-only history', () => {
     const historical = { ...bundle, schemaVersion: 1,
       outputs: [{ fileName: output.fileName, mediaType: output.mediaType, byteCount: output.byteCount, sha256: output.sha256 }] }
@@ -101,10 +121,11 @@ describe('multi-file Delivery contract', () => {
     expect(frozenDeliveryBundleSchema.safeParse({ ...bundle, outputs: [...outputs, additional(20)] }).success).toBe(false)
   })
 
-  it('bounds the sum of file bytes at 200 MiB', () => {
-    const outputs = [{ ...output, byteCount: 100 * 1024 * 1024 }, { ...additional(1), byteCount: 100 * 1024 * 1024 }]
+  it('bounds total file bytes at 512 MiB and each file at 256 MiB', () => {
+    const outputs = [{ ...output, byteCount: 256 * 1024 * 1024 }, { ...additional(1), byteCount: 256 * 1024 * 1024 }]
     expect(frozenDeliveryBundleSchema.safeParse({ ...bundle, outputs }).success).toBe(true)
     expect(frozenDeliveryBundleSchema.safeParse({ ...bundle, outputs: [...outputs, { ...additional(2), byteCount: 1 }] }).success).toBe(false)
+    expect(frozenDeliveryBundleSchema.safeParse({ ...bundle, outputs: [{ ...output, byteCount: 256 * 1024 * 1024 + 1 }] }).success).toBe(false)
   })
 
   it('rejects traversal, absolute, ambiguous and nonportable paths', () => {
@@ -142,7 +163,10 @@ describe('multi-file Delivery contract', () => {
       { fileName: 'other.csv', relativePath: 'data/other.csv' }]) {
       expect(frozenDeliveryBundleDigest({ ...parsed, outputs: [output, { ...parsed.outputs[1]!, ...patch }] })).not.toBe(digest)
     }
-    expect(frozenDeliveryBundleSchema.safeParse({ ...bundle, outputs: [{ ...output, source: 'member' }] }).success).toBe(false)
+    for (const source of ['ai', 'member', 'attachment'] as const) {
+      expect(frozenDeliveryBundleSchema.parse({ ...bundle, outputs: [{ ...output, source }] }).outputs[0]!.source).toBe(source)
+    }
+    expect(frozenDeliveryBundleSchema.safeParse({ ...bundle, outputs: [{ ...output, source: 'unknown' }] }).success).toBe(false)
   })
 
   it('requires verified descriptors for new candidates while reading old candidates without fabricated facts', () => {

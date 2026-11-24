@@ -154,3 +154,18 @@ test('tool results remain lossless across native protocol envelopes and repeated
   };
   assert.deepEqual(hygienizeModelRequestBody(body), body);
 });
+
+
+test('native client tool payloads remain byte-exact while server tool data keeps ordinary hygiene', () => {
+  const payload = 'AbCd0123_+'.repeat(100);
+  const output = { content: [{ type: 'text', text: payload }], next: payload };
+  const input = [
+    { type: 'custom_tool_call', call_id: 'custom', name: 'edit', input: payload },
+    { type: 'tool_search_call', execution: 'client', call_id: 'search', arguments: { query: payload } },
+    { type: 'custom_tool_call_output', call_id: 'custom', output },
+    { type: 'tool_search_output', execution: 'client', call_id: 'search', tools: [{ description: payload }] },
+  ];
+  assert.deepEqual(hygienizeModelRequestBody({ input }), { input });
+  const server = { type: 'tool_search_output', execution: 'server', tools: [{ description: payload }] };
+  assert.notDeepEqual(hygienizeModelRequestBody({ input: [server] }), { input: [server] });
+});

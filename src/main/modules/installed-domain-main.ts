@@ -11,11 +11,11 @@ import { createDomainMainEntry as createDomainMainEntry1 } from '@sciforge/domai
 import { createDomainMainEntry as createDomainMainEntry2 } from '@sciforge/domain-browser-preview/main'
 import { createDomainMainEntry as createDomainMainEntry3 } from '@sciforge/domain-collaboration/main'
 import { createDomainMainEntry as createDomainMainEntry4 } from '@sciforge/domain-computer-use/main'
-import { createDomainMainEntry as createDomainMainEntry5 } from '@sciforge/domain-content-space/main'
-import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-create-loop/main'
-import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-evidence-dag/main'
-import { createDomainMainEntry as createDomainMainEntry8 } from '@sciforge/domain-git-checkpoints/main'
-import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domain-identity-access/main'
+import { createDomainMainEntry as createDomainMainEntry5 } from '@sciforge/domain-create-loop/main'
+import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-evidence-dag/main'
+import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-git-checkpoints/main'
+import { createDomainMainEntry as createDomainMainEntry8 } from '@sciforge/domain-identity-access/main'
+import { createDomainMainEntry as createDomainMainEntry9 } from '@sciforge/domain-knowledge-net/main'
 import { createDomainMainEntry as createDomainMainEntry10 } from '@sciforge/domain-project-dag/main'
 import { createDomainMainEntry as createDomainMainEntry11 } from '@sciforge/domain-research-checkpoints/main'
 import { createDomainMainEntry as createDomainMainEntry12 } from '@sciforge/domain-siyuan-content-space-provider/main'
@@ -85,11 +85,11 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
       createDomainMainEntry2(domainHostFor("@sciforge/domain-browser-preview")),
       createDomainMainEntry3(domainHostFor("@sciforge/domain-collaboration")),
       createDomainMainEntry4(domainHostFor("@sciforge/domain-computer-use")),
-      createDomainMainEntry5(domainHostFor("@sciforge/domain-content-space")),
-      createDomainMainEntry6(domainHostFor("@sciforge/domain-create-loop")),
-      createDomainMainEntry7(domainHostFor("@sciforge/domain-evidence-dag")),
-      createDomainMainEntry8(domainHostFor("@sciforge/domain-git-checkpoints")),
-      createDomainMainEntry9(domainHostFor("@sciforge/domain-identity-access")),
+      createDomainMainEntry5(domainHostFor("@sciforge/domain-create-loop")),
+      createDomainMainEntry6(domainHostFor("@sciforge/domain-evidence-dag")),
+      createDomainMainEntry7(domainHostFor("@sciforge/domain-git-checkpoints")),
+      createDomainMainEntry8(domainHostFor("@sciforge/domain-identity-access")),
+      createDomainMainEntry9(domainHostFor("@sciforge/domain-knowledge-net")),
       createDomainMainEntry10(domainHostFor("@sciforge/domain-project-dag")),
       createDomainMainEntry11(domainHostFor("@sciforge/domain-research-checkpoints")),
       createDomainMainEntry12(domainHostFor("@sciforge/domain-siyuan-content-space-provider")),
@@ -100,7 +100,7 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
 
 import type { HostServiceClientFactory, HostServiceProvider } from '@sciforge/plugin-sdk'
 import { createDomainHostServiceResolver as createDomainHostServiceResolver0 } from '@sciforge/domain-artifact-versions/host-services'
-import { createDomainHostServiceResolver as createDomainHostServiceResolver1 } from '@sciforge/domain-evidence-dag/host-services'
+import { createDomainHostServiceResolver as createDomainHostServiceResolver1 } from '@sciforge/domain-identity-access/host-services'
 
 export type InstalledDomainHostServiceOptions = Readonly<Record<string, unknown>>
 export type InstalledDomainHostServiceResolution = Readonly<{
@@ -114,13 +114,22 @@ export function createInstalledDomainHostServiceResolution(options: InstalledDom
     createDomainHostServiceResolver0,
     createDomainHostServiceResolver1
   ].map((create) => create(options))
-  const resolveHostServiceProviders = (packageName: string, version: string, generation: number) =>
-    resolvers.map((resolver) => resolver.resolve(packageName, version, generation))
-      .find((value): value is Readonly<Record<string, HostServiceProvider>> => value !== undefined)
+  const serviceIds = resolvers.flatMap((resolver) => resolver.serviceIds)
+  if (new Set(serviceIds).size !== serviceIds.length) throw new Error("Duplicate installed domain Host service ID.")
+  const resolveHostServiceProviders = (packageName: string, version: string, generation: number) => {
+    const providers: Record<string, HostServiceProvider> = Object.create(null)
+    for (const resolver of resolvers) {
+      for (const [serviceId, provider] of Object.entries(resolver.resolve(packageName, version, generation) ?? {})) {
+        if (Object.hasOwn(providers, serviceId)) throw new Error(`Duplicate installed domain Host service ID: ${serviceId}`)
+        providers[serviceId] = provider
+      }
+    }
+    return Object.keys(providers).length === 0 ? undefined : Object.freeze(providers)
+  }
   return Object.freeze({
     resolveHostServiceProviders,
     resolveHostServiceClients: (packageName, version, generation) =>
       resolvers.flatMap((resolver) => resolver.resolveClients(packageName, version, generation)),
-    hostServiceIds: Object.freeze([...new Set(resolvers.flatMap((resolver) => resolver.serviceIds))])
+    hostServiceIds: Object.freeze(serviceIds)
   })
 }

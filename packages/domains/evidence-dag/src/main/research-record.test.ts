@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, readdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { z } from 'zod'
 import { join } from 'node:path'
 import type { DomainAgentThreadDetail, DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
 import { ResearchRecordRuntime } from './research-record.js'
@@ -9,7 +10,136 @@ import { ResearchRecordStore } from './research-record-store.js'
 import { recordHash } from './research-record-state.js'
 import { EvidenceFileStorage } from './secure-storage.js'
 import { ResearchSourceStore } from './research-source-store.js'
+import { ArtifactVersionService } from '../../../artifact-versions/src/main/service.js'
 import type { ResearchRecordEdit, ResearchRecordNode } from '../research-record-contract.js'
+
+test('exact input change marks both presentations, preserves unrelated result and survives restart', async () => {
+  const f = await fixture(undefined, detail => { Object.assign(detail, { turns: [] }) }, 60000)
+  const service = new ArtifactVersionService({ userDataDir: f.options.userDataDir })
+  const access = { audience: 'system' as const, callerId: 'binding-test' }
+  let duringRefresh: (() => Promise<void> | void) | undefined
+  Object.assign(f.context, { capabilities: { invoke: async (contract: { actionId: string }, input: any) => {
+    if (contract.actionId.endsWith('describe-v2')) return service.describe(f.scope.workspaceRoot, input, access)
+    if (contract.actionId.endsWith('events.list')) return service.listEvents(f.scope.workspaceRoot, input, access)
+    if (contract.actionId.endsWith('lifecycle.refresh')) {
+      const callback = duringRefresh; duringRefresh = undefined
+      await callback?.()
+      return service.refresh(f.scope.workspaceRoot, input, access)
+    }
+    throw new Error(`Unexpected capability ${contract.actionId}`)
+  } } })
+  const observe = async (path: string, dependencies?: import('@sciforge/domain-artifact-versions/contract').ArtifactVersionObserveInputV1['dependencies']) => {
+    const response = await service.observe(f.scope.workspaceRoot, { path, retention: 'snapshot', kind: 'dataset', candidateId: path,
+      expectedCurrentVersionId: null, idempotencyKey: path, dependencies }, access)
+    assert.ok(response.ok)
+    return response.value.versions[0].ref
+  }
+  let restarted: ResearchRecordRuntime | undefined
+  try {
+    await writeFile(join(f.scope.workspaceRoot, 'sample.csv'), 'value\n2\n4\n6\n')
+    await writeFile(join(f.scope.workspaceRoot, 'analysis.json'), '{"mean":4}')
+    await writeFile(join(f.scope.workspaceRoot, 'report.md'), '| mean | 4 |\nMean is 4.\n')
+    const input = await observe('sample.csv')
+    const result = await observe('analysis.json', [{ role: 'derived_from', target: { kind: 'version', ref: input }, required: true }])
+    const report = await observe('report.md')
+    const revision = (await f.runtime.view(f.scope)).revision
+    const edit = { ...f.scope, requestId: 'bind-result', expectedRevision: revision, change: { kind: 'result-binding' as const,
+      binding: { id: 'mean', nodeId: 'root', title: 'Mean', result, inputs: [input], presentations: [
+        { id: 'table', artifact: report, location: 'table row mean', label: 'Table mean' },
+        { id: 'prose', artifact: report, location: 'paragraph 1', label: 'Prose mean' }
+      ] } } }
+    const saved = await f.runtime.edit(edit)
+    assert.deepEqual(await f.runtime.edit(edit), saved)
+    await assert.rejects(f.runtime.edit({ ...edit, requestId: 'stale' }), /记录已更新/)
+    const read = () => f.runtime.view({ ...f.scope, includeScientificReview: true })
+    assert.equal((await read()).resultImpact?.[0].status, 'no-recorded-impact')
+    assert.equal((await read()).humanReview?.enabled, false)
+    const principal = { authority: 'local', subject: 'reviewer-1', assurance: 'local-selection' as const, deviceId: 'device-1', identityVersion: 1 }
+    let identityCurrent = true
+    const humanActions = {
+      capture: () => ({ actionId: 'action-1', interaction: 'explicit_click' as const, occurredAt: new Date().toISOString(), confirmedInputDigest: 'a'.repeat(64), sourceMessageDigest: null }),
+      validate: () => ({ principal, assertCurrent: () => { if (!identityCurrent) throw new Error('identity changed') } })
+    }
+    const submission = async (requestId: string, decision: 'approved' | 'skipped' = 'approved', opinion = 'Checked arithmetic and both report locations.') => ({ target: {
+      ...f.scope, requestId, expectedRevision: (await read()).revision, binding: edit.change.binding, decision, opinion
+    } })
+    await assert.rejects(f.runtime.submitHumanReview(await submission('off'), humanActions), /未开启/)
+    await f.runtime.edit({ ...edit, requestId: 'enable-human-review', expectedRevision: (await read()).revision, change: { kind: 'human-review-settings', enabled: true } })
+    await assert.rejects(f.runtime.submitHumanReview(await submission('no-confirmation')), /确认/)
+    await assert.rejects(f.runtime.submitHumanReview(await submission('empty', 'approved', ' '), humanActions))
+    const reviewInput = await submission('human-approved')
+    const reviewed = await f.runtime.submitHumanReview(reviewInput, humanActions)
+    assert.deepEqual(await f.runtime.submitHumanReview(reviewInput, humanActions), reviewed)
+    await assert.rejects(f.runtime.submitHumanReview({ target: { ...reviewInput.target, opinion: 'different' } }, humanActions), /同一请求/)
+    let reviewView = await read()
+    assert.equal(reviewView.resultImpact?.[0].humanReview?.latest?.decision, 'approved')
+    assert.equal(reviewView.resultImpact?.[0].humanReview?.applicability, 'current')
+    assert.deepEqual(reviewView.resultImpact?.[0].humanReview?.latest?.principal, principal)
+    identityCurrent = false
+    await assert.rejects(f.runtime.submitHumanReview(await submission('identity-changed'), humanActions), /identity changed/)
+    identityCurrent = true
+    const identityRace = await submission('identity-race')
+    duringRefresh = () => { identityCurrent = false }
+    await assert.rejects(f.runtime.submitHumanReview(identityRace, humanActions), /identity changed/)
+    identityCurrent = true
+    const revisionRace = await submission('revision-race')
+    duringRefresh = async () => { await f.runtime.edit({ ...edit, requestId: 'race-settings', expectedRevision: revisionRace.target.expectedRevision,
+      change: { kind: 'human-review-settings', enabled: true } }) }
+    await assert.rejects(f.runtime.submitHumanReview(revisionRace, humanActions), /记录已更新/)
+    const wrongBinding = await submission('wrong-review-binding')
+    await assert.rejects(f.runtime.submitHumanReview({ target: { ...wrongBinding.target, binding: { ...wrongBinding.target.binding, title: 'Changed' } } }, humanActions), /绑定不一致/)
+    assert.equal((await read()).resultImpact?.[0].humanReview?.total, 1)
+    await f.runtime.submitHumanReview(await submission('skip', 'skipped', ''), humanActions)
+    reviewView = await read()
+    assert.equal(reviewView.resultImpact?.[0].humanReview?.latest?.decision, 'skipped')
+    assert.equal(reviewView.resultImpact?.[0].humanReview?.total, 2)
+    await f.runtime.edit({ ...edit, requestId: 'disable-human-review', expectedRevision: reviewView.revision, change: { kind: 'human-review-settings', enabled: false } })
+    assert.equal((await read()).resultImpact?.[0].humanReview?.total, 2)
+    await f.runtime.edit({ ...edit, requestId: 'unrelated', expectedRevision: (await read()).revision,
+      change: { kind: 'result-binding', binding: { ...edit.change.binding, id: 'other', result: report, inputs: [report], presentations: [] } } })
+    const transitiveRevision = (await read()).revision
+    await f.runtime.edit({ ...edit, requestId: 'transitive', expectedRevision: transitiveRevision,
+      change: { kind: 'result-binding', binding: { ...edit.change.binding, id: 'inherited', inputs: [report] } } })
+    await writeFile(join(f.scope.workspaceRoot, 'sample.csv'), 'value\n2\n4\n9\n')
+    assert.ok((await service.refresh(f.scope.workspaceRoot, {}, access)).ok)
+    const changed = await read()
+    assert.equal(changed.resultImpact?.find(item => item.id === 'mean')?.status, 'requires-review')
+    assert.equal(changed.resultImpact?.find(item => item.id === 'mean')?.humanReview?.applicability, 'stale')
+    assert.deepEqual(changed.resultImpact?.find(item => item.id === 'mean')?.presentations.map(item => item.status), ['requires-review', 'requires-review'])
+    assert.equal(changed.resultImpact?.find(item => item.id === 'other')?.status, 'no-recorded-impact')
+    assert.equal(changed.resultImpact?.find(item => item.id === 'inherited')?.status, 'requires-review')
+    await f.runtime.edit({ ...edit, requestId: 'reenable-human-review', expectedRevision: changed.revision, change: { kind: 'human-review-settings', enabled: true } })
+    await assert.rejects(f.runtime.submitHumanReview(await submission('approve-stale'), humanActions), /材料已变化/)
+    const beforeRestart = await read()
+    await f.runtime.close()
+    restarted = new ResearchRecordRuntime(f.options); restarted.start(f.context, true)
+    assert.deepEqual((await restarted.view({ ...f.scope, includeScientificReview: true })).resultImpact, beforeRestart.resultImpact)
+    assert.equal(await readFile(join(f.scope.workspaceRoot, 'analysis.json'), 'utf8'), '{"mean":4}')
+    const stored = await restarted.view(f.scope)
+    await restarted.edit({ ...edit, requestId: 'phase-binding', expectedRevision: stored.revision,
+      change: { kind: 'phase', nodeId: 'binding-phase', parentId: 'root', title: 'Binding phase', summary: '' } })
+    await restarted.edit({ ...edit, requestId: 'phase-binding-save', expectedRevision: (await restarted.view(f.scope)).revision,
+      change: { kind: 'result-binding', binding: { ...edit.change.binding, id: 'phase-mean', nodeId: 'binding-phase' } } })
+    const bindingHistory = await restarted.review({ ...f.scope, mode: 'history', limit: 100 })
+    const reviewEvent = bindingHistory.items.find(item => item.kind === 'human-result-review')!
+    const reviewAudit = await restarted.audit({ ...f.scope, sequence: reviewEvent.sequence })
+    assert.equal((reviewAudit.changes.find(item => item.field === 'humanReview')?.after as any).decision, 'skipped')
+    const bindingEvent = bindingHistory.items.find(item => item.kind === 'human-result-binding' && item.nodeId === 'binding-phase')!
+    const bindingAudit = await restarted.audit({ ...f.scope, sequence: bindingEvent.sequence })
+    assert.deepEqual(bindingAudit.changes.find(item => item.field === 'result')?.after, result)
+    assert.deepEqual(bindingAudit.changes.find(item => item.field === 'presentations')?.after, edit.change.binding.presentations)
+    await restarted.edit({ ...edit, requestId: 'wrong-identity', expectedRevision: (await restarted.view(f.scope)).revision,
+      change: { kind: 'result-binding', binding: { ...edit.change.binding, id: 'wrong', result: report, inputs: [{ ...input, contentDigest: '0'.repeat(64) }] } } })
+    assert.equal((await restarted.view({ ...f.scope, includeScientificReview: true })).resultImpact?.find(item => item.id === 'wrong')?.status, 'unknown')
+    Object.assign(f.context, { capabilities: { invoke: async () => { throw new Error('denied') } } })
+    assert.ok((await restarted.view({ ...f.scope, includeScientificReview: true })).resultImpact?.every(item => item.status === 'unknown'))
+    const unknown = await restarted.view({ ...f.scope, includeScientificReview: true })
+    assert.equal(unknown.resultImpact?.find(item => item.id === 'mean')?.humanReview?.applicability, 'unknown')
+    await assert.rejects(restarted.submitHumanReview({ target: { ...reviewInput.target, requestId: 'approve-unknown', expectedRevision: unknown.revision } }, humanActions), /denied|材料已变化/)
+    await restarted.submitHumanReview({ target: { ...reviewInput.target, requestId: 'skip-unknown', expectedRevision: unknown.revision, decision: 'skipped', opinion: '' } }, humanActions)
+    assert.equal((await restarted.view({ ...f.scope, includeScientificReview: true })).resultImpact?.find(item => item.id === 'mean')?.humanReview?.latest?.decision, 'skipped')
+  } finally { await f.runtime.close(); await restarted?.close() }
+})
 
 test('retained exact source survives edits, compaction and restart; missing authority and corruption fail closed', async () => {
   const f = await fixture(undefined, undefined, 60000)
@@ -212,6 +342,66 @@ test('attention contains current leaf concerns once and excludes a resolved conc
     assert.equal(after.total, 1); assert.equal(after.items[0].kind, 'negative')
     assert.ok((await f.runtime.review({ ...f.scope, mode: 'history' })).items.some(item => item.text.includes('基线命令失败')))
   } finally { await f.runtime.close() }
+})
+
+test('a failing periodic scan reports the error once and backs off instead of repolling at full rate', async () => {
+  const userDataDir = await realpath(await mkdtemp(join(tmpdir(), 'research-record-backoff-')))
+  const logs: { level: string; message: string }[] = []
+  let listCalls = 0
+  let failing = true
+  const context = {
+    userDataDir,
+    signal: new AbortController().signal,
+    agentThreads: {
+      list: async () => {
+        listCalls++
+        if (failing) throw Object.assign(new Error('thread index unavailable'), { code: 'E_INDEX' })
+        return []
+      }
+    },
+    log: (entry: { level: string; message: string }) => { logs.push(entry) }
+  } as unknown as DomainMainRuntimeLifecycleContext
+  const runtime = new ResearchRecordRuntime({ userDataDir, pollMs: 20 })
+  runtime.start(context, true)
+  try {
+    await until(async () => logs.length > 0)
+    // The sentence callers already grep for stays, and now carries the cause.
+    assert.match(logs[0]!.message, /^Research record snapshot scan failed; canonical records were not changed\./)
+    assert.match(logs[0]!.message, /Error \(E_INDEX\): thread index unavailable/)
+    assert.match(logs[0]!.message, /retrying in \d+s/)
+
+    const afterFirst = listCalls
+    await new Promise(resolve => setTimeout(resolve, 300))
+    // One log per outage, not one per poll.
+    assert.equal(logs.filter(entry => entry.level === 'warn').length, 1)
+    // Full-rate polling over 300 ms at 20 ms would be ~15 scans; geometric
+    // backoff puts it near 4.
+    assert.ok(listCalls - afterFirst <= 6, `expected backoff, saw ${listCalls - afterFirst} scans in 300ms`)
+
+    failing = false
+    await until(async () => logs.some(entry => entry.level === 'info' && /recovered after \d+ consecutive failures/.test(entry.message)))
+  } finally { await runtime.close() }
+})
+
+test('a ZodError scan failure stays on one readable line instead of a JSON blob', async () => {
+  const userDataDir = await realpath(await mkdtemp(join(tmpdir(), 'research-record-zod-')))
+  const logs: { level: string; message: string }[] = []
+  const parsed = z.object({ runtimeId: z.string() })
+  const context = {
+    userDataDir,
+    signal: new AbortController().signal,
+    agentThreads: { list: async () => { parsed.parse({ runtimeId: 1 }); return [] } },
+    log: (entry: { level: string; message: string }) => { logs.push(entry) }
+  } as unknown as DomainMainRuntimeLifecycleContext
+  const runtime = new ResearchRecordRuntime({ userDataDir, pollMs: 20 })
+  runtime.start(context, true)
+  try {
+    await until(async () => logs.length > 0)
+    // A raw ZodError message is multi-line JSON; only its first line would
+    // survive in the log file, which is how the cause stayed invisible.
+    assert.doesNotMatch(logs[0]!.message, /\n/u)
+    assert.match(logs[0]!.message, /ZodError: 1 validation issue\(s\) at runtimeId: /u)
+  } finally { await runtime.close() }
 })
 
 async function fixture(principalContext?: Record<string, unknown>, prepare?: (detail: DomainAgentThreadDetail) => void, pollMs = 50) {
@@ -833,15 +1023,17 @@ test('commit-time source validation reads each thread once rather than once per 
     offset = 2000; await f.runtime.scan()
     await until(async () => Boolean(release))
     const ids = (f.requests[0].data.evidence as { id: string }[]).map(item => item.id)
-    assert.equal(ids.length, 26)
+    // The serialized source envelope includes the workspace path; long TMPDIR
+    // roots can split these small sources across the production input budget.
+    assert.ok(ids.length > 3 && ids.length <= 26, 'validate a nontrivial bounded batch')
     const before = f.counts().readCalls
     release(JSON.stringify({ phasePath: [], title: 'bounded verification', steps: [{ title: 'all', summary: '', sourceIds: ids }],
       statePatch: [{ op: 'add', kind: 'progress', text: 'provided observations', sourceIds: ids }] }))
     const directory = join(f.scope.workspaceRoot, 'evidence-dag')
     const file = join(directory, `research-record-${recordHash(f.scope.workspaceRoot)}.json`)
-    await until(async () => Object.values(new ResearchRecordStore(file, f.scope.workspaceRoot).load()!.jobs as Record<string, { assignedIds: string[] }>).some(job => job.assignedIds.length === 26))
-    assert.ok(f.counts().readCalls - before <= 3, 'one validation snapshot, allowing one concurrently scheduled scan; never 26 reads')
-  } finally { await f.runtime.close() }
+    await until(async () => Object.values(new ResearchRecordStore(file, f.scope.workspaceRoot).load()!.jobs as Record<string, { assignedIds: string[] }>).some(job => job.assignedIds.length === ids.length))
+    assert.ok(f.counts().readCalls - before <= 3, 'one validation snapshot, allowing one concurrently scheduled scan; never one read per item')
+  } finally { release?.('{}'); await f.runtime.close() }
 })
 
 test('coverage separates current sources from preserved historical versions and their successful steps', async t => {
@@ -1211,4 +1403,116 @@ test('impact follows visible synthesis and discussion pages; unchanged ingestion
       assert.equal(view.synthesisImpact?.find(item => item.id === changed)?.status, 'requires-review')
     }
   } finally { ResearchSourceStore.prototype.read = originalRead; await f.runtime.close(); await restored?.close() }
+})
+
+
+for (const interruption of ['pause-resume', 'disable-enable', 'close', 'model-change', 'host-abort', 'source-change'] as const) {
+  test(`final source read cannot commit a stale organizer reply after ${interruption}`, async t => {
+    const f = await fixture(undefined, undefined, 60000)
+    const originalRead = f.context.agentThreads.read
+    const hostController = new AbortController()
+    Object.assign(f.context, { signal: hostController.signal })
+    let blockNext = false
+    let release!: () => void
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    Object.assign(f.context.agentThreads, { read: async (input: Parameters<typeof originalRead>[0]) => {
+      if (blockNext) {
+        blockNext = false; entered(); await gate
+      }
+      return originalRead(input)
+    } })
+    f.setResponse(data => {
+      blockNext = true
+      const ids = (data.evidence as { id: string }[]).map(item => item.id)
+      return JSON.stringify({ phasePath: ['late-phase'], title: 'late title',
+        steps: [{ title: 'late step', summary: '', sourceIds: ids }],
+        statePatch: [{ op: 'add', kind: 'negative', text: 'late negative', sourceIds: ids }] })
+    })
+    const now = Date.now
+    t.mock.method(Date, 'now', () => now() + 2000)
+    try {
+      await f.runtime.scan()
+      await waiting
+      if (interruption === 'pause-resume' || interruption === 'model-change') {
+        const settings = async (paused: boolean, model: string) => f.runtime.edit({ ...f.scope,
+          requestId: `settings-${paused}-${model}`, expectedRevision: (await f.runtime.view(f.scope)).revision,
+          change: { kind: 'settings', paused, model } })
+        if (interruption === 'pause-resume') { await settings(true, ''); await settings(false, '') }
+        else await settings(false, 'different-model')
+      } else if (interruption === 'disable-enable') {
+        f.runtime.setEnabled(false); f.runtime.setEnabled(true)
+      } else if (interruption === 'host-abort') hostController.abort()
+      else if (interruption === 'source-change') Object.assign(f.detail.turns[0].artifacts[1] as object, { detail: 'changed after model input' })
+      const closing = interruption === 'close' ? f.runtime.close() : undefined
+      release()
+      if (!closing) await until(async () => (await f.runtime.review(f.scope)).worker !== 'working')
+      await (closing ?? f.runtime.close())
+      const file = join(f.options.userDataDir, 'evidence-dag', `research-record-${recordHash(f.scope.workspaceRoot)}.json`)
+      const saved = new ResearchRecordStore(file, f.scope.workspaceRoot).load()!
+      assert.equal(saved.history.some((item: { kind: string }) => item.kind === 'model-organization'), false)
+      assert.equal(Object.values(saved.nodes).some(node => (node as ResearchRecordNode).title === 'late title'), false)
+      assert.ok(Object.values(saved.nodes).filter(node => node.source).length >= 2, 'old observations remain even if ingestion records the changed version')
+      if (interruption === 'source-change') assert.ok(saved.failures.some((failure: { message: string }) => failure.message.includes('来源已变化')))
+    } finally { release?.(); await f.runtime.close() }
+  })
+}
+
+test('unsupported minimal execution is retained once and waits for explicit retry', async t => {
+  const f = await fixture(undefined, undefined, 60000)
+  let restarted: ResearchRecordRuntime | undefined
+  let attempts = 0
+  Object.assign(f.context.agentExecution!, { run: async () => {
+    attempts++
+    throw new Error('Runtime fixture does not support context profile minimal.')
+  } })
+  const now = Date.now; let offset = 2000
+  t.mock.method(Date, 'now', () => now() + offset)
+  try {
+    await f.runtime.scan()
+    await until(async () => (await f.runtime.view(f.scope)).failures.length > 0)
+    for (let i = 0; i < 4; i++) { offset += 240000; await f.runtime.scan() }
+    assert.equal(attempts, 1)
+    const file = join(f.options.userDataDir, 'evidence-dag', `research-record-${recordHash(f.scope.workspaceRoot)}.json`)
+    const job = Object.values(new ResearchRecordStore(file, f.scope.workspaceRoot).load()!.jobs)[0]
+    assert.equal(job.attempts, 1)
+    assert.equal(job.retryBlocked, true)
+    assert.match((await f.runtime.view(f.scope)).failures[0].message, /minimal/)
+    assert.equal((await tree(f.runtime, f.scope)).filter(node => node.source).length, 2)
+    await f.runtime.close()
+    restarted = new ResearchRecordRuntime(f.options)
+    restarted.start(f.context, true)
+    await restarted.scan()
+    assert.equal(attempts, 1, 'restart must preserve capability blocking')
+    await restarted.edit({ ...f.scope, requestId: 'retry-capability',
+      expectedRevision: (await restarted.view(f.scope)).revision, change: { kind: 'retry' } })
+    await until(async () => attempts === 2)
+  } finally { await f.runtime.close(); await restarted?.close() }
+})
+
+
+test('phase synthesis rechecks original source bytes even when derived round entries have not changed', async t => {
+  const f = await fixture(undefined, undefined, 60000)
+  const now = Date.now; let offset = 2000
+  t.mock.method(Date, 'now', () => now() + offset)
+  let release!: (text: string) => void
+  try {
+    await f.runtime.scan()
+    await until(async () => (await f.runtime.view(f.scope)).pending === 0)
+    f.setPhaseResponse(() => new Promise(resolve => { release = resolve }))
+    offset += 70000
+    await f.runtime.scan()
+    await until(async () => f.requests.some(request => request.purpose === 'phase-synthesis'))
+    const request = f.requests.find(request => request.purpose === 'phase-synthesis')!
+    const rounds = request.data.changedRounds as { entries: { sourceIds: string[] }[] }[]
+    const ids = [...new Set(rounds.flatMap(round => round.entries.flatMap(entry => entry.sourceIds)))]
+    Object.assign(f.detail.turns[0].artifacts[1] as object, { detail: 'changed while phase inference was pending' })
+    release(JSON.stringify({ statePatch: [{ op: 'add', kind: 'negative', text: 'stale phase claim', sourceIds: ids }] }))
+    await until(async () => (await f.runtime.review(f.scope)).worker !== 'working')
+    const review = await f.runtime.review(f.scope)
+    assert.equal(review.items.some(item => item.kind === 'phase-synthesis'), false)
+    assert.match((await f.runtime.view(f.scope)).failures.at(-1)!.message, /阶段来源已变化/)
+    assert.ok((await tree(f.runtime, f.scope)).some(node => node.kind === 'round' && node.synthesis?.entries.length))
+  } finally { release?.('{}'); await f.runtime.close() }
 })

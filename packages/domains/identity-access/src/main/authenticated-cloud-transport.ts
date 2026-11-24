@@ -14,6 +14,15 @@ export function createIdentityAuthenticatedCloudTransport(options: Readonly<{
     return runtime
   }
   return defineAuthenticatedCloudTransport({
+    lookupDocumentShare: (input, executionOptions) => getRuntime().lookupDocumentShare(input, executionOptions),
+    createDocumentShare: (input, executionOptions) => getRuntime().createDocumentShare(input, executionOptions),
+    revokeDocumentShare: (input, executionOptions) => getRuntime().revokeDocumentShare(input, executionOptions),
+    readDocumentComments: (input, executionOptions) => getRuntime().readDocumentComments(input, executionOptions),
+    mutateDocumentComments: (input, executionOptions) => getRuntime().mutateDocumentComments(input, executionOptions),
+
+    listCloudSpaces: executionOptions => getRuntime().listAuthenticatedCloudSpaces(executionOptions),
+    ensureCloudSpace: (input, executionOptions) => getRuntime().ensureAuthenticatedCloudSpace(input, executionOptions),
+    createCloudSpaceSession: (input, executionOptions) => getRuntime().createAuthenticatedCloudSpaceSession(input, executionOptions),
     stageObject: (input, executionOptions) => getRuntime().stageAuthenticatedCloudObject(input, executionOptions),
     readObject: (input, executionOptions) => getRuntime().readAuthenticatedCloudObject(input, executionOptions),
     status: () => options.getRuntime()?.authenticatedCloudTransportStatus() ?? {

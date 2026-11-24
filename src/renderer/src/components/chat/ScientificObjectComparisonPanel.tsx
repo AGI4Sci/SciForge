@@ -131,29 +131,29 @@ export function ScientificObjectComparisonPanel({
           <GitCompareArrows className="h-5 w-5" strokeWidth={1.8} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 id={`${model.id}-comparison-title`} className="truncate text-[14px] font-semibold text-ds-ink">{model.title}</h2>
-          <p className="mt-0.5 text-[11.5px] text-ds-faint">
+          <h2 id={`${model.id}-comparison-title`} className="truncate text-ds-lg font-semibold text-ds-ink">{model.title}</h2>
+          <p className="mt-0.5 text-ds-xs text-ds-faint">
             {model.objects.length} {model.objects.length === 1 ? labels.object : `${labels.object}s`}
           </p>
         </div>
       </header>
 
       {model.objects.length === 0 ? (
-        <p className="px-4 py-8 text-center text-[13px] text-ds-muted">{labels.empty}</p>
+        <p className="px-4 py-8 text-center text-ds-md text-ds-muted">{labels.empty}</p>
       ) : (
         <div className="overflow-x-auto overscroll-x-contain" tabIndex={0} aria-label={model.title}>
           <table className="w-full table-fixed border-collapse text-left" style={{ minWidth: tableMinWidth } as CSSProperties}>
             <thead>
               <tr className="bg-ds-card-muted/45">
-                <th scope="col" className="w-[156px] border-b border-r border-ds-border-muted/70 px-3 py-3 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ds-faint">
+                <th scope="col" className="w-[156px] border-b border-r border-ds-border-muted/70 px-3 py-3 text-ds-2xs font-semibold uppercase tracking-[0.07em] text-ds-faint">
                   {labels.object}
                 </th>
                 {model.objects.map((item) => (
                   <th key={item.id} scope="col" className="border-b border-r border-ds-border-muted/70 px-3 py-3 last:border-r-0">
                     <div className="min-w-0">
-                      <div className="truncate text-[12.5px] font-semibold text-ds-ink" title={item.title}>{item.title}</div>
+                      <div className="truncate text-ds-sm font-semibold text-ds-ink" title={item.title}>{item.title}</div>
                       <div className="mt-1 flex items-center justify-between gap-2">
-                        <span className="truncate text-[10.5px] text-ds-faint">{item.modalityLabel}</span>
+                        <span className="truncate text-ds-2xs text-ds-faint">{item.modalityLabel}</span>
                         {onOpenObject ? (
                           <button
                             type="button"
@@ -174,11 +174,11 @@ export function ScientificObjectComparisonPanel({
             <tbody>
               {model.rows.map((row) => (
                 <tr key={row.key} className="odd:bg-transparent even:bg-ds-card-muted/20">
-                  <th scope="row" className="border-b border-r border-ds-border-muted/60 px-3 py-2.5 text-[11px] font-semibold text-ds-muted">
+                  <th scope="row" className="border-b border-r border-ds-border-muted/60 px-3 py-2.5 text-ds-xs font-semibold text-ds-muted">
                     {row.label}
                   </th>
                   {row.values.map((value, index) => (
-                    <td key={`${row.key}:${model.objects[index]?.id ?? index}`} className="border-b border-r border-ds-border-muted/60 px-3 py-2.5 text-[12px] text-ds-ink last:border-r-0">
+                    <td key={`${row.key}:${model.objects[index]?.id ?? index}`} className="border-b border-r border-ds-border-muted/60 px-3 py-2.5 text-ds-sm text-ds-ink last:border-r-0">
                       <span className="block truncate" title={value}>{value}</span>
                     </td>
                   ))}
@@ -190,7 +190,7 @@ export function ScientificObjectComparisonPanel({
       )}
 
       {model.objects.length === 1 ? (
-        <p role="status" className="border-t border-ds-border-muted/70 px-4 py-2.5 text-[11.5px] text-amber-700 dark:text-amber-300">
+        <p role="status" className="border-t border-ds-border-muted/70 px-4 py-2.5 text-ds-xs text-amber-700 dark:text-amber-300">
           {labels.needsMoreObjects}
         </p>
       ) : null}

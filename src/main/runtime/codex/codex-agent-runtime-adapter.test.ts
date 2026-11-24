@@ -37,6 +37,16 @@ function withEventSubscription<T extends object>(service: T): T & {
 }
 
 describe('createCodexAgentRuntimeAdapter', () => {
+  it('updates the workspace of the existing session through its service', async () => {
+    const updateThreadWorkspace = vi.fn(async () => ({ ok: true }))
+    const adapter = createCodexAgentRuntimeAdapter({ updateThreadWorkspace } as never)
+    await adapter.auxiliary!({ settings: {} as never }, {
+      runtimeId: 'codex', operation: 'updateThreadWorkspace',
+      payload: { threadId: 'existing', workspace: '/research' }
+    })
+    expect(updateThreadWorkspace).toHaveBeenCalledWith('existing', '/research')
+  })
+
   it('returns the bounded polling status without thread-list metadata', async () => {
     const readThreadStatus = vi.fn(async () => ({
       ok: true as const,

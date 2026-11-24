@@ -143,7 +143,9 @@ const agentObserveRequestSchema = z.object({
 
 const agentInvokeRequestSchema = z.object({
   operationRef: agentOperationRefSchema,
-  resourceRef: agentResourceRefSchema.optional(),
+  resourceRef: agentResourceRefSchema.optional().describe(
+    'Required at this top level for resource-scoped operations. Copy the exact resourceRef from the authorized observation or its invokeTemplate; do not place it inside input.'
+  ),
   input: capabilityJsonValueSchema.default({})
 }).strict()
 type AgentInvokeRequest = z.infer<typeof agentInvokeRequestSchema>
@@ -168,6 +170,12 @@ export type AgentOperationDescriptor = Readonly<{
   producedResourceKinds: string[]
   tags: string[]
   inputShape?: CapabilityJsonValue
+  /** Present only when an authorized observation resolves this operation's resource. */
+  invokeTemplate?: Readonly<{
+    operationRef: string
+    resourceRef: string
+    input: Record<string, never>
+  }>
 }>
 
 export type AgentCapabilityObservation = Readonly<{
@@ -286,6 +294,8 @@ export type CapabilityAgentToolSurfaceOptions = Readonly<{
     options?: { signal?: AbortSignal }
   ) => CapabilityAgentApprovalDecision | Promise<CapabilityAgentApprovalDecision>
   cancelApprovalTurn?: (identity: AgentRuntimeToolTurnIdentity, reason?: string) => number
+  /** Enforce filesystem authority independently of human confirmation. */
+  assertInvocationAllowed?: (context: CapabilityAgentToolRequestContext, descriptor: CapabilityDescriptor) => Promise<void>
 }>
 
 type CallerCache = {
@@ -307,12 +317,12 @@ const toolDefinitions = Object.freeze([
   ),
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.observe,
-    'Observe a previously returned opaque SciForge resource reference. The response includes the authorized operationRefs and compact input shapes for that resource; invoke one of those operationRefs directly without rediscovering it.',
+    'Observe a previously returned opaque SciForge resource reference. The response includes authorized operations, compact input shapes, and resource-scoped invokeTemplate arguments. Copy operationRef and resourceRef from the template as top-level sciforge_invoke arguments, fill input according to inputShape, and invoke without rediscovering the operation.',
     agentObserveRequestSchema
   ),
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.invoke,
-    'Invoke a discovered operation using its opaque operation reference and domain input. Put operation-specific fields directly in input as a JSON object; do not pass input as a JSON-encoded string. Broker revision and idempotency fields are managed internally; supply any operation-specific IDs described by the domain schema.',
+    'Invoke a discovered operation using its opaque operation reference and domain input. Resource-scoped operations also require the exact authorized resourceRef at the top level, alongside operationRef; copy the observe result invokeTemplate and fill its input. Global and workspace operations omit resourceRef. Put operation-specific fields directly in input as a JSON object; do not pass input as a JSON-encoded string. Broker revision and idempotency fields are managed internally; supply any operation-specific IDs described by the domain schema.',
     agentInvokeRequestSchema
   ),
   defineTool(
@@ -341,6 +351,7 @@ export class CapabilityAgentToolSurface {
   readonly #resolveCaller: CapabilityAgentToolSurfaceOptions['resolveCaller']
   readonly #requestApproval: CapabilityAgentToolSurfaceOptions['requestApproval']
   readonly #cancelApprovalTurn: CapabilityAgentToolSurfaceOptions['cancelApprovalTurn']
+  readonly #assertInvocationAllowed: CapabilityAgentToolSurfaceOptions['assertInvocationAllowed']
   readonly #callerCaches = new Map<string, CallerCache>()
   readonly #activeCalls = new Map<string, Set<AbortController>>()
 
@@ -351,6 +362,7 @@ export class CapabilityAgentToolSurface {
     this.#resolveCaller = options.resolveCaller
     this.#requestApproval = options.requestApproval
     this.#cancelApprovalTurn = options.cancelApprovalTurn
+    this.#assertInvocationAllowed = options.assertInvocationAllowed
   }
 
   tools(): readonly CapabilityAgentToolDefinition[] {
@@ -850,6 +862,7 @@ export class CapabilityAgentToolSurface {
     resourceRef?: string,
     resourceLabel?: string
   ): Promise<CapabilityCallerContext> {
+    await this.#assertInvocationAllowed?.(context, descriptor)
     if (descriptor.approval === 'none') return caller
     if (descriptor.approval !== 'confirmation' || !invocationId || !this.#requestApproval) {
       throw new CapabilityAgentToolError(
@@ -891,7 +904,7 @@ export class CapabilityAgentToolSurface {
     })
   }
 
-  #agentOperation(cache: CallerCache, descriptor: CapabilityDescriptor, includeSchema: boolean): AgentOperationDescriptor {
+  #agentOperation(cache: CallerCache, descriptor: CapabilityDescriptor, includeSchema: boolean, resourceRef?: string): AgentOperationDescriptor {
     const operationRef = this.#operationRef(cache, descriptor)
     const schemaRef = this.#schemaRef(cache, descriptor)
     return {
@@ -906,6 +919,9 @@ export class CapabilityAgentToolSurface {
       acceptedResourceKinds: [...descriptor.resourceKinds],
       producedResourceKinds: [...(descriptor.producedResourceKinds ?? [])],
       tags: [...descriptor.tags],
+      ...(descriptor.scope === 'resource' && resourceRef
+        ? { invokeTemplate: { operationRef, resourceRef, input: {} } }
+        : {}),
       ...(includeSchema ? { inputShape: compactInputShape(descriptor.inputSchema) } : {})
     }
   }
@@ -964,7 +980,7 @@ export class CapabilityAgentToolSurface {
     this.#rememberObservation(cache, observation)
     const state = await this.#sanitizeOutput(caller, cache, observation.state, context)
     this.#assertPrincipalLease(context)
-    const operations = observation.operations.map((descriptor) => this.#agentOperation(cache, descriptor, includeSchema))
+    const operations = observation.operations.map((descriptor) => this.#agentOperation(cache, descriptor, includeSchema, observation.resourceRef))
     // Time of observation is not evidence of changed resource state. Compare fresh
     // authorized state and operations; never reuse a cached observation as truth.
     const key = JSON.stringify([context.threadId, context.turnId, resourceRef, includeSchema])

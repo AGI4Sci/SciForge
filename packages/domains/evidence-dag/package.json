@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-evidence-dag",
-  "version": "2.13.0",
+  "version": "2.19.2",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -9,13 +9,6 @@
     "./contract": "./src/contract.ts",
     "./storage": "./src/storage.ts",
     "./producer-inbox": "./src/producer-inbox.ts",
-    "./host-services": "./src/host-services.ts",
-    "./host/committed-reader": "./src/host/committed-reader.ts",
-    "./host/host-provider": "./src/host/host-provider.ts",
-    "./host/ports": "./src/host/ports.ts",
-    "./host/production-service": "./src/host/production-service.ts",
-    "./host/python-worker": "./src/host/python-worker.ts",
-    "./host/quiescence": "./src/host/quiescence.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
     "./renderer": "./src/renderer/index.tsx",
@@ -49,13 +42,12 @@
   },
   "dependencies": {
     "@sciforge/domain-artifact-versions": "^1.1.0",
-    "@sciforge/domain-sdk": "^0.2.34",
-    "@sciforge/plugin-sdk": "^0.1.0",
+    "@sciforge/domain-sdk": "^0.2.44",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
     "zod": "^4.4.3",
-    "@sciforge/domain-research-checkpoints": "^1.0.5",
+    "@sciforge/domain-research-checkpoints": "^1.1.0",
     "@sciforge/domain-create-loop": "^1.1.4"
   },
   "devDependencies": {

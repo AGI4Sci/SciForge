@@ -42,6 +42,26 @@ const INBOX_DEFERRED_DIAGNOSTIC = 'collaboration.inbox_deferred'
 const DASHBOARD_SYNC_DIAGNOSTIC = 'collaboration.dashboard_sync_error'
 const DASHBOARD_READ_CONCURRENCY = 4
 const DASHBOARD_REFRESH_TIMEOUT_MS = 30_000
+/**
+ * Startup must stay offline-first: an unreachable Cloud may take many seconds
+ * to fail, and blocking activation on it delays the whole application window.
+ * The bounded wait keeps connection state local; authority recovery repeats the
+ * same canonical path once the Cloud is reachable again.
+ */
+const STARTUP_NETWORK_BUDGET_MS = 300
+
+async function boundedStartupNetworkStep(step: Promise<unknown>): Promise<void> {
+  const settled = step.then(() => undefined, () => undefined)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const budget = new Promise<void>((resolveBudget) => {
+    timer = setTimeout(resolveBudget, STARTUP_NETWORK_BUDGET_MS)
+  })
+  try {
+    await Promise.race([settled, budget])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 export type CollaborationConnectionState = Readonly<{
   state: 'unconfigured' | 'disconnected' | 'connecting' | 'connected' | 'recovering' | 'error'
@@ -199,7 +219,9 @@ export class CollaborationConnection {
       this.connectionState = { state: 'unconfigured' }
       // A signed-in Desktop joins Collaboration on its identity's Cloud without a manual step.
       if (this.options.authenticatedCloudTransport.status().state === 'ready') {
-        await this.configure().catch((error) => { this.recordError(error, true) })
+        await boundedStartupNetworkStep(
+          this.configure().catch((error) => { this.recordError(error, true) })
+        )
       }
       return
     }
@@ -210,24 +232,34 @@ export class CollaborationConnection {
           normalizeCollaborationBaseUrl(identityStatus.baseUrl)) {
       throw new Error('Collaboration Cloud settings do not match the active Identity Cloud endpoint.')
     }
-    if (identityStatus.state === 'ready') {
-      try {
-        await this.refreshCloudState()
-      } catch {
+    // All startup network work shares one deadline. Bounding each step on its
+    // own multiplied the budget by the number of round trips; the phase below
+    // is raced against a single budget and keeps running in the background if
+    // it does not finish, so authority recovery still completes the join.
+    const startupNetworkPhase = (async (): Promise<void> => {
+      if (identityStatus.state === 'ready') {
         // Cached collaboration state remains usable while offline. A later
         // explicit recovery/restart repeats this canonical cloud refresh.
+        await this.refreshCloudState().catch(() => undefined)
       }
-    }
-    const localAgentId = this.localAgentId()
-    if (localAgentId &&
-        (await this.options.agentCloudRuntime.authorityStatus(localAgentId)).state === 'ready') {
-      // A configured desktop must still activate while the cloud is offline. The
-      // durable inbox/outbox and projection recovery remain available, and the
-      // explicit recover action retries the same canonical connection path.
+      const localAgentId = this.localAgentId()
+      if (!localAgentId) {
+        this.connectionState = { state: 'disconnected' }
+        return
+      }
+      const authority = await this.options.agentCloudRuntime
+        .authorityStatus(localAgentId)
+        .catch(() => undefined)
+      if (authority?.state !== 'ready') {
+        this.connectionState = { state: 'disconnected' }
+        return
+      }
+      // A configured desktop must still activate while the cloud is offline.
+      // The durable inbox/outbox and projection recovery remain available, and
+      // the explicit recover action retries the same canonical connection path.
       await this.connect().catch(() => undefined)
-    } else {
-      this.connectionState = { state: 'disconnected' }
-    }
+    })()
+    await boundedStartupNetworkStep(startupNetworkPhase)
     // Identity may become ready after this startup activation. The same
     // authority-recovery path that resumes a lost connection then joins.
     if (this.connectionState.state !== 'connected') this.scheduleAuthorityRecovery()

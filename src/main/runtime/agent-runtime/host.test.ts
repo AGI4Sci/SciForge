@@ -97,6 +97,7 @@ import {
 import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
 import { defineDomainMainAgentRoutingContract } from '@sciforge/domain-sdk/agent-routing'
 import { InMemoryWorkRecordStore, WorkRecord } from '../../../../packages/workers/multi-agent/src/work-record'
+import { createDomainAgentExecutionHost } from '../../domain-agent-execution'
 
 function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
   return {
@@ -1400,6 +1401,87 @@ describe('AgentRuntimeHost', () => {
     host.dispose()
   })
 
+  it.each(['completed', 'failed', 'cancelled'] as const)('settles a minimal domain response as %s through the production Host without a work objective', async (state) => {
+    const thread: AgentRuntimeThread = { id: 'domain-response', runtimeId: 'codex', title: 'Response', updatedAt: '2026-09-25T00:00:00.000Z' }
+    const adapter = fakeAdapter('codex', thread)
+    adapter.contextProfiles = ['minimal']
+    vi.mocked(adapter.snapshot).mockResolvedValue({ ...thread, latestSeq: 2, latestTurnId: 'codex-turn', latestTurnStatus: state,
+      turns: [{ id: 'codex-turn', threadId: thread.id, status: state, items: [{ kind: 'assistant_message', id: 'answer', text: 'A bounded response.' }] }] })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield { kind: 'turn_lifecycle', runtimeId: 'codex', threadId: thread.id, turnId: 'codex-turn', state, createdAt: '2026-09-25T00:00:01.000Z' } satisfies AgentRuntimeEvent
+    })
+    const workStore = new InMemoryWorkRecordStore()
+    const workAudit = vi.fn(async () => ({ state: 'delivered' as const }))
+    const options = { settings: async () => settings('codex'), adapters: [adapter], workStore, workAudit,
+      getPrincipalContext: () => ({ identityVersion: 1, principal: null }) }
+    let host = createAgentRuntimeHost(options)
+    try {
+      const execution = createDomainAgentExecutionHost({ runtime: host, defaultRuntimeId: () => 'codex', pollIntervalMs: 1,
+        runtimeReadiness: () => ({ state: 'ready', runtimeId: 'codex', capabilityTags: [] }) })
+      const result = await execution.run({ prompt: 'Answer only supplied context.', contextProfile: 'minimal', allowedTools: [] })
+      expect(result.state).toBe(state)
+      expect(adapter.startTurn).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ executionIntent: { mode: 'answer' } }))
+      expect(await workStore.list()).toEqual([])
+      expect(workAudit).not.toHaveBeenCalled()
+      expect((await host.readThreadPage({ runtimeId: 'codex', threadId: thread.id })).turns[0]?.status).toBe(state)
+      host.dispose(); host = createAgentRuntimeHost(options)
+      await host.listThreads({ runtimeId: 'codex' })
+      expect((await host.readThreadPage({ runtimeId: 'codex', threadId: thread.id })).turns[0]?.status).toBe(state)
+      expect(await workStore.list()).toEqual([])
+    } finally { host.dispose() }
+  })
+
+  it.each(['completed', 'failed', 'cancelled'] as const)('keeps an explicit answer %s terminal out of work delivery and restart continuation', async (state) => {
+    const thread: AgentRuntimeThread = {
+      id: 'answer-thread', runtimeId: 'codex', title: 'Answer', updatedAt: '2026-09-25T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield { kind: 'turn_lifecycle', runtimeId: 'codex', threadId: thread.id,
+        turnId: 'codex-turn', state, createdAt: '2026-09-25T00:00:01.000Z' } satisfies AgentRuntimeEvent
+    })
+    const workStore = new InMemoryWorkRecordStore()
+    const workAudit = vi.fn(async () => ({ state: 'delivered' as const }))
+    const options = { settings: async () => settings('codex'), adapters: [adapter], workStore, workAudit,
+      getPrincipalContext: () => ({ identityVersion: 1, principal: null }) }
+    let host = createAgentRuntimeHost(options)
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: thread.id, text: 'Answer supplied context.', executionIntent: { mode: 'answer' } })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId: 'codex', threadId: thread.id })) events.push(event)
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'turn_lifecycle', state }))
+      expect(await workStore.list()).toEqual([])
+      expect(workAudit).not.toHaveBeenCalled()
+      expect(adapter.publishSyntheticEvent).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'work_lifecycle' }))
+      host.dispose()
+      host = createAgentRuntimeHost(options)
+      await host.listThreads({ runtimeId: 'codex' })
+      expect(await workStore.list()).toEqual([])
+      expect(workAudit).not.toHaveBeenCalled()
+    } finally { host.dispose() }
+  })
+
+  it('does not replace an existing execution objective when answering on the same thread', async () => {
+    const thread: AgentRuntimeThread = { id: 'task-answer-thread', runtimeId: 'codex', title: 'Task', updatedAt: '2026-09-25T00:00:00.000Z' }
+    const adapter = fakeAdapter('codex', thread)
+    const workStore = new InMemoryWorkRecordStore()
+    const original = WorkRecord.parse({ workId: 'existing-task', runtimeId: 'codex', threadId: thread.id,
+      objective: 'Produce a verified artifact', currentTurnId: 'original-execution-turn', deliveryState: 'needs_attention',
+      continuationAttempts: 0, maxContinuationAttempts: 3, childIds: [], continuations: [], evidence: [],
+      createdAt: '2026-09-25T00:00:00.000Z', updatedAt: '2026-09-25T00:00:00.000Z' })
+    await workStore.upsert(original)
+    const workAudit = vi.fn(async () => ({ state: 'delivered' as const }))
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter], workStore, workAudit,
+      getPrincipalContext: () => ({ identityVersion: 1, principal: null }) })
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: thread.id, text: 'Explain the artifact.', executionIntent: { mode: 'answer' }, metadata: { workId: original.workId } })
+      for await (const _event of host.subscribeEvents({ runtimeId: 'codex', threadId: thread.id })) { /* drain */ }
+      expect(await workStore.get(original.workId)).toEqual(original)
+      expect(await workStore.list()).toHaveLength(1)
+      expect(workAudit).not.toHaveBeenCalled()
+    } finally { host.dispose() }
+  })
+
   it('separates provider completion from delivery and requires Host audit evidence', async () => {
     const thread: AgentRuntimeThread = {
       id: 'work-thread', runtimeId: 'codex', title: 'Work', updatedAt: '2026-09-25T00:00:00.000Z'
@@ -1616,6 +1698,16 @@ describe('AgentRuntimeHost', () => {
       { settings: expect.objectContaining({ activeAgentRuntime: 'codex' }) },
       { runtimeId: 'dsh', threadId: 'local-thread', relation: 'primary' }
     )
+  })
+
+  it('resolves an unopened task workspace through exact status without starting a turn', async () => {
+    const thread = { id: 'unopened-task', runtimeId: 'codex' as const, title: 'Task', updatedAt: '2026-11-09T00:00:00Z', workspace: '/owned/execution' }
+    const adapter = fakeAdapter('codex', thread)
+    vi.mocked(adapter.readThreadStatus).mockResolvedValue({ id: thread.id, runtimeId: 'codex', latestSeq: 0 })
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter] })
+    await expect(host.readThreadStatus({ runtimeId: 'codex', threadId: thread.id })).resolves.toMatchObject({ workspace: '/owned/execution' })
+    expect(adapter.listThreads).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ threadId: thread.id, includeSide: true }))
+    expect(adapter.startTurn).not.toHaveBeenCalled()
   })
 
   it('projects bounded list summaries and keeps status polling minimal', async () => {
@@ -2360,6 +2452,8 @@ describe('AgentRuntimeHost', () => {
   })
 
   it.each([
+    { configured: 'danger-full-access', permissionLevel: 'read-only', expected: 'read-only' },
+    { configured: 'read-only', permissionLevel: 'workspace-write', expected: 'workspace-write' },
     { configured: 'read-only', permissionLevel: 'request-approval', expected: 'workspace-write' },
     { configured: 'read-only', permissionLevel: 'full-access', expected: 'danger-full-access' },
     { configured: 'danger-full-access', permissionLevel: 'request-approval', expected: 'workspace-write' }
@@ -6695,6 +6789,11 @@ describe('AgentRuntimeHost', () => {
       operation: 'createMemory',
       payload: { scope: 'user' }
     })).rejects.toThrow('payload.text')
+    await expect(host.auxiliary({
+      runtimeId: 'codex',
+      operation: 'createMemory',
+      payload: { text: 'Invalid scope claim', scope: 'invalid' }
+    })).rejects.toThrow('memory scope')
     expect(adapterAuxiliary).not.toHaveBeenCalled()
   })
 
@@ -6728,6 +6827,32 @@ describe('AgentRuntimeHost', () => {
         scope: 'user'
       }
     })
+    const researchPayload = {
+      text: 'Conditional runtime simulation claim',
+      research: {
+        sources: [{ owner: 'artifact-owner', locator: 'artifact://exact', version: 'revision-1', access: 'partial' }],
+        conditions: ['Only for matched runtime resources'],
+        counterexamples: ['Runtime negative control failed'],
+        corrections: ['No physical validation'],
+        freshness: 'verified', verifiedAt: '2099-01-01', confidence: 1
+      }
+    }
+    await host.auxiliary({ runtimeId: 'codex', operation: 'createMemory', payload: researchPayload })
+    await host.auxiliary({ runtimeId: 'codex', operation: 'createMemory', payload: {
+      ...researchPayload, text: 'PRIVATE REVOKED TEXT',
+      research: { ...researchPayload.research, sources: [{ ...researchPayload.research.sources[0], access: 'inaccessible' }] }
+    } })
+    await host.auxiliary({ runtimeId: 'codex', operation: 'createMemory', payload: {
+      text: 'PRIVATE WITHDRAWN runtime CLAIM', tags: ['private-withdrawn-tag'],
+      research: {
+        status: 'withdrawn',
+        sources: [{ owner: 'private-withdrawn-owner', locator: 'private-withdrawn-locator', version: 'private-withdrawn-version', access: 'unknown' }],
+        conditions: ['private-withdrawn-condition'], counterexamples: ['private-withdrawn-negative'], corrections: ['private-withdrawn-correction']
+      }
+    } })
+    await expect(host.auxiliary({ runtimeId: 'codex', operation: 'createMemory', payload: {
+      ...researchPayload, research: { ...researchPayload.research, status: 'verified' }
+    } })).rejects.toThrow('status')
     const workspaceMemory = await host.auxiliary({
       runtimeId: 'codex',
       operation: 'createMemory',
@@ -6852,6 +6977,18 @@ describe('AgentRuntimeHost', () => {
       const input = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
       expect(input?.allowedTools).toEqual(allowedTools)
       expect(input?.text).toContain('User prefers verbose technical answers.')
+      expect(input?.text).toContain('research: unverified; access unknown/partial; source lookup required')
+      expect(input?.text).toContain('Only for matched runtime resources')
+      expect(input?.text).toContain('Runtime negative control failed')
+      expect(input?.text).toContain('revision-1')
+      expect(input?.text).toContain('No physical validation')
+      expect(input?.text).toContain('research: inaccessible')
+      expect(input?.text).not.toContain('PRIVATE REVOKED TEXT')
+      expect(input?.text).toContain('research: withdrawn')
+      expect(input?.text).not.toContain('PRIVATE WITHDRAWN')
+      expect(input?.text).not.toContain('private-withdrawn')
+      expect(input?.text).not.toContain('2099-01-01')
+
       expect(input?.text).toContain('Workspace uses Vitest for runtime tests.')
       expect(input?.text).toContain('Project memory for runtime tests.')
       expect(input?.text).toContain('Default project memory for runtime tests.')
@@ -6861,6 +6998,46 @@ describe('AgentRuntimeHost', () => {
       expect(input?.text).not.toContain('Disabled memory must not inject.')
       expect(input?.text).not.toContain('Deleted memory must not inject.')
     }
+  })
+
+  it('bounds complete scientific bundles to 8 KiB each and 32 KiB per turn without splitting counterevidence', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'sciforge-host-memory-budget-'))
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-host-memory-budget-workspace-'))
+    const memory = new SharedMemoryService(dataDir)
+    const adapter = fakeAdapter('codex', { id: 'budget-thread', runtimeId: 'codex', title: 'budget', updatedAt: '2026-06-10T00:00:00.000Z' })
+    const host = createAgentRuntimeHost({ settings: async () => ({ ...settings('codex'), workspaceRoot }), adapters: [adapter], services: { memory } })
+    for (let i = 0; i < 8; i++) {
+      await host.auxiliary({ runtimeId: 'codex', operation: 'createMemory', payload: {
+        text: `budget claim ${i}`,
+        research: {
+          sources: [{ owner: 'owner', locator: `source-${i}`, version: 'v1', access: 'unknown' }],
+          conditions: [`budget-condition-${i} ${'条'.repeat(1000)}`],
+          counterexamples: [`budget-negative-${i} ${'反'.repeat(1000)} END-${i}`]
+        }
+      } })
+    }
+    await host.startTurn({ runtimeId: 'codex', threadId: 'budget-thread', workspace: workspaceRoot, text: 'budget' })
+    const text = vi.mocked(adapter.startTurn).mock.calls[0][1].text
+    const memoryLines = text.split('Shared memory relevant to this turn:\n')[1].split('\nUse these memories only when')[0]
+    expect(Buffer.byteLength(memoryLines, 'utf8')).toBeLessThanOrEqual(32 * 1024)
+    expect(memoryLines).toContain('context omitted')
+    expect(memoryLines).toContain('source lookup required')
+    let included = 0
+    for (let i = 0; i < 8; i++) {
+      if (memoryLines.includes(`budget claim ${i}`)) {
+        included++
+        expect(memoryLines).toContain(`budget-condition-${i}`)
+        expect(memoryLines).toContain(`budget-negative-${i}`)
+        expect(memoryLines).toContain(`END-${i}`)
+      } else {
+        expect(memoryLines).not.toContain(`budget-condition-${i}`)
+        expect(memoryLines).not.toContain(`budget-negative-${i}`)
+      }
+    }
+    expect(included).toBeGreaterThan(0)
+    expect(included).toBeLessThan(8)
+    // Output budget leaves the stored complete bundles available for later source lookup/review.
+    expect(await new SharedMemoryService(dataDir).list({ workspace: workspaceRoot })).toHaveLength(8)
   })
 
   it('drives shared memory injection from settings memory actions', async () => {
@@ -8038,6 +8215,179 @@ describe('AgentRuntimeHost', () => {
       turnId: 'turn-terminal-256'
     })).toEqual({ identityVersion: principal.identityVersion, principal })
     host.dispose()
+  })
+
+  it.each([['failed', false], ['cancelled', false], ['aborted', false], ['failed', true]] as const)(
+    'archives authenticated patches for %s through Host and outbox before lease release (persist failure: %s)', async (state, failPublish) => {
+      const root = await mkdtemp(join(tmpdir(), 'terminal-host-outbox-'))
+      evidenceQueueRoots.push(root)
+      const workspace = join(root, 'workspace')
+      await mkdir(workspace)
+      const gate = deferred<void>()
+      const terminalState = state === 'failed' ? 'failed' : 'cancelled'
+      const codex = fakeAdapter('codex', {
+        id: 'terminal-thread', runtimeId: 'codex', title: 'Terminal', workspace,
+        updatedAt: new Date().toISOString()
+      })
+      vi.mocked(codex.startTurn).mockResolvedValue({ threadId: 'terminal-thread', turnId: 'terminal-turn' })
+      let wroteOutput = false
+      let occurredAt: string | undefined
+      vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+        await gate.promise
+        if (input.signal?.aborted) return
+        if (!wroteOutput) {
+          await writeFile(join(workspace, 'result.txt'), 'exact partial output\n')
+          wroteOutput = true
+        }
+        yield {
+          kind: 'tool_event', runtimeId: 'codex', threadId: 'terminal-thread', turnId: 'terminal-turn',
+          itemId: 'patch-1', callId: 'patch-1', seq: 1, toolName: 'apply_patch', toolKind: 'file_change',
+          status: 'success', receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded', factSource: 'executor_result', evidenceStrength: 'executor_receipt',
+          effects: ['local_write'], detail: JSON.stringify([
+            { path: 'result.txt', kind: { type: 'add' }, diff: 'exact partial output\n' }
+          ])
+        } satisfies AgentRuntimeEvent
+        occurredAt ??= new Date().toISOString()
+        vi.mocked(codex.snapshot).mockResolvedValue({
+          id: 'terminal-thread', runtimeId: 'codex', title: 'Terminal', workspace,
+          updatedAt: occurredAt, latestSeq: 2,
+          turns: [{ id: 'terminal-turn', threadId: 'terminal-thread', status: state, items: [] }]
+        })
+        yield {
+          kind: 'turn_lifecycle', runtimeId: 'codex', threadId: 'terminal-thread', turnId: 'terminal-turn',
+          state, seq: 2, createdAt: occurredAt
+        } satisfies AgentRuntimeEvent
+      })
+      const outbox = new TurnArtifactOutbox(root)
+      let host!: ReturnType<typeof createAgentRuntimeHost>
+      let unavailable = true
+      const order: string[] = []
+      const observed: import('@sciforge/domain-sdk/host').DomainArtifactEvent[] = []
+      const logs: string[] = []
+      const handoff = new TurnArtifactHandoffService({
+        outbox, materialize: intent => host.materializeCompletedTurnArtifact(intent),
+        inspectTerminalState: intent => host.inspectTurnArtifactTerminalState(intent),
+        consumers: [{ consume: async event => {
+          observed.push(event)
+          if (unavailable) throw new Error('archive temporarily unavailable')
+          order.push('artifact')
+        } }],
+        log: (_level, message) => { logs.push(message) },
+        setTimeout: (() => ({ unref: () => undefined })) as unknown as typeof setTimeout,
+        clearTimeout: (() => undefined) as unknown as typeof clearTimeout
+      })
+      if (failPublish) {
+        vi.spyOn(handoff, 'publish').mockImplementationOnce(async () => {
+          await writeFile(join(workspace, 'result.txt'), 'overwrite during persist outage')
+          throw new Error('injected outbox persist outage')
+        })
+      }
+      host = createAgentRuntimeHost({
+        settings: async () => settings('codex'), adapters: [codex], turnArtifacts: handoff,
+        getPrincipalContext: () => ({ identityVersion: 1, principal: null })
+      })
+      host.subscribeRequiredBeforeTurn(async () => { order.push('lease') })
+      host.subscribeTurnLifecycle(event => {
+        if (event.kind === 'after-turn') {
+          expect(event.state).toBe(terminalState)
+          order.push('release')
+        }
+      })
+      try {
+        await host.startTurn({ runtimeId: 'codex', threadId: 'terminal-thread', workspace,
+          text: 'Produce partial output.', clientDirectiveId: 'terminal-directive' })
+        gate.resolve(undefined)
+        await vi.waitFor(() => expect(outbox.all()[0]?.stage).toBe('pending_fanout'), { timeout: 5_000 })
+        await vi.waitFor(() => expect(logs.some(message => message.includes('settlement delivery failed'))).toBe(true))
+        expect(order).toEqual(['lease'])
+        const intent = outbox.all()[0]!.intent
+        expect(intent.terminalState).toBe(terminalState)
+        expect(intent.filePatchReceipts).toHaveLength(1)
+        expect(intent.fileEffects?.issues).toEqual([])
+        const effect = intent.fileEffects!.effects[0]!
+        expect('dataBase64' in effect && Buffer.from(effect.dataBase64, 'base64').toString()).toBe('exact partial output\n')
+        await writeFile(join(workspace, 'result.txt'), 'later overwrite')
+        unavailable = false
+        await handoff.flushThread('codex', 'terminal-thread')
+        expect(order).toEqual(['lease', 'artifact', 'release'])
+        expect(observed[0]).toEqual(observed[1])
+        expect(observed[1]).toMatchObject({ kind: 'turn-terminated', terminalState, sequence: 2, targetWatermark: '2' })
+        expect(JSON.stringify(observed)).not.toContain('later overwrite')
+        expect(outbox.all()).toEqual([])
+      } finally {
+        gate.resolve(undefined)
+        await host.dispose()
+        await handoff.close()
+      }
+    }
+  )
+
+  it('keeps a captured terminal boundary pending when publication fails and only status remains', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'terminal-status-persist-'))
+    evidenceQueueRoots.push(root)
+    const codex = fakeAdapter('codex', { id: 'status-thread', runtimeId: 'codex', title: 'Status',
+      workspace: root, updatedAt: new Date().toISOString() })
+    const gate = deferred<void>()
+    let terminalEmitted = false
+    vi.mocked(codex.startTurn).mockResolvedValue({ threadId: 'status-thread', turnId: 'status-turn' })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+      await gate.promise
+      if (terminalEmitted) return
+      terminalEmitted = true
+      vi.mocked(codex.snapshot).mockResolvedValue({ id: 'status-thread', runtimeId: 'codex', title: 'Status',
+        latestSeq: 2, latestTurnId: 'status-turn', latestTurnStatus: 'failed', workspace: root,
+        updatedAt: new Date().toISOString(), turns: [] })
+      yield { kind: 'turn_lifecycle', runtimeId: 'codex', threadId: 'status-thread', turnId: 'status-turn',
+        state: 'failed', seq: 2, createdAt: new Date().toISOString() } satisfies AgentRuntimeEvent
+    })
+    const publisher = fakeTurnArtifactPublisher(vi.fn(async () => { throw new Error('persist unavailable') }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [codex], turnArtifacts: publisher })
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: 'status-thread', workspace: root,
+        text: 'Stop with partial state', clientDirectiveId: 'status-directive' })
+      gate.resolve(undefined)
+      await vi.waitFor(() => expect(warn.mock.calls.some(call =>
+        String(call[1]).includes('status-only recovery cannot release'))).toBe(true), { timeout: 5_000 })
+      expect(publisher.publish).toHaveBeenCalledTimes(1)
+      expect(publisher.publishLifecycleSettlement).not.toHaveBeenCalled()
+    } finally { gate.resolve(undefined); await host.dispose(); warn.mockRestore() }
+  })
+
+  it('materializes a terminated no-patch turn without reading files and rejects boundary, state, scope and sequence mismatches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'terminal-host-guards-'))
+    evidenceQueueRoots.push(root)
+    const codex = fakeAdapter('codex', { id: 'thread-1', runtimeId: 'codex', title: 'Guard',
+      workspace: root, updatedAt: new Date().toISOString() })
+    const snapshot = {
+      id: 'thread-1', runtimeId: 'codex', title: 'Guard', workspace: root,
+      updatedAt: new Date().toISOString(), latestSeq: 7,
+      turns: [{ id: 'turn-1', threadId: 'thread-1', status: 'failed', items: [] }]
+    } satisfies TestThreadSnapshot
+    vi.mocked(codex.snapshot).mockResolvedValue(snapshot)
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [codex] })
+    const outbox = new TurnArtifactOutbox(root)
+    const start = await outbox.registerStart({ runtimeId: 'codex', threadId: 'thread-1',
+      clientDirectiveId: 'guard-directive', inputDigest: `sha256:${'b'.repeat(64)}`, workspaceRoot: root,
+      principal: null, principalContext: { identityVersion: 1, principal: null } })
+    const intent: TurnArtifactIntent = { ...start, turnId: 'turn-1', terminalState: 'failed',
+      sequence: 7, occurredAt: new Date().toISOString() }
+    try {
+      const event = await host.materializeCompletedTurnArtifact(intent)
+      expect(event).toMatchObject({ kind: 'turn-terminated', terminalState: 'failed', artifacts: [] })
+      expect(event.fileEffects).toBeUndefined()
+      expect(event.filePatchReceipts).toBeUndefined()
+      await expect(host.materializeCompletedTurnArtifact({ ...intent, boundaryLeaseId: undefined })).rejects.toThrow('authorized boundary')
+      for (const sequence of [undefined, 0, -1, 7.5, 8]) {
+        await expect(host.materializeCompletedTurnArtifact({ ...intent, sequence })).rejects.toThrow(/sequence/)
+      }
+      await expect(host.materializeCompletedTurnArtifact({ ...intent, terminalState: 'cancelled' })).rejects.toThrow('not durably cancelled')
+      await expect(host.materializeCompletedTurnArtifact({ ...intent, terminalState: undefined })).rejects.toMatchObject({ name: 'TurnArtifactTerminalStateError', terminalState: 'failed' })
+      await expect(host.materializeCompletedTurnArtifact({ ...intent, workspaceRoot: join(root, 'other') })).rejects.toThrow('changed workspace')
+      vi.mocked(codex.readThreadPage).mockResolvedValueOnce({ runtimeId: 'codex', threadId: 'other', latestSeq: 7, turns: snapshot.turns, nextCursor: null })
+      await expect(host.materializeCompletedTurnArtifact(intent)).rejects.toThrow('different thread')
+    } finally { await host.dispose() }
   })
 
   it('preserves a bound workspace spelling through durable completed-turn materialization', async () => {
@@ -11232,6 +11582,32 @@ describe('createCodexAgentRuntimeAdapter', () => {
 
 
 describe('Session admission and native human input', () => {
+  it('notifies only durably accepted native input and replays its receipt on retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-accepted-input-'))
+    const contextLedger = new RuntimeContextLedgerService(root, ledgerRuntimes)
+    const session = { runtimeId: 'codex' as const, threadId: 'accepted-input-thread' }
+    const adapter = fakeAdapter('codex', { ...session, id: session.threadId, title: 'Private', updatedAt: new Date().toISOString() })
+    const host = createAgentRuntimeHost({ settings: () => settings(), adapters: [adapter], services: { contextLedger } })
+    try {
+      await host.completeInputRecovery({ version: 1, inputs: [] })
+      const observed = vi.fn(async (event) => {
+        expect((await contextLedger.readAdmission(session)).receipts).toContainEqual(event.receipt)
+        expect(event.text).toBe('tsk_explicit')
+      })
+      const dispose = host.subscribeAcceptedInput(observed)
+      const input = { ...session, clientDirectiveId: 'native-1', text: 'tsk_explicit', payload: { text: 'tsk_explicit' } }
+      await host.acceptQueuedInput(input, 'native-composer')
+      await host.acceptQueuedInput(input, 'native-composer')
+      expect(observed).toHaveBeenCalledTimes(2)
+      expect(observed.mock.calls[0][0].receipt).toEqual(observed.mock.calls[1][0].receipt)
+      await host.acceptQueuedInput({ ...input, clientDirectiveId: 'internal-1' })
+      expect(observed).toHaveBeenCalledTimes(2)
+      dispose()
+      await host.acceptQueuedInput({ ...input, clientDirectiveId: 'unsubscribed' }, 'native-composer')
+      expect(observed).toHaveBeenCalledTimes(2)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
   it('persists queued text as an exact same-turn Steer before provider delivery', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-queue-steer-'))
     const contextLedger = new RuntimeContextLedgerService(root, ledgerRuntimes)

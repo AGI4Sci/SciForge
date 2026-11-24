@@ -303,6 +303,7 @@ export function BrowserPreviewPanel({
         width: `calc(100vw / ${fullscreenScale})`
       } : undefined}
       data-browser-preview-fullscreen={fullscreen ? 'true' : 'false'}
+      data-native-view-occluder={fullscreen ? 'true' : undefined}
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b px-2">
         <button
@@ -363,7 +364,7 @@ export function BrowserPreviewPanel({
               if (form) navigate(readBrowserAddress(form, address))
             }}
             placeholder={t('browserPreviewAddressPlaceholder')}
-            className="min-w-0 flex-1 rounded-md border bg-muted/30 px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
+            className="min-w-0 flex-1 rounded-md border bg-muted/30 px-2 py-1 text-ds-sm outline-none focus:ring-1 focus:ring-ring"
             spellCheck={false}
           />
           <button
@@ -386,7 +387,7 @@ export function BrowserPreviewPanel({
         </form>
       </header>
 
-      <div className="flex shrink-0 items-center gap-1.5 border-b bg-amber-50 px-3 py-1 text-[11px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+      <div className="flex shrink-0 items-center gap-1.5 border-b bg-amber-50 px-3 py-1 text-ds-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
         <ShieldAlert className="h-3 w-3" />
         <span>{t('browserPreviewUntrusted')}</span>
         <span className="ml-auto truncate">{statusLabel}</span>
@@ -397,14 +398,14 @@ export function BrowserPreviewPanel({
         className="relative min-h-0 flex-1 overflow-hidden overscroll-none bg-neutral-100 dark:bg-neutral-950"
         data-browser-preview-viewport
       >
-        <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        <div className="flex h-full items-center justify-center p-6 text-center text-ds-lg text-muted-foreground">
           {busy && !observation ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
           {observation?.state.status === 'error' ? t('browserPreviewUnavailable') : null}
         </div>
       </div>
 
       {error ? (
-        <div className="max-h-24 shrink-0 overflow-auto border-t bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <div className="max-h-24 shrink-0 overflow-auto border-t bg-destructive/10 px-3 py-2 text-ds-sm text-destructive">
           {error}
         </div>
       ) : null}

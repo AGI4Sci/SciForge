@@ -107,7 +107,12 @@ export const workspaceTabularPreviewInputSchema = z.object({
   workspaceRoot: optionalPathSchema,
   mimeType: mimeTypeSchema.optional(),
   size: z.number().finite().nonnegative().optional(),
-  mtimeMs: z.number().finite().nonnegative().optional()
+  mtimeMs: z.number().finite().nonnegative().optional(),
+  /**
+   * Exact data-row total from a full-file count (header excluded when hasHeader).
+   * When set, rowCount is exact even if `text` is only a preview prefix.
+   */
+  exactDataRowCount: z.number().int().nonnegative().optional()
 }).strict()
 
 export const workspaceTabularXlsxPreviewInputSchema = z.object({
@@ -270,6 +275,8 @@ export const workspaceTabularObservationSchema = z.object({
     id: z.string().trim().min(1).max(256),
     name: z.string().trim().max(256).optional(),
     rowCount: z.number().int().nonnegative().optional(),
+    /** True when rowCount came from a size-bounded text prefix, not a full-file parse. */
+    rowCountIsEstimate: z.boolean().optional(),
     columnCount: z.number().int().nonnegative().optional()
   }).strict()).max(1000).optional(),
   annotations: z.array(z.object({

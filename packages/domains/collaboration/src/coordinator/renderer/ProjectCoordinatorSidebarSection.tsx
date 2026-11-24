@@ -646,7 +646,7 @@ export function ProjectCoordinatorSidebarView({
         <button
           ref={sectionControlRef}
           type="button"
-          className="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
+          className="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ds-md text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
           aria-expanded={!collapsed}
           onClick={() => onCollapsedChange(!collapsed)}
         >
@@ -654,7 +654,7 @@ export function ProjectCoordinatorSidebarView({
           <span className="truncate">{t('projectCoordinatorSidebarCloudProjects')}</span>
           {pendingWorkerOffers.length > 0 ? (
             <span
-              className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+              className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-ds-2xs font-semibold text-white"
               aria-label={t('projectCoordinatorSidebarWorkerOfferCount', {
                 count: pendingWorkerOffers.length
               })}
@@ -734,7 +734,7 @@ export function ProjectCoordinatorSidebarView({
               {pendingWorkerOffers[0]!.contractRevision !== undefined &&
               pendingWorkerOffers[0]!.contractDigest ? (
                 <span
-                  className="mt-1 block text-[10px] text-ds-faint"
+                  className="mt-1 block text-ds-2xs text-ds-faint"
                   data-contract-revision={pendingWorkerOffers[0]!.contractRevision}
                   data-contract-digest={pendingWorkerOffers[0]!.contractDigest}
                 >
@@ -806,10 +806,10 @@ export function ProjectCoordinatorSidebarView({
                       ? <ChevronDown className="h-3 w-3 shrink-0 text-ds-faint" />
                       : <ChevronRight className="h-3 w-3 shrink-0 text-ds-faint" />}
                     <span className="min-w-0 flex-1">
-                      <strong className="block truncate text-[12.5px] font-medium text-ds-ink">
+                      <strong className="block truncate text-ds-sm font-medium text-ds-ink">
                         {project.displayName}
                       </strong>
-                      <small className="block truncate text-[10.5px] text-ds-faint">
+                      <small className="block truncate text-ds-2xs text-ds-faint">
                         {t(projectStatusMessageKey(project.status))}
                       </small>
                     </span>
@@ -967,7 +967,7 @@ function ProjectDeleteConfirmationDialog({
         ref={dialogRef}
         tabIndex={-1}
         className="flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-ds-border bg-ds-card text-ds-ink shadow-[0_24px_72px_rgba(15,23,42,0.28)]"
-        role="dialog"
+        role="dialog" data-native-view-occluder="true"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
@@ -979,12 +979,12 @@ function ProjectDeleteConfirmationDialog({
             <AlertTriangle className="h-4.5 w-4.5" strokeWidth={1.9} aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="text-[16px] font-semibold tracking-[-0.02em]">
+            <h2 id={titleId} className="text-ds-xl font-semibold tracking-[-0.02em]">
               {t('projectCoordinatorSidebarDeleteDialogTitle')}
             </h2>
             <p
               id={descriptionId}
-              className="mt-2 break-words whitespace-pre-line text-[12.5px] leading-5 text-ds-muted"
+              className="mt-2 break-words whitespace-pre-line text-ds-sm leading-5 text-ds-muted"
             >
               {t('projectCoordinatorSidebarDeleteConfirm', { name: state.displayName })}
             </p>
@@ -995,7 +995,7 @@ function ProjectDeleteConfirmationDialog({
             ref={cancelRef}
             type="button"
             disabled={busy}
-            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-wait disabled:opacity-60"
+            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-wait disabled:opacity-60"
             onClick={onCancel}
           >
             {t('cancel')}
@@ -1004,7 +1004,7 @@ function ProjectDeleteConfirmationDialog({
             ref={deleteRef}
             type="button"
             disabled={busy}
-            className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-ds-card disabled:cursor-wait disabled:opacity-65"
+            className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-ds-md font-semibold text-white transition hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-ds-card disabled:cursor-wait disabled:opacity-65"
             onClick={onConfirm}
           >
             {busy ? (
@@ -1045,9 +1045,9 @@ function ProjectDeleteContextMenu({
 
   return createPortal(
     <div
-      role="menu"
+      role="menu" data-native-view-occluder="true"
       aria-label={state.displayName}
-      className="ds-no-drag fixed z-[1000] w-[188px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-[13px] text-ds-ink shadow-[0_16px_42px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card"
+      className="ds-no-drag fixed z-[1000] w-[188px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-ds-md text-ds-ink shadow-[0_16px_42px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card"
       style={{ left: state.x, top: state.y }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) onClose()
@@ -1096,12 +1096,12 @@ export function ProjectSessionsAccordion({
         type="button"
         aria-expanded={expanded}
         aria-controls={panelId}
-        className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-ds-sm text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         onClick={() => setExpanded(value => !value)}
       >
         <MessageSquare className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="flex-1">{t('projectCoordinatorSidebarSessions')}</span>
-        <span className="text-xs tabular-nums">{sessions.length}</span>
+        <span className="text-ds-sm tabular-nums">{sessions.length}</span>
         {expanded
           ? <ChevronDown className="h-3 w-3" aria-hidden="true" />
           : <ChevronRight className="h-3 w-3" aria-hidden="true" />}
@@ -1115,7 +1115,7 @@ export function ProjectSessionsAccordion({
             onSelectSession={onSelectSession}
           />
         )) : (
-          <p className="px-3 py-2 text-xs leading-relaxed text-ds-muted">
+          <p className="px-3 py-2 text-ds-sm leading-relaxed text-ds-muted">
             {t('projectCoordinatorSidebarNoSessionHistory')}
           </p>
         )}
@@ -1138,7 +1138,7 @@ export function ProjectSessionAliasRow({
     <button
       type="button"
       title={session.title}
-      className="ml-3 flex w-[calc(100%_-_0.75rem)] items-center gap-2 rounded-md min-h-8 px-2 py-1.5 text-left text-xs text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      className="ml-3 flex w-[calc(100%_-_0.75rem)] items-center gap-2 rounded-md min-h-8 px-2 py-1.5 text-left text-ds-sm text-ds-muted hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       aria-current={active ? 'page' : undefined}
       data-selected={active}
       style={active ? { background: 'var(--ds-sidebar-row-hover)', color: 'var(--ds-ink)' } : undefined}
@@ -1146,7 +1146,7 @@ export function ProjectSessionAliasRow({
     >
       <MessageSquare className="h-3 w-3 shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">{session.title}</span>
-      {session.archived ? <span className="shrink-0 text-[10px] text-ds-muted">{t('projectCoordinatorSidebarArchivedSession')}</span> : null}
+      {session.archived ? <span className="shrink-0 text-ds-2xs text-ds-muted">{t('projectCoordinatorSidebarArchivedSession')}</span> : null}
     </button>
   )
 }
@@ -1165,7 +1165,7 @@ function ProjectToolRow({
   return (
     <button
       type="button"
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[11.5px] text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] disabled:cursor-default disabled:text-ds-faint"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-ds-xs text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] disabled:cursor-default disabled:text-ds-faint"
       disabled={disabled}
       onClick={onClick}
     >
@@ -1195,10 +1195,10 @@ function SidebarNotice({
   tone?: 'neutral' | 'attention'
 }>): ReactElement {
   const contentClass = tone === 'attention'
-    ? 'rounded-md border border-amber-400/70 bg-amber-500/10 px-2 py-2 text-[11px] leading-4 text-amber-800 dark:text-amber-200'
+    ? 'rounded-md border border-amber-400/70 bg-amber-500/10 px-2 py-2 text-ds-xs leading-4 text-amber-800 dark:text-amber-200'
     : inlineActions
-      ? 'flex items-center gap-2 rounded-md border border-[var(--ds-border)] px-2 py-1.5 text-[11px] leading-4 text-ds-faint'
-      : 'rounded-md border border-[var(--ds-border)] px-2 py-2 text-[11px] leading-4 text-ds-faint'
+      ? 'flex items-center gap-2 rounded-md border border-[var(--ds-border)] px-2 py-1.5 text-ds-xs leading-4 text-ds-faint'
+      : 'rounded-md border border-[var(--ds-border)] px-2 py-2 text-ds-xs leading-4 text-ds-faint'
   return (
     <div role={role} className={contentClass}>
       <span className={tone === 'attention' ? 'flex items-start gap-1.5 font-medium' : inlineActions ? 'min-w-0 flex-1 truncate' : undefined}>
@@ -1207,8 +1207,8 @@ function SidebarNotice({
       </span>
       {action || secondaryAction ? (
         <div className={inlineActions ? 'flex shrink-0 items-center gap-1.5' : 'mt-1 flex flex-wrap items-center gap-x-3 gap-y-1'}>
-          {action ? <button type="button" className={inlineActions ? 'rounded px-1.5 py-0.5 text-[10px] text-ds-muted transition hover:bg-accent/10 hover:text-accent' : 'text-accent hover:underline'} onClick={action}>{actionLabel}</button> : null}
-          {secondaryAction ? <button type="button" className={inlineActions ? 'rounded-md bg-accent px-2 py-0.5 text-[10px] font-medium text-white transition hover:opacity-90' : 'text-accent hover:underline'} onClick={secondaryAction}>{secondaryActionLabel}</button> : null}
+          {action ? <button type="button" className={inlineActions ? 'rounded px-1.5 py-0.5 text-ds-2xs text-ds-muted transition hover:bg-accent/10 hover:text-accent' : 'text-accent hover:underline'} onClick={action}>{actionLabel}</button> : null}
+          {secondaryAction ? <button type="button" className={inlineActions ? 'rounded-md bg-accent px-2 py-0.5 text-ds-2xs font-medium text-white transition hover:opacity-90' : 'text-accent hover:underline'} onClick={secondaryAction}>{secondaryActionLabel}</button> : null}
         </div>
       ) : null}
     </div>

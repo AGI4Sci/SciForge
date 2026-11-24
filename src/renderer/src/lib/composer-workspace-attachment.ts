@@ -3,6 +3,7 @@ import type { WorkspaceFileWritePayload, WorkspaceFileWriteResult } from '../../
 import type { ComposerFileReference } from './composer-file-references'
 import { relativeWorkspacePath } from './composer-file-references'
 import {
+  validateWorkspaceAttachmentBytes,
   workspaceAttachmentKind,
   workspaceWebDocumentMetadata,
   workspaceAttachmentMaxBytes,
@@ -151,6 +152,7 @@ export async function importComposerWorkspaceAttachment(
       relativePath,
       name: input.file.name || fileNameFromPath(sourcePath),
       workspaceRoot: options.workspaceRoot,
+      size: input.file.size,
       ...metadata
     }
   }
@@ -158,6 +160,7 @@ export async function importComposerWorkspaceAttachment(
   const relativePath = uploadRelativePath(input, options, fallbackName(kind))
   const bytes = await input.file.arrayBuffer()
   if (bytes.byteLength > limit || bytes.byteLength !== input.file.size) throw sizeError(kind, limit)
+  validateWorkspaceAttachmentBytes(input.file, new Uint8Array(bytes))
   options.assertAvailable?.()
   const payload: WorkspaceFileWritePayload = {
     workspaceRoot: options.workspaceRoot,
@@ -171,6 +174,7 @@ export async function importComposerWorkspaceAttachment(
     relativePath,
     name,
     workspaceRoot: options.workspaceRoot,
+    size: input.file.size,
     ...metadata
   }
 }

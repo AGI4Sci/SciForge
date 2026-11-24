@@ -556,7 +556,7 @@ function ImageStatusSummary({
 
   return (
     <div
-      className="p-4 text-sm text-ds-text"
+      className="p-4 text-ds-lg text-ds-text"
       role={role}
       {...markerAttributes}
     >

@@ -156,6 +156,16 @@ test('requirements completion retains typed reasons and specific user-facing mes
   }
 })
 
+test('requirements generation errors surface the bounded invalid field paths', async () => {
+  const client = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async () => ({ status: 'failed', reason: 'invalid_structured_output', invalidFields: ['workModules.0.output.fileName'] }) as never
+  })
+  await assert.rejects(client.completeRequirements({ projectId: 'prj_Requirements01' }),
+    (cause: unknown) => cause instanceof ProjectCoordinatorRequirementsCompletionClientError &&
+      cause.reason === 'invalid_structured_output' && cause.message.includes('workModules.0.output.fileName'))
+})
+
 test('renderer invocation approvals stay aligned with the main capability definitions', async () => {
   const definitions = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
@@ -178,6 +188,14 @@ test('renderer invocation approvals stay aligned with the main capability defini
     }
   })
 
+  await client.retryLeaderProposal(undefined as never)
+  await client.deferLeaderProposal(undefined as never)
+  await client.renameProject(undefined as never)
+  await client.setProjectExecutionMode(undefined as never)
+  await client.authorizeProjectDispatch(undefined as never)
+  await client.updateTaskContent(undefined as never)
+  await client.decideTaskContent(undefined as never)
+  await client.validateDelivery(undefined as never)
   await client.openDeliveryObject(undefined as never)
   await client.readWorkspace(undefined)
   await client.createProject(undefined as never)
@@ -195,6 +213,7 @@ test('renderer invocation approvals stay aligned with the main capability defini
   await client.acceptInvitation(undefined as never)
   await client.removeMember(undefined as never)
   await client.createHumanNeeded(undefined as never)
+  await client.deferHumanNeeded(undefined as never)
   await client.answerHumanNeeded(undefined as never)
   await client.transferCoordinator(undefined as never)
   await client.readDelivery(undefined as never)

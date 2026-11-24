@@ -1,0 +1,12 @@
+{
+  "name": "@sciforge/cloud-spaces-contracts",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Public personal and project cloud space contracts.",
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src", "package.json"],
+  "scripts": { "typecheck": "tsc --noEmit -p tsconfig.json", "test": "node --import tsx --test src/*.test.ts" },
+  "dependencies": { "zod": "^4.4.3" },
+  "devDependencies": { "@types/node": "^22.15.3", "tsx": "^4.20.5", "typescript": "^5.8.2" }
+}

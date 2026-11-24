@@ -97,6 +97,7 @@ describe('identity and ownership invariants', () => {
   it('carries only a bounded digest-based confirmable action in HumanNeeded', () => {
     expect(humanNeededSchema.safeParse({
       ...humanNeededFixture,
+      interaction: {kind:'approval'},
       confirmableAction: {
         actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
         effect: 'destructive', actionDigest: 'a'.repeat(64)
@@ -104,6 +105,7 @@ describe('identity and ownership invariants', () => {
     }).success).toBe(true)
     expect(humanNeededSchema.safeParse({
       ...humanNeededFixture,
+      interaction: {kind:'approval'},
       confirmableAction: {
         actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
         effect: 'destructive', actionDigest: 'a'.repeat(64), command: 'rm -rf /'

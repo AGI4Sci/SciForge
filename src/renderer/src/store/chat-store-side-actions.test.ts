@@ -16,6 +16,7 @@ import {
 } from '../agent/agent-runtime-event-dispatcher'
 import type { ChatState } from './chat-store-types'
 import type { AgentProvider, NormalizedThread, ThreadEventSink } from '../agent/types'
+import { checkpointDiscussions } from './discussion-checkpoint'
 
 type Harness = {
   state: ChatState
@@ -306,6 +307,92 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
   })
   return { state, set, get, provider, actions }
 }
+
+describe('saved material discussion restoration', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => undefined },
+      setTimeout: () => 1, clearTimeout: () => undefined })
+    admissionMock.readQueuedInputs.mockResolvedValue([])
+  })
+  afterEach(() => { teardownAllSideSubscriptions(); vi.unstubAllGlobals() })
+  const saved = () => checkpointDiscussions({ side: {
+    threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex', workspaceRoot: '/study', title: '原材料',
+    source: 'side', createdAt: '2026-11-08', input: '保留这个未发送问题', context: { id: 'v1', title: '旧材料', text: '反例仍保留' },
+    handoffDraft: { document: '草稿', memory: '', instruction: '比较两种结果', preserve: '异常点' }
+  } as ChatState['sideConversations'][string] }, {})
+  it.each([false, true, undefined] as const)('keeps caller-owned history failures local with reportErrors=%s', async reportErrors => {
+    const { state, provider, actions } = buildHarness({ discussionCheckpoints: saved(), error: 'current task notice',
+      threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/study' }] as ChatState['threads'] })
+    let reject!: (cause: Error) => void
+    vi.spyOn(provider, 'getRecentThreadView').mockImplementationOnce(() =>
+      new Promise<Awaited<ReturnType<AgentProvider['getRecentThreadView']>>>((_resolve, fail) => { reject = fail }))
+    const restoring = actions.attachSideConversation({ threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex', openPanel: false, reportErrors })
+    if (reportErrors === false) {
+      state.activeThreadId = 'other'
+      state.workspaceRoot = '/other'
+    }
+    reject(new Error('synthetic history failure'))
+    expect(await restoring).toBeNull()
+    expect(state.sideConversations.side).toBeUndefined()
+    expect(state.discussionCheckpoints.side.input).toBe('保留这个未发送问题')
+    if (reportErrors === false) expect(state.error).toBe('current task notice')
+    else expect(state.error).toContain('synthetic history failure')
+  })
+  it.each([false, true] as const)('keeps caller-owned connection failures local with reportErrors=%s', async reportErrors => {
+    const { state, provider, actions } = buildHarness({ discussionCheckpoints: saved(), error: 'current task notice', runtimeConnection: 'offline',
+      threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/study' }] as ChatState['threads'] })
+    expect(await actions.attachSideConversation({ threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex', openPanel: false, reportErrors })).toBeNull()
+    expect(provider.getDetailMock).not.toHaveBeenCalled()
+    if (reportErrors === false) expect(state.error).toBe('current task notice')
+    else expect(state.error).not.toBe('current task notice')
+  })
+  it('reopens the original transcript and restores exact drafts without sending or creating a thread', async () => {
+    const { state, provider, actions } = buildHarness({ discussionCheckpoints: saved(),
+      threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/study' }] as ChatState['threads'] })
+    const result = await actions.attachSideConversation({ threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex', openPanel: true })
+    expect(result).toBe('side')
+    expect(state.sideConversations.side.input).toBe('保留这个未发送问题')
+    expect(state.sideConversations.side.handoffDraft?.preserve).toBe('异常点')
+    expect(state.sideConversations.side.context?.text).toBe('反例仍保留')
+    expect(provider.getDetailMock).toHaveBeenCalledWith('side')
+    expect(provider.createMock).not.toHaveBeenCalled()
+    expect(provider.sendMock).not.toHaveBeenCalled()
+  })
+  it('refuses restoration in another parent, runtime or workspace', async () => {
+    for (const patch of [{ id: 'other', runtimeId: 'codex', workspace: '/study' },
+      { id: 'parent', runtimeId: 'dsh', workspace: '/study' }, { id: 'parent', runtimeId: 'codex', workspace: '/other' }]) {
+      const { actions, provider } = buildHarness({ discussionCheckpoints: saved(), threads: [patch] as ChatState['threads'] })
+      expect(await actions.attachSideConversation({ threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex' })).toBeNull()
+      expect(provider.getDetailMock).not.toHaveBeenCalled()
+    }
+  })
+  it('discard removes the saved draft so it cannot reappear as a material discussion', async () => {
+    const { state, actions } = buildHarness({ discussionCheckpoints: saved() })
+    await actions.discardSideConversation('side')
+    expect(state.discussionCheckpoints).toEqual({})
+  })
+  it('does not resurrect a discarded checkpoint while its original input receipts are loading', async () => {
+    const { state, actions } = buildHarness({ discussionCheckpoints: saved(),
+      threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/study' }] as ChatState['threads'] })
+    let finish!: (value: unknown[]) => void
+    admissionMock.readQueuedInputs.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const restoring = actions.attachSideConversation({ threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex' })
+    await vi.waitFor(() => expect(finish).toBeDefined())
+    await actions.discardSideConversation('side')
+    finish([])
+    expect(await restoring).toBeNull()
+    expect(state.sideConversations.side).toBeUndefined()
+  })
+  it('promoting a restored discussion removes its side checkpoint while retaining its runtime transcript', async () => {
+    const { state, actions, provider } = buildHarness({ discussionCheckpoints: saved(),
+      threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/study' }] as ChatState['threads'] })
+    await actions.attachSideConversation({ threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex' })
+    await actions.promoteSideConversation('side')
+    expect(state.discussionCheckpoints.side).toBeUndefined()
+    expect(provider.updateRelationMock).toHaveBeenCalledWith('side', 'primary')
+    expect(provider.deleteMock).not.toHaveBeenCalled()
+  })
+})
 
 describe('chat-store-side-actions', () => {
   beforeEach(() => {
@@ -958,6 +1045,28 @@ describe('chat-store-side-actions', () => {
     expect(provider.sendMock).not.toHaveBeenCalled()
     expect(state.sideConversations[id].queuedMessages).toEqual(queued)
     expect(state.sideConversations[id].busy).toBe(false)
+  })
+
+  it('queues effective options for the bound DSH side while the main runtime is Codex', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: false }
+    provider.threadDetail = { blocks: [], latestSeq: 4, threadStatus: 'running', latestTurnId: 'turn-child' }
+    const id = (await actions.attachSideConversation({ threadId: 'dsh-child', parentThreadId: 'thr_main', source: 'child_agent' }))!
+    Object.assign(state.sideConversations[id], { runtimeId: 'dsh', model: 'inherited-model', reasoningEffort: 'medium' })
+    state.activeAgentRuntime = 'codex'
+    expect(state.activeAgentRuntime).toBe('codex')
+    expect(await actions.sendSideMessage(id, 'correct side input', { mode: 'agent' })).toBe(true)
+    const queued = state.sideConversations[id].queuedMessages![0]
+    for (const key of ['model', 'reasoningEffort', 'mode']) expect(queued).not.toHaveProperty(key)
+    expect(admissionMock.acceptQueuedInput).toHaveBeenLastCalledWith(expect.objectContaining({ runtimeId: 'dsh', threadId: id }))
+    const subscription = provider.subscribeMock.mock.calls.at(-1) as [string, number, ThreadEventSink, AbortSignal]
+    subscription[2].onTurnComplete()
+    await flushPromises()
+    expect(provider.sendMock).toHaveBeenCalledTimes(1)
+    expect(provider.sendMock.mock.calls[0][2]).toMatchObject({ runtimeId: 'dsh', clientDirectiveId: queued.id })
+    expect(provider.sendMock.mock.calls[0][2].model).toBeUndefined()
+    expect(provider.sendMock.mock.calls[0][2].reasoningEffort).toBeUndefined()
+    expect(state.sideConversations[id].queuedMessages).toEqual([])
   })
 
   it('automatically sends the next queued child message after turn completion', async () => {

@@ -8,7 +8,14 @@ import { join } from 'node:path'
 const args = process.argv.slice(2)
 if (args.includes('--version')) { console.log('0.2.0-rc.2'); process.exit(0) }
 if (args.includes('--dump-config')) {
-  process.stdout.write(readFileSync(args[args.indexOf('--patch') + 1], 'utf8'))
+  // Production-like official owner: restricted native deployments must prove
+  // the policy reads the Host mode and uses the process workspace binding.
+  const rows = JSON.parse(readFileSync(args[args.indexOf('--patch') + 1], 'utf8'))
+  rows.push({ id: 'sandbox-policy', name: '@deepseek-ai/dsh-sandbox-policy', config: {
+    mode: { __jsExpr: "process.env.DSH_PERMISSION_MODE ?? 'workspace-write'" },
+    workspaceRoot: { __jsExpr: 'process.cwd()' }
+  } })
+  process.stdout.write(JSON.stringify(rows))
   process.exit(0)
 }
 const send = value => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\n')

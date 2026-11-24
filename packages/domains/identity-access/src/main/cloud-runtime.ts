@@ -1,3 +1,6 @@
+import { lookupDocumentShare, createDocumentShare, revokeDocumentShare, readDocumentComments, mutateDocumentComments } from './document-sharing.js'
+import type { DocumentShareLookupRequest, DocumentShareCreateRequest, DocumentShareRevokeRequest, DocumentCommentReadRequest, DocumentCommentMutateRequest } from '@sciforge/document-sharing-contracts'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -7,7 +10,8 @@ import {
   type AuthenticatedObjectReadInput,
   type AuthenticatedCloudRequest,
   type AuthenticatedCloudResponse,
-  type AuthenticatedCloudTransportStatus
+  type AuthenticatedCloudTransportStatus,
+  type AuthenticatedCloudExecutionOptions, authenticatedCloudBindingSchema
 } from '../authenticated-cloud-transport.js'
 import type { DomainMainExternalNavigationHost } from '@sciforge/domain-sdk/host'
 import type {
@@ -20,7 +24,8 @@ import type {
 import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 import {
   createUnavailableCloudIdentityClient,
-  resolveDesktopIdentityRuntimeConfig
+  resolveDesktopIdentityRuntimeConfig,
+  type DesktopIdentityConfigurationInput
 } from './cloud-runtime-config.js'
 import { HttpCloudIdentityClient } from './cloud-identity-client.js'
 import { fetchCloudCommand } from './cloud-command-fetch.js'
@@ -36,8 +41,11 @@ import type {
   DeviceFactSignatureMetadata,
   DeviceFactSigningRequest
 } from '@sciforge/collaboration-contracts'
-import { stageCloudObject, readCloudObject, type ObjectTransportLease } from './cloud-object-transport.js'
-import { restResponseSchema } from '@sciforge/collaboration-contracts'
+import { stageCloudObject, readCloudObject } from './cloud-object-transport.js'
+import type { CloudTransportLease } from './cloud-authority.js'
+import { listCloudSpaces, ensureCloudSpace, createCloudSpaceSession } from './cloud-spaces.js'
+import type { CloudSpaceEnsureRequest, CloudSpaceSessionRequest } from '@sciforge/cloud-spaces-contracts'
+import { restRequestSchema, restResponseSchema } from '@sciforge/collaboration-contracts'
 
 type CloudIdentityRuntimeError = NonNullable<CloudIdentitySnapshot['error']>
 
@@ -67,6 +75,8 @@ export type CloudIdentityRuntimeOptions = Readonly<{
   userDataDir: string
   appRoot: string
   environment: Readonly<Record<string, string | undefined>>
+  /** Package-owned Cloud settings; they override the deployment environment. */
+  settings?: DesktopIdentityConfigurationInput['settings']
   installationId: string
   privateVault: IdentityPrivateVault
   externalNavigation?: DomainMainExternalNavigationHost
@@ -76,15 +86,20 @@ export type CloudIdentityRuntimeOptions = Readonly<{
   onAuthorityInvalidated?: (reason: IdentityAuthorityInvalidation) => void
 }>
 
+type RuntimeProviders = Readonly<{
+  identity: DesktopIdentityService
+  device: DesktopDeviceService
+  cloudBaseUrl: string | null
+  transportUnavailableReason: string | null
+}>
+
 export class CloudIdentityRuntime {
-  readonly #identity: DesktopIdentityService
-  readonly #device: DesktopDeviceService
+  #options: CloudIdentityRuntimeOptions
   readonly #links: CloudIdentityLinks
   readonly #listeners = new Set<() => void>()
-  readonly #disposeIdentitySubscription: () => void
-  readonly #disposeDeviceSubscription: () => void
-  readonly #cloudBaseUrl: string | null
-  readonly #transportUnavailableReason: string | null
+  #disposeIdentitySubscription: () => void = () => undefined
+  #disposeDeviceSubscription: () => void = () => undefined
+  #providers: RuntimeProviders
   readonly #fetch: typeof fetch
   readonly #authenticatedCloudRequestTimeoutMs: number
   readonly #onAuthorityInvalidated: (reason: IdentityAuthorityInvalidation) => void
@@ -93,29 +108,26 @@ export class CloudIdentityRuntime {
   #deviceError: CloudIdentityRuntimeError | undefined
   #runtimeError: CloudIdentityRuntimeError | undefined
   #closed = false
-  readonly #objectOperations = new Set<AbortController>()
+  readonly #leasedOperations = new Set<AbortController>()
   readonly #commandOperations = new Set<AbortController>()
   #authorityEpoch = 0
+  readonly #hostSessionEpoch = randomUUID()
   #authorityIdentityKey: string | null
   #authorityUserKey: string | null
   #authorityDeviceState: string
 
   private constructor(input: Readonly<{
-    identity: DesktopIdentityService
-    device: DesktopDeviceService
+    options: CloudIdentityRuntimeOptions
+    providers: RuntimeProviders
     links: CloudIdentityLinks
-    cloudBaseUrl: string | null
-    transportUnavailableReason: string | null
     fetchImpl: typeof fetch
     authenticatedCloudRequestTimeoutMs: number
     onAuthorityInvalidated: (reason: IdentityAuthorityInvalidation) => void
     runtimeError?: CloudIdentityRuntimeError
   }>) {
-    this.#identity = input.identity
-    this.#device = input.device
+    this.#options = input.options
+    this.#providers = input.providers
     this.#links = input.links
-    this.#cloudBaseUrl = input.cloudBaseUrl
-    this.#transportUnavailableReason = input.transportUnavailableReason
     this.#fetch = input.fetchImpl
     this.#authenticatedCloudRequestTimeoutMs = input.authenticatedCloudRequestTimeoutMs
     this.#onAuthorityInvalidated = input.onAuthorityInvalidated
@@ -126,96 +138,67 @@ export class CloudIdentityRuntime {
     )
     this.#authorityUserKey = authorityUserKey(this.#identity.getStatus())
     this.#authorityDeviceState = deviceAuthorityState(this.#device.getStatus())
-    this.#disposeIdentitySubscription = this.#identity.subscribe((status) => {
-      this.#projectAuthenticatedUser(status)
-      this.#invalidateChangedUserAuthority(status)
-      this.#publish()
-    })
-    this.#disposeDeviceSubscription = this.#device.subscribe((status) => {
-      // Connectivity is not an identity transition. Keep the last confirmed
-      // binding for local work; Cloud transport and signing still require a
-      // fresh ACTIVE Device and invalidate their own in-flight authority below.
-      const temporarilyUnverified = status.state === 'error' && status.reasonCode === 'temporarily_unverified'
-      if (status.state !== 'active' && !temporarilyUnverified) this.#clearActiveDeviceAuthority()
-      if (status.state === 'active') this.#deviceError = undefined
-      if (authorityUserKey(this.#identity.getStatus()) === this.#authorityUserKey) {
-        this.#invalidateChangedAuthority(status)
-      }
-      this.#publish()
-    })
     this.#projectAuthenticatedUser(this.#identity.getStatus())
+    this.#bindProviders()
+  }
+
+  #bindProviders(): void {
+    this.#disposeIdentitySubscription()
+    this.#disposeDeviceSubscription()
+    try {
+      this.#disposeIdentitySubscription = this.#identity.subscribe((status) => {
+        this.#projectAuthenticatedUser(status)
+        this.#invalidateChangedUserAuthority(status)
+        this.#publish()
+      })
+      this.#disposeDeviceSubscription = this.#device.subscribe((status) => {
+        // Connectivity is not an identity transition. Keep the last confirmed
+        // binding for local work; Cloud transport and signing still require a
+        // fresh ACTIVE Device and invalidate their own in-flight authority below.
+        const temporarilyUnverified = status.state === 'error' && status.reasonCode === 'temporarily_unverified'
+        if (status.state !== 'active' && !temporarilyUnverified) this.#clearActiveDeviceAuthority()
+        if (status.state === 'active') this.#deviceError = undefined
+        if (authorityUserKey(this.#identity.getStatus()) === this.#authorityUserKey) {
+          this.#invalidateChangedAuthority(status)
+        }
+        this.#publish()
+      })
+    } catch (error) {
+      this.#disposeIdentitySubscription()
+      this.#disposeIdentitySubscription = () => undefined
+      this.#disposeDeviceSubscription = () => undefined
+      throw error
+    }
+  }
+
+  get #identity(): DesktopIdentityService {
+    return this.#providers.identity
+  }
+
+  get #device(): DesktopDeviceService {
+    return this.#providers.device
+  }
+
+  get #cloudBaseUrl(): string | null {
+    return this.#providers.cloudBaseUrl
+  }
+
+  get #transportUnavailableReason(): string | null {
+    return this.#providers.transportUnavailableReason
   }
 
   static async create(options: CloudIdentityRuntimeOptions): Promise<CloudIdentityRuntime> {
-    const identityConfig = resolveDesktopIdentityRuntimeConfig({
-      oidcIssuer: options.environment.SCIFORGE_OIDC_ISSUER,
-      cloudBaseUrl: options.environment.SCIFORGE_CLOUD_BASE_URL
-    })
-    const cloudBaseUrl = identityConfig.mode === 'http'
-      ? identityConfig.cloudBaseUrl.replace(/\/+$/u, '')
-      : null
-    const identityClient = identityConfig.mode === 'http'
-      ? new HttpCloudIdentityClient({
-          baseUrl: cloudBaseUrl!,
-          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {})
-        })
-      : createUnavailableCloudIdentityClient(identityConfig.error)
     const appVersion = options.appVersion ?? await readApplicationVersion(options.appRoot)
+    const runtimeOptions: CloudIdentityRuntimeOptions = { ...options, appVersion }
     const linkResult = createCloudIdentityLinks(options.userDataDir)
     const links = linkResult.links
-    const navigationError = options.externalNavigation
-      ? undefined
-      : 'Cloud identity requires the Host external-navigation service.'
-    const configurationError = [
-      identityConfig.mode === 'disabled' ? identityConfig.error : undefined,
-      navigationError
-    ].filter((value): value is string => Boolean(value)).join(' ')
-    const openExternal = async (url: string): Promise<void> => {
-      if (!options.externalNavigation) throw new Error(navigationError)
-      const target = options.externalNavigation.issueTarget({
-        url,
-        expiresAt: new Date(Date.now() + 60_000).toISOString()
-      })
-      await options.externalNavigation.openTarget({ handle: target.handle })
-    }
-    let identity: DesktopIdentityService | undefined
-    let device: DesktopDeviceService | undefined
+    let providers: RuntimeProviders | undefined
     try {
-      identity = new DesktopIdentityService({
-        issuer: identityConfig.issuer,
-        clientId: 'sciforge-desktop',
-        audience: 'sciforge-cloud-api',
-        identityClient,
-        sessionStore: new PrivateVaultDesktopIdentitySessionStore(options.privateVault),
-        linkAuthenticatedUser: (user) => {
-          links.linkIdentity({
-            cloudUserId: user.userId,
-            oidcIdentityId: user.oidcIdentityId,
-            issuer: user.issuer,
-            subject: user.subject,
-            displayName: user.displayName
-          })
-        },
-        ...(configurationError ? { configurationError } : {}),
-        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-        openExternal
-      })
-      device = new DesktopDeviceService({
-        identity,
-        client: identityClient,
-        installationSeed: options.installationId,
-        vault: options.privateVault,
-        appVersion,
-        linkDevice: (cloudDevice) => {
-          links.linkDevice(cloudDevice.userId, cloudDevice.deviceId, cloudDevice.status)
-        }
-      })
+      providers = createRuntimeProviders(runtimeOptions, links, appVersion)
       return new CloudIdentityRuntime({
-        identity,
-        device,
+        options: runtimeOptions,
+        providers,
         links,
-        cloudBaseUrl,
-        transportUnavailableReason: configurationError || null,
         fetchImpl: options.fetchImpl ?? fetch,
         authenticatedCloudRequestTimeoutMs:
           options.authenticatedCloudRequestTimeoutMs ?? AUTHENTICATED_CLOUD_REQUEST_TIMEOUT_MS,
@@ -225,8 +208,8 @@ export class CloudIdentityRuntime {
     } catch (error) {
       const cleanupErrors: unknown[] = []
       for (const close of [
-        () => device?.close(),
-        () => identity?.close(),
+        () => providers?.device.close(),
+        () => providers?.identity.close(),
         () => links.close()
       ]) {
         try {
@@ -243,6 +226,65 @@ export class CloudIdentityRuntime {
       }
       throw error
     }
+  }
+
+  /**
+   * Replace the deployment-bound providers in place.
+   *
+   * The canonical runtime instance, its listeners and its shared Local Account
+   * link remain stable, so renderer resources and dependent domain services do
+   * not observe a new runtime identity. The next sign-in uses the new issuer
+   * and Cloud origin; an already saved session is restored only when it matches
+   * the new issuer.
+   */
+  /**
+   * Settings currently bound to this runtime, so an owner can avoid a
+   * needless provider rebuild when the user saves unchanged values.
+   */
+  configuredSettings(): DesktopIdentityConfigurationInput['settings'] {
+    return this.#options.settings ?? null
+  }
+
+  async reconfigure(settings: DesktopIdentityConfigurationInput['settings']): Promise<CloudIdentitySnapshot> {
+    this.#assertOpen()
+    const nextOptions: CloudIdentityRuntimeOptions = {
+      ...this.#options,
+      settings: settings ?? null
+    }
+    const appVersion = nextOptions.appVersion ?? await readApplicationVersion(nextOptions.appRoot)
+    const next = createRuntimeProviders(nextOptions, this.#links, appVersion)
+    let initialized: DesktopIdentityActionResult
+    try {
+      initialized = await next.identity.initialize()
+    } catch (error) {
+      next.device.close()
+      next.identity.close()
+      throw error
+    }
+
+    this.#disposeIdentitySubscription()
+    this.#disposeDeviceSubscription()
+    const previous = this.#providers
+    this.#options = nextOptions
+    this.#providers = next
+    previous.device.close()
+    previous.identity.close()
+    this.#identityError = undefined
+    this.#deviceError = undefined
+    this.#runtimeError = undefined
+    this.#bindProviders()
+    this.#authorityIdentityKey = authorityIdentityKey(
+      this.#identity.getStatus(),
+      this.#device.getStatus()
+    )
+    this.#authorityUserKey = authorityUserKey(this.#identity.getStatus())
+    this.#authorityDeviceState = deviceAuthorityState(this.#device.getStatus())
+    this.#acceptIdentityResult(initialized)
+    if (initialized.ok && initialized.status.state === 'signed-in') {
+      this.#acceptDeviceResult(await this.#device.ensureRegistered())
+    }
+    this.#publish()
+    return this.snapshot()
   }
 
   async initialize(): Promise<CloudIdentitySnapshot> {
@@ -319,6 +361,27 @@ export class CloudIdentityRuntime {
     return this.snapshot()
   }
 
+  async renameProfile(cloudUserId: string, displayName: string): Promise<void> {
+    this.#assertOpen()
+    const session = this.#identity.sessionIdentity()
+    if (!session || session.userId !== cloudUserId) throw new Error('Sign in to this account before changing its cloud display name.')
+    const requestId = () => `req_${randomUUID().replaceAll('-', '')}`
+    const send = async (payload: AuthenticatedCloudRequest['payload']) => {
+      const response = await this.executeAuthenticatedCloud({ contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID, payload: restRequestSchema.parse(payload) })
+      if (response.body.type === 'rest.error') throw new Error('The Cloud profile update was rejected. Check your access and retry after refreshing the account.')
+      if (response.body.type !== 'rest.entity' || response.body.entity.type !== 'user_principal' ||
+          response.body.entity.userId !== cloudUserId) throw new Error('Invalid cloud profile response.')
+      return response.body.entity
+    }
+    const user = await send({ protocolVersion: '1.0', requestId: requestId(), type: 'user.get', userId: cloudUserId })
+    if (this.#identity.sessionIdentity()?.generation !== session.generation) throw new Error('Account changed while saving the display name.')
+    await send({ protocolVersion: '1.0', requestId: requestId(), type: 'user.update',
+      userId: cloudUserId, displayName, expectedRevision: user.revision,
+      idempotencyKey: `idem_${randomUUID()}` })
+    await this.#identity.refreshProfile()
+  }
+
   async refreshDevices(): Promise<CloudIdentitySnapshot> {
     this.#assertOpen()
     this.#acceptDeviceResult(await this.#device.refresh())
@@ -331,6 +394,7 @@ export class CloudIdentityRuntime {
       return this.authenticatedCloudTransportStatus()
     }
     this.#acceptDeviceResult(await this.#device.refresh())
+    await this.#refreshProfile()
     return this.authenticatedCloudTransportStatus()
   }
 
@@ -395,11 +459,30 @@ export class CloudIdentityRuntime {
     }
   }
 
+  authenticatedCloudHostStatus() {
+    const status = this.authenticatedCloudTransportStatus()
+    const session = this.#identity.sessionIdentity()
+    if (status.state !== 'ready' || !session || session.userId !== status.userId) {
+      throw new AuthenticatedCloudTransportError('identity_required', 'Cloud Host requires a ready authenticated session.')
+    }
+    return { ...status, sessionGeneration: `${this.#hostSessionEpoch}:${session.generation}` }
+  }
+
+  #assertExpectedCloudBinding(options?: AuthenticatedCloudExecutionOptions): void {
+    if (!options?.expectedBinding) return
+    const expected = authenticatedCloudBindingSchema.parse(options.expectedBinding)
+    const current = this.authenticatedCloudHostStatus()
+    if (Object.entries(expected).some(([key, value]) => current[key as keyof typeof expected] !== value)) {
+      throw new AuthenticatedCloudTransportError('identity_required', 'Cloud Host expected identity binding changed.')
+    }
+  }
+
   async executeAuthenticatedCloud(
     request: AuthenticatedCloudRequest,
-    options?: Readonly<{ signal?: AbortSignal }>
+    options?: AuthenticatedCloudExecutionOptions
   ): Promise<AuthenticatedCloudResponse> {
     this.#assertOpen()
+    this.#assertExpectedCloudBinding(options)
     if (!this.#cloudBaseUrl) {
       throw new AuthenticatedCloudTransportError(
         'transport_unavailable',
@@ -450,6 +533,7 @@ export class CloudIdentityRuntime {
       const assertCurrent = (): void => {
         if (controller.signal.aborted) throw controller.signal.reason
         this.#assertSessionIdentity(initialSession)
+        this.#assertExpectedCloudBinding(options)
         const current = this.authenticatedCloudTransportStatus()
         if (authorityEpoch !== this.#authorityEpoch || current.state !== 'ready' ||
             current.userId !== revalidated.userId || current.deviceId !== revalidated.deviceId ||
@@ -460,9 +544,12 @@ export class CloudIdentityRuntime {
         }
       }
       assertCurrent()
-      const response = await waitWithSignal(this.#identity.useAccessToken((accessToken) => this.#fetchCloudCommand(
-        request, accessToken, controller.signal, initialSession
-      )), controller.signal)
+      const response = await waitWithSignal(this.#identity.useAccessToken((accessToken) => {
+        // Token freshness may await a refresh. Fence immediately before dispatch,
+        // in the same synchronous turn that selects the token for this request.
+        assertCurrent()
+        return this.#fetchCloudCommand(request, accessToken, controller.signal, initialSession, assertCurrent)
+      }), controller.signal)
       assertCurrent()
       const body = await waitWithSignal(readAuthenticatedCloudBody(response), controller.signal)
       assertCurrent()
@@ -489,7 +576,8 @@ export class CloudIdentityRuntime {
     request: AuthenticatedCloudRequest,
     accessToken: string,
     signal: AbortSignal,
-    session: DesktopIdentitySessionIdentity
+    session: DesktopIdentitySessionIdentity,
+    assertCurrent: () => void
   ): Promise<Response> {
     const baseUrl = this.#cloudBaseUrl
     if (!baseUrl) {
@@ -498,7 +586,9 @@ export class CloudIdentityRuntime {
         this.#transportUnavailableReason ?? 'SciForge Cloud is not configured.'
       )
     }
-    const send = (token: string): Promise<Response> => fetchCloudCommand(this.#fetch,
+    const send = (token: string): Promise<Response> => {
+      assertCurrent()
+      return fetchCloudCommand(this.#fetch,
       `${baseUrl}/v1/commands`,
       {
         method: 'POST',
@@ -511,7 +601,8 @@ export class CloudIdentityRuntime {
         body: JSON.stringify(request.payload),
         signal
       }
-    )
+      )
+    }
     this.#assertSessionIdentity(session)
     const response = await send(accessToken)
     if (response.status !== 401) return response
@@ -525,29 +616,72 @@ export class CloudIdentityRuntime {
   }
 
   stageAuthenticatedCloudObject(input: AuthenticatedObjectStageInput, options?: Readonly<{ signal?: AbortSignal }>) {
-    return stageCloudObject(input, (operation, requestOptions) => this.#withObjectAuthority(operation, requestOptions), options)
+    return stageCloudObject(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
   }
 
   readAuthenticatedCloudObject(input: AuthenticatedObjectReadInput, options?: Readonly<{ signal?: AbortSignal }>) {
-    return readCloudObject(input, (operation, requestOptions) => this.#withObjectAuthority(operation, requestOptions), options)
+    return readCloudObject(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
   }
 
-  async #withObjectAuthority<Result>(operation: (lease: ObjectTransportLease) => Promise<Result>, options?: Readonly<{ signal?: AbortSignal }>): Promise<Result> {
+  lookupDocumentShare(input: DocumentShareLookupRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return lookupDocumentShare(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  createDocumentShare(input: DocumentShareCreateRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return createDocumentShare(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  revokeDocumentShare(input: DocumentShareRevokeRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return revokeDocumentShare(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  readDocumentComments(input: DocumentCommentReadRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return readDocumentComments(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  mutateDocumentComments(input: DocumentCommentMutateRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return mutateDocumentComments(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  listAuthenticatedCloudSpaces(options?: Readonly<{ signal?: AbortSignal }>) {
+    return listCloudSpaces((operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  ensureAuthenticatedCloudSpace(input: CloudSpaceEnsureRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return ensureCloudSpace(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  createAuthenticatedCloudSpaceSession(input: CloudSpaceSessionRequest, options?: Readonly<{ signal?: AbortSignal }>) {
+    return createCloudSpaceSession(input, (operation, requestOptions) => this.#withCloudAuthority(operation, requestOptions), options)
+  }
+
+  async #withCloudAuthority<Result>(operation: (lease: CloudTransportLease) => Promise<Result>, options?: Readonly<{ signal?: AbortSignal }>): Promise<Result> {
     this.#assertOpen()
-    const initial = this.authenticatedCloudTransportStatus()
+    let available = this.authenticatedCloudTransportStatus()
+    // A transient verification failure must not permanently fence the very
+    // request that can verify the device again. Preserve the initiating account
+    // across recovery; a revoked or replaced device still fails the normal gate.
+    if (available.state === 'unavailable' && available.reasonCode === 'authority_unverified') {
+      const recoveringSession = this.#identity.sessionIdentity()
+      const recovery = this.revalidateCurrentDevice()
+      available = options?.signal ? await waitWithSignal(recovery, options.signal) : await recovery
+      this.#assertOpen()
+      if (recoveringSession) this.#assertSessionIdentity(recoveringSession)
+    }
+    const initial = available
     if (initial.state !== 'ready') {
       throw new AuthenticatedCloudTransportError(initial.state === 'identity_required' ? 'identity_required' :
-        initial.state === 'device_required' ? 'device_required' : 'transport_unavailable', 'Cloud object access requires a current signed-in User and active Device.')
+        initial.state === 'device_required' ? 'device_required' : 'transport_unavailable', 'Cloud access requires a current signed-in User and active Device.')
     }
     const initialSession = this.#identity.sessionIdentity()
     if (!initialSession) {
       throw new AuthenticatedCloudTransportError(
         'identity_required',
-        'Cloud object access requires a current signed-in User and active Device.'
+        'Cloud access requires a current signed-in User and active Device.'
       )
     }
     const controller = new AbortController()
-    this.#objectOperations.add(controller)
+    this.#leasedOperations.add(controller)
     const abort = (): void => { controller.abort() }
     options?.signal?.addEventListener('abort', abort, { once: true })
     if (options?.signal?.aborted) abort()
@@ -556,7 +690,7 @@ export class CloudIdentityRuntime {
       if (controller.signal.aborted || current?.state !== 'ready' || current.userId !== initial.userId ||
         current.deviceId !== initial.deviceId || current.deviceRevision !== initial.deviceRevision) {
         abort()
-        throw new AuthenticatedCloudTransportError('operation_not_allowed', 'The object transfer identity, Device or cancellation lease is no longer current.')
+        throw new AuthenticatedCloudTransportError('operation_not_allowed', 'The Cloud request identity, Device or cancellation lease is no longer current.')
       }
     }
     const observe = (): void => { try { assertCurrent() } catch { abort() } }
@@ -595,12 +729,12 @@ export class CloudIdentityRuntime {
     } catch (error) {
       if (error instanceof AuthenticatedCloudTransportError) throw error
       if (error instanceof DesktopIdentityError) throw authenticationFailure(error)
-      throw new AuthenticatedCloudTransportError('cloud_unavailable', 'The Cloud object operation did not complete; reconcile the original operation before retrying.', { cause: error })
+      throw new AuthenticatedCloudTransportError('cloud_unavailable', 'The Cloud operation did not complete; reconcile the original operation before retrying.', { cause: error })
     } finally {
       stopIdentity()
       stopDevice()
       options?.signal?.removeEventListener('abort', abort)
-      this.#objectOperations.delete(controller)
+      this.#leasedOperations.delete(controller)
     }
   }
 
@@ -617,8 +751,8 @@ export class CloudIdentityRuntime {
   close(): void {
     if (this.#closed) return
     this.#closed = true
-    for (const controller of this.#objectOperations) controller.abort()
-    this.#objectOperations.clear()
+    for (const controller of this.#leasedOperations) controller.abort()
+    this.#leasedOperations.clear()
     this.#authorityIdentityKey = null
     this.#authorityUserKey = null
     this.#invalidateAuthority({ code: 'runtime_closed', message: 'Cloud identity runtime closed.' })
@@ -628,6 +762,19 @@ export class CloudIdentityRuntime {
     this.#identity.close()
     this.#links.close()
     this.#listeners.clear()
+  }
+
+  #profileRefresh: Promise<void> | null = null
+  #profileRefreshedAt = 0
+
+  async #refreshProfile(): Promise<void> {
+    if (Date.now() - this.#profileRefreshedAt < 30_000) return
+    if (!this.#profileRefresh) {
+      this.#profileRefresh = this.#identity.refreshProfile().then(() => {
+        this.#profileRefreshedAt = Date.now()
+      }).finally(() => { this.#profileRefresh = null })
+    }
+    await this.#profileRefresh
   }
 
   #projectAuthenticatedUser(status: DesktopIdentityStatus): void {
@@ -821,6 +968,85 @@ async function readApplicationVersion(appRoot: string): Promise<string> {
     throw new Error('SciForge application metadata does not contain a valid version.')
   }
   return version
+}
+
+function createRuntimeProviders(
+  options: CloudIdentityRuntimeOptions,
+  links: CloudIdentityLinks,
+  appVersion: string
+): RuntimeProviders {
+  const identityConfig = resolveDesktopIdentityRuntimeConfig({
+    oidcIssuer: options.environment.SCIFORGE_OIDC_ISSUER,
+    cloudBaseUrl: options.environment.SCIFORGE_CLOUD_BASE_URL,
+    settings: options.settings
+  })
+  const cloudBaseUrl = identityConfig.mode === 'http'
+    ? identityConfig.cloudBaseUrl.replace(/\/+$/u, '')
+    : null
+  const identityClient = identityConfig.mode === 'http'
+    ? new HttpCloudIdentityClient({
+        baseUrl: cloudBaseUrl!,
+        ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {})
+      })
+    : createUnavailableCloudIdentityClient(identityConfig.error)
+  const navigationError = options.externalNavigation
+    ? undefined
+    : 'Cloud identity requires the Host external-navigation service.'
+  const configurationError = [
+    identityConfig.mode === 'disabled' ? identityConfig.error : undefined,
+    navigationError
+  ].filter((value): value is string => Boolean(value)).join(' ')
+  const openExternal = async (url: string): Promise<void> => {
+    if (!options.externalNavigation) throw new Error(navigationError)
+    const target = options.externalNavigation.issueTarget({
+      url,
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    })
+    await options.externalNavigation.openTarget({ handle: target.handle })
+  }
+  let identity: DesktopIdentityService | undefined
+  let device: DesktopDeviceService | undefined
+  try {
+    identity = new DesktopIdentityService({
+      issuer: identityConfig.issuer,
+      clientId: 'sciforge-desktop',
+      audience: 'sciforge-cloud-api',
+      identityClient,
+      sessionStore: new PrivateVaultDesktopIdentitySessionStore(options.privateVault),
+      linkAuthenticatedUser: (user) => {
+        links.linkIdentity({
+          cloudUserId: user.userId,
+          oidcIdentityId: user.oidcIdentityId,
+          issuer: user.issuer,
+          subject: user.subject,
+          displayName: user.displayName
+        })
+      },
+      ...(configurationError ? { configurationError } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      openExternal
+    })
+    device = new DesktopDeviceService({
+      identity,
+      client: identityClient,
+      installationSeed: options.installationId,
+      vault: options.privateVault,
+      appVersion,
+      linkDevice: (cloudDevice) => {
+        links.linkDevice(cloudDevice.userId, cloudDevice.deviceId, cloudDevice.status)
+      }
+    })
+    return {
+      identity,
+      device,
+      cloudBaseUrl,
+      transportUnavailableReason: configurationError || null
+    }
+  } catch (error) {
+    device?.close()
+    identity?.close()
+    throw error
+  }
 }
 
 function createCloudIdentityLinks(userDataDir: string): Readonly<{

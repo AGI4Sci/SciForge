@@ -12,7 +12,9 @@
  */
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
+import { pluginHostServicesSchema } from '@sciforge/plugin-sdk'
 import {
   installDshPluginArtifact,
   uninstallDshPlugin,
@@ -46,6 +48,7 @@ const dshMarketPluginSchema = z.object({
   entry: z.string().trim().min(1).max(1_024),
   tools: z.array(dshMarketApprovalToolSchema).max(64),
   ports: marketPortsSchema.default([]),
+  hostServices: pluginHostServicesSchema,
   hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64),
   publisher: z.string().trim().min(1).max(128).regex(identifier).nullable(),
   artifact: z.object({
@@ -65,7 +68,8 @@ const dshMarketBlockedSchema = z.object({
   version: z.string().trim().min(1).max(64),
   reason: z.string().trim().min(1).max(2_048),
   detail: z.string().trim().min(1).max(2_048).nullable().default(null),
-  runtimeGap: z.string().trim().min(1).max(2_048).nullable().default(null)
+  runtimeGap: z.string().trim().min(1).max(2_048).nullable().default(null),
+  source: z.string().trim().min(1).max(512).optional()
 }).strict()
 
 export const dshMarketIndexSchema = z.object({
@@ -88,7 +92,12 @@ export function resolveDshMarketSource(
 ): DshMarketSource | undefined {
   const configured = options.configured?.trim() || options.env.SCIFORGE_MARKET_INDEX?.trim()
   if (configured) {
-    return /^https?:\/\//.test(configured) ? { kind: 'url', url: configured } : { kind: 'file', path: resolve(configured) }
+    if (/^https?:\/\//i.test(configured)) return { kind: 'url', url: new URL(configured).href }
+    if (/^file:/i.test(configured)) return { kind: 'file', path: fileURLToPath(configured) }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(configured) && !/^[a-z]:[\\/]/i.test(configured)) {
+      throw new Error('The plugin market source must be a local path, file URL or HTTP(S) URL.')
+    }
+    return { kind: 'file', path: resolve(configured) }
   }
   return options.bundledIndexPath ? { kind: 'file', path: resolve(options.bundledIndexPath) } : undefined
 }
@@ -163,7 +172,7 @@ export function resolveArtifactLocation(source: DshMarketSource, file: string): 
 function approvalFor(entry: DshMarketPlugin) {
   return normalizeDshMarketApproval({ packageName: entry.name, version: entry.version,
     sha256: entry.artifact.sha256, publisher: entry.publisher, entry: entry.entry,
-    tools: entry.tools, ports: entry.ports, hostDependencies: entry.hostDependencies })
+    tools: entry.tools, ports: entry.ports, hostServices: entry.hostServices === 'none' ? [] : entry.hostServices ?? [], hostDependencies: entry.hostDependencies })
 }
 
 export async function installDshMarketPlugin(
@@ -326,6 +335,12 @@ export type DshMarketSurface = Readonly<{
  */
 export function createDshMarketSurface(deps: Readonly<{
   source: DshMarketSource | undefined
+  /**
+   * The catalog bundled with this build. It is only read when the configured
+   * source cannot be read, so an offline or misconfigured Host still lists a
+   * catalog instead of an empty panel.
+   */
+  fallbackSource?: DshMarketSource
   installDeps: DshMarketDeps['installDeps']
   listInstalled: () => Promise<readonly DshMarketInstalledPlugin[]>
   setEnabled: (packageName: string, enabled: boolean) => Promise<unknown>
@@ -364,7 +379,8 @@ export function createDshMarketSurface(deps: Readonly<{
     dshRuntimeVersion: null,
     plugins: [],
     notInstallable: [],
-    error
+    error,
+    fallback: false
   })
 
   const decorate = (
@@ -394,25 +410,44 @@ export function createDshMarketSurface(deps: Readonly<{
     installedVersion: installed.get(entry.name)?.version ?? null
   })
 
+  const readCatalog = async (
+    source: DshMarketSource
+  ): Promise<Readonly<{ index: DshMarketIndex; error?: undefined } | { index?: undefined; error: string }>> => {
+    try {
+      return { index: await readDshMarketIndex(source) }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   const surface: DshMarketSurface = {
     list: async () => {
       if (deps.source === undefined) {
         return emptyView('No plugin market index is configured for this Host.')
       }
-      let index: DshMarketIndex
-      try {
-        index = await readDshMarketIndex(deps.source)
-      } catch (error) {
-        return emptyView(error instanceof Error ? error.message : String(error))
+      let catalog = await readCatalog(deps.source)
+      let source = deps.source
+      let fallback = false
+      if (catalog.index === undefined && deps.fallbackSource !== undefined) {
+        const local = await readCatalog(deps.fallbackSource)
+        if (local.index !== undefined) {
+          catalog = local
+          source = deps.fallbackSource
+          fallback = true
+        }
+      }
+      if (catalog.index === undefined) {
+        return emptyView(catalog.error)
       }
       const installed = new Map((await deps.listInstalled()).map((entry) => [entry.packageName, entry]))
       return {
-        source: { kind: deps.source.kind, location: deps.source.kind === 'file' ? deps.source.path : deps.source.url },
-        generatedAt: index.generatedAt,
-        dshRuntimeVersion: index.dshRuntimeVersion,
-        plugins: index.plugins.map((entry) => decorate(entry, installed)),
-        notInstallable: index.blocked,
-        error: null
+        source: { kind: source.kind, location: source.kind === 'file' ? source.path : source.url },
+        generatedAt: catalog.index.generatedAt,
+        dshRuntimeVersion: catalog.index.dshRuntimeVersion,
+        plugins: catalog.index.plugins.map((entry) => decorate(entry, installed)),
+        notInstallable: catalog.index.blocked,
+        error: null,
+        fallback
       }
     },
     install: async (input) => {

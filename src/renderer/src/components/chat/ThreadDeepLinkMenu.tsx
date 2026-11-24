@@ -23,7 +23,7 @@ export function ThreadDeepLinkMenuItem({ threadId, onCopied }: {
       role="menuitem"
       disabled={!threadId.trim()}
       onClick={() => void copy()}
-      className="flex min-h-[30px] w-full items-center gap-2 rounded-md px-2 text-left text-[13px] text-ds-ink transition hover:bg-[var(--ds-sidebar-row-hover)] disabled:opacity-50"
+      className="flex min-h-[30px] w-full items-center gap-2 rounded-md px-2 text-left text-ds-md text-ds-ink transition hover:bg-[var(--ds-sidebar-row-hover)] disabled:opacity-50"
     >
       <Link className="h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={1.9} />
       <span role={failed ? 'alert' : undefined}>{t(failed ? 'copyFailed' : 'copyThreadDeepLink')}</span>
@@ -62,7 +62,7 @@ export function useThreadDeepLinkContextMenu(): {
     },
     menu: target ? createPortal(
       <div
-        role="menu"
+        data-native-view-occluder="true" role="menu"
         aria-label={t('copyThreadDeepLink')}
         className="ds-no-drag fixed z-50 min-w-[180px] rounded-lg border border-ds-border bg-ds-card p-1 shadow-xl"
         style={{ left: target.x, top: target.y }}

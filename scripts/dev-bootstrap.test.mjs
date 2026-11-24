@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import process from 'node:process'
 import { test } from 'node:test'
 
 import {
   DEV_PREPARATION_SCRIPTS,
   DEV_FORWARD_SIGNALS,
+  describeUnlinkedWorkspacePackages,
   devChildSpawnOptions,
   devElectronCliArguments,
+  findUnlinkedWorkspacePackages,
   forwardSignalToDevChild,
+  listWorkspacePackageNames,
   mergeDevelopmentEnvironment
 } from './dev-bootstrap.mjs'
 
@@ -20,6 +25,54 @@ test('development startup prepares secure domain runtimes before agent support',
     'build:agent-support'
   ])
 })
+
+test('workspace discovery expands globs and skips directories without a manifest', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspaces-'))
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      workspaces: ['packages/*', 'packages/domains/*', 'tools/plain']
+    }))
+    await writeManifest(join(root, 'packages', 'domain-sdk'), '@sciforge/domain-sdk')
+    await writeManifest(join(root, 'packages', 'domains', 'alpha'), '@sciforge/domain-alpha')
+    await writeManifest(join(root, 'packages', 'domains', 'empty'))
+    await mkdir(join(root, 'packages', 'domains', 'no-manifest'), { recursive: true })
+    await writeManifest(join(root, 'tools', 'plain'), 'plain-tool')
+
+    assert.deepEqual(await listWorkspacePackageNames(root), [
+      '@sciforge/domain-alpha',
+      '@sciforge/domain-sdk',
+      'plain-tool'
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('stale node_modules is reported as unlinked workspace packages, not a Rollup error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-unlinked-'))
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/domains/*'] }))
+    await writeManifest(join(root, 'packages', 'domains', 'alpha'), '@sciforge/domain-alpha')
+    await writeManifest(join(root, 'packages', 'domains', 'beta'), '@sciforge/domain-beta')
+    await mkdir(join(root, 'node_modules', '@sciforge', 'domain-alpha'), { recursive: true })
+
+    // A lockfile that moved ahead of the installed tree leaves the link absent;
+    // the resolver then fails inside a generated import list (#219).
+    assert.deepEqual(await findUnlinkedWorkspacePackages(root), ['@sciforge/domain-beta'])
+
+    const message = describeUnlinkedWorkspacePackages(['@sciforge/domain-beta'])
+    assert.match(message, /1 unlinked: @sciforge\/domain-beta/u)
+    assert.match(message, /npm install/u)
+    assert.match(describeUnlinkedWorkspacePackages(['a/b', 'c/d', 'e/f', 'g/h', 'i/j', 'k/l']), /and 1 more/u)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+async function writeManifest(directory, name) {
+  await mkdir(directory, { recursive: true })
+  await writeFile(join(directory, 'package.json'), JSON.stringify(name ? { name } : {}))
+}
 
 test('versioned development deployment values fill only missing environment entries', () => {
   assert.deepEqual(mergeDevelopmentEnvironment(

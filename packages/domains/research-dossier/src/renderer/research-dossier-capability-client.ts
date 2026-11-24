@@ -20,6 +20,7 @@ import {
   artifactVersionListResultV2Schema,
   artifactVersionMaterializeInputV1Schema,
   artifactVersionMaterializeResultV1Schema,
+  artifactVersionObserveInputV1Schema,
   artifactVersionReadInputV1Schema,
   artifactVersionReadResultV1Schema,
   artifactVersionRestoreAsNewInputV1Schema,
@@ -33,6 +34,7 @@ import {
   type ArtifactVersionListV2,
   type ArtifactVersionMaterializeInputV1,
   type ArtifactVersionMaterializeReceiptV1,
+  type ArtifactVersionObserveInputV1,
   type ArtifactVersionReadInputV1,
   type ArtifactVersionReadV1,
   type ArtifactVersionResultV1,
@@ -72,6 +74,12 @@ import {
 } from '@sciforge/domain-research-checkpoints/contract'
 
 const contracts = Object.freeze({
+  observeArtifact: {
+    actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.observe,
+    effect: 'workspace-write' as const,
+    inputSchema: artifactVersionObserveInputV1Schema,
+    outputSchema: artifactVersionCommitResultV1Schema
+  },
   evidenceAudit: {
     actionId: RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS.evidenceAuditQuery,
     effect: 'read' as const,
@@ -166,6 +174,10 @@ const contracts = Object.freeze({
 
 export type ResearchDossierCapabilityClient = Readonly<{
   capabilityInvoker?: DomainRendererCapabilityInvoker
+  observeArtifactVersion(
+    workspaceRoot: string,
+    input: ArtifactVersionObserveInputV1
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionCommitReceiptV1>>
   queryEvidenceAudit(workspaceRoot: string, ref: AuditArtifactVersionRefV1): Promise<ResearchAuditEvidenceAuditQueryOutput>
   describeArtifactVersion(
     workspaceRoot: string,
@@ -230,6 +242,11 @@ export function createResearchDossierCapabilityClient(
 ): ResearchDossierCapabilityClient {
   return Object.freeze({
     capabilityInvoker: invoker,
+    observeArtifactVersion: (workspaceRoot, input) => invoker.invoke(
+      contracts.observeArtifact,
+      input,
+      { workspaceId: workspaceRoot }
+    ),
     queryEvidenceAudit: (workspaceRoot, ref) => invoker.invoke(
       contracts.evidenceAudit,
       { subject: { artifactVersionRef: ref } },

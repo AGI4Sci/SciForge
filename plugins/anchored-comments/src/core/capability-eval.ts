@@ -13,7 +13,7 @@ import {
 import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 import {
   ANCHORED_COMMENT_CAPABILITY_IDS,
-  ANCHORED_COMMENT_SCHEMA_VERSION,
+  ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
   anchoredCommentThreadSchema,
   type AnchoredCommentThread,
   type CommentScreenshotAssetRef,
@@ -33,8 +33,10 @@ export const ANCHORED_COMMENTS_UPSERT_EVAL_CASE_ID = 'anchored-comments-upsert-l
 export const ANCHORED_COMMENTS_DELETE_EVAL_CASE_ID = 'anchored-comments-delete-local-fixture'
 export const ANCHORED_COMMENTS_READ_ASSET_EVAL_CASE_ID = 'anchored-comments-read-asset-local-fixture'
 export const ANCHORED_COMMENTS_FEEDBACK_STATUS_EVAL_CASE_ID = 'anchored-comments-feedback-status-local-fixture'
+export const ANCHORED_COMMENTS_RECONCILE_EVAL_CASE_ID = 'anchored-comments-anchor-reconcile-local-fixture'
 
 const ANCHORED_COMMENTS_EVAL_CASE_IDS = new Set([
+  ANCHORED_COMMENTS_RECONCILE_EVAL_CASE_ID,
   ANCHORED_COMMENTS_LIST_EVAL_CASE_ID,
   ANCHORED_COMMENTS_GET_EVAL_CASE_ID,
   ANCHORED_COMMENTS_UPSERT_EVAL_CASE_ID,
@@ -59,6 +61,7 @@ export const ANCHORED_COMMENTS_CAPABILITY_EVAL_CONTRIBUTION: DomainCapabilityEva
   contractVersion: DOMAIN_CAPABILITY_EVAL_CONTRACT_VERSION,
   actionIds: Object.values(ANCHORED_COMMENT_CAPABILITY_IDS),
   evaluationActionIds: [
+    ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor,
     ANCHORED_COMMENT_CAPABILITY_IDS.list,
     ANCHORED_COMMENT_CAPABILITY_IDS.get,
     ANCHORED_COMMENT_CAPABILITY_IDS.upsert,
@@ -79,7 +82,11 @@ async function prepareAnchoredCommentsEvaluationFixture(
   const service = new AnchoredCommentService(userDataDirectory)
   const paths = [relative(context.workspaceDirectory, anchoredCommentStorePath(userDataDirectory))]
 
-  if (caseId === ANCHORED_COMMENTS_LIST_EVAL_CASE_ID ||
+  if (caseId === ANCHORED_COMMENTS_RECONCILE_EVAL_CASE_ID) {
+    const thread = makeThread('eval-thread-code', 'Preserve this original code discussion.')
+    thread.anchor.codeAnchor = { filePath: 'src/eval.ts', side: 'new', line: 1, code: 'value()', hunkHeader: '', baseRevision: 'abc', contentDigest: 'a'.repeat(64) }
+    await service.upsertThread(thread)
+  } else if (caseId === ANCHORED_COMMENTS_LIST_EVAL_CASE_ID ||
       caseId === ANCHORED_COMMENTS_GET_EVAL_CASE_ID) {
     await service.upsertThread(makeThread('eval-thread-readable', 'Read this deterministic comment.'))
   } else if (caseId === ANCHORED_COMMENTS_DELETE_EVAL_CASE_ID) {
@@ -129,6 +136,17 @@ async function inspectAnchoredCommentsEvaluation(input: Readonly<{
       return { taskSuccess: false, evidence: ['List did not preserve and expose the deterministic comment store entry.'], verifiedActions: [] }
     }
     return success(ANCHORED_COMMENT_CAPABILITY_IDS.list, 'Independently read comments.json and verified the workspace-filtered thread.')
+  }
+
+  if (caseId === ANCHORED_COMMENTS_RECONCILE_EVAL_CASE_ID) {
+    const invocation = successfulInvocation(input.invocations, ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor)
+    const thread = store.threads.find(candidate => candidate.id === 'eval-thread-code')
+    if (!invocation || !matchesArgs(invocation.args, { threadId: 'eval-thread-code' }) || thread?.anchorResolution !== 'needs_retargeting'
+      || thread.anchor.codeAnchor?.baseRevision !== 'abc' || thread.anchor.codeAnchor?.contentDigest !== 'a'.repeat(64)
+      || thread.messages[0]?.body !== 'Preserve this original code discussion.') {
+      return { taskSuccess: false, evidence: ['Stale anchor status or original evidence was not preserved.'], verifiedActions: [] }
+    }
+    return success(ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, 'Independently read stale status and unchanged saved code evidence from comments.json.')
   }
 
   if (caseId === ANCHORED_COMMENTS_GET_EVAL_CASE_ID) {
@@ -194,7 +212,7 @@ function makeThread(
 ): AnchoredCommentThread {
   const timestamp = '2026-09-17T00:00:00.000Z'
   return anchoredCommentThreadSchema.parse({
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     id,
     workspaceKey: EVAL_WORKSPACE_KEY,
     purpose: 'research',

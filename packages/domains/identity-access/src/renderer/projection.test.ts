@@ -27,6 +27,16 @@ const cloudResource = {
   expiresAt: '2027-08-21T00:00:00.000Z'
 }
 
+const cloudConfiguration = {
+  configured: true,
+  oidcIssuer: 'https://identity.example.test/realms/SciForge',
+  cloudBaseUrl: 'https://cloud.example.test',
+  source: { oidcIssuer: 'settings' as const, cloudBaseUrl: 'settings' as const },
+  missing: [] as const,
+  invalid: [] as const,
+  storage: 'available' as const
+}
+
 describe('IdentityRendererProjection', () => {
   it('keeps a non-authoritative capability-backed projection without local persistence', async () => {
     const client: IdentityRendererClient = clientFixture({
@@ -322,6 +332,51 @@ describe('IdentityRendererProjection', () => {
     projection.dispose()
   })
 
+  it('re-inspects Cloud state after saving deployment configuration', async () => {
+    const configuredCloud: CloudIdentitySnapshot = {
+      ...cloudSignedOut,
+      revision: 'cloud-2'
+    }
+    const configuredResource = {
+      ...cloudResource,
+      token: `cap_${'f'.repeat(24)}`,
+      semanticRevision: 'cloud-2'
+    }
+    const inspectCloud = vi.fn()
+      .mockResolvedValueOnce({ snapshot: cloudSignedOut, resource: cloudResource })
+      .mockResolvedValueOnce({ snapshot: configuredCloud, resource: configuredResource })
+    const configureCloud = vi.fn(async () => cloudConfiguration)
+    const client = clientFixture({
+      inspectCloud,
+      configureCloud,
+      observeCloud: vi.fn(async (resource) => ({
+        resource,
+        resourceRef: `res_${'b'.repeat(24)}`,
+        resourceKind: 'identity.cloud-session',
+        semanticRevision: resource.semanticRevision,
+        observedAt: '2026-08-21T00:00:00.000Z',
+        state: resource.semanticRevision === 'cloud-2' ? configuredCloud : cloudSignedOut
+      }))
+    })
+    const projection = new IdentityRendererProjection(client)
+
+    await projection.load()
+    const input = {
+      oidcIssuer: 'https://identity.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://cloud.example.test'
+    }
+    await projection.configureCloud(input)
+
+    expect(configureCloud).toHaveBeenCalledWith(input)
+    expect(inspectCloud).toHaveBeenCalledTimes(2)
+    expect(projection.getSnapshot()).toMatchObject({
+      cloud: { revision: 'cloud-2' },
+      cloudResource: { token: configuredResource.token },
+      error: null
+    })
+    projection.dispose()
+  })
+
   it('does not let a deferred initial inspection replace a newer re-issued resource', async () => {
     const initialInspection = deferred<Awaited<ReturnType<IdentityRendererClient['inspectCloud']>>>()
     const currentCloud: CloudIdentitySnapshot = {
@@ -450,6 +505,7 @@ function clientFixture(
     createAccount: vi.fn(),
     selectAccount: vi.fn(),
     renameAccount: vi.fn(),
+    deleteAccount: vi.fn(),
     exitAccount: vi.fn(),
     dismissFirstPrompt: vi.fn(),
     backupAndReset: vi.fn(),
@@ -471,6 +527,8 @@ function clientFixture(
     enrollCloudDevice: vi.fn(async () => cloudSignedOut),
     refreshCloudDevices: vi.fn(async () => cloudSignedOut),
     revokeCloudDevice: vi.fn(async () => cloudSignedOut),
+    inspectCloudConfiguration: vi.fn(async () => cloudConfiguration),
+    configureCloud: vi.fn(async () => cloudConfiguration),
     ...overrides
   }
 }

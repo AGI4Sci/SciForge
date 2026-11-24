@@ -55,13 +55,13 @@ export function WorkflowRunLogPanel({
       {hideHeader ? null : (
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-ds-border px-4">
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" strokeWidth={2} /> : null}
-          <h2 className="text-[13px] font-semibold text-ds-ink">{t('workflowRunLog')}</h2>
-          {ordered.length > 0 ? <span className="text-[11px] text-ds-faint">{ordered.length}</span> : null}
+          <h2 className="text-ds-md font-semibold text-ds-ink">{t('workflowRunLog')}</h2>
+          {ordered.length > 0 ? <span className="text-ds-xs text-ds-faint">{ordered.length}</span> : null}
         </header>
       )}
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
         {ordered.length === 0 ? (
-          <p className="px-3 py-8 text-center text-[12.5px] leading-5 text-ds-faint">{t('workflowRunLogEmpty')}</p>
+          <p className="px-3 py-8 text-center text-ds-sm leading-5 text-ds-faint">{t('workflowRunLogEmpty')}</p>
         ) : (
           ordered.map((result) => (
             <LogItem key={result.nodeId} result={result} name={names.get(result.nodeId) ?? result.nodeId} />
@@ -91,13 +91,13 @@ function LogItem({ result, name }: { result: WorkflowNodeRunResultV1; name: stri
         ) : (
           <span className={`h-2 w-2 shrink-0 rounded-full ${tone(result.status)}`} />
         )}
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ds-ink">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-ds-sm font-medium text-ds-ink">{name}</span>
         {retries > 0 ? (
-          <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+          <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-ds-2xs font-medium text-amber-700">
             {t('workflowRetriesBadge', { n: retries })}
           </span>
         ) : null}
-        {elapsed ? <span className="shrink-0 text-[10.5px] text-ds-faint">{elapsed}</span> : null}
+        {elapsed ? <span className="shrink-0 text-ds-2xs text-ds-faint">{elapsed}</span> : null}
       </button>
 
       {open ? (
@@ -106,7 +106,7 @@ function LogItem({ result, name }: { result: WorkflowNodeRunResultV1; name: stri
           {result.message ? <ValueBlock label={t('workflowResultMessage')} value={result.message} /> : null}
           <ValueBlock label={t('workflowResultInput')} value={result.inputJson || '—'} mono />
           {result.status === 'running' ? (
-            <p className="text-[11px] italic text-ds-faint">{t('workflowRunLogWaiting')}</p>
+            <p className="text-ds-xs italic text-ds-faint">{t('workflowRunLogWaiting')}</p>
           ) : (
             <ValueBlock label={t('workflowResultOutput')} value={result.outputJson || '—'} mono />
           )}
@@ -130,9 +130,9 @@ function ValueBlock({
 }): ReactElement {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[10px] font-medium uppercase text-ds-faint">{label}</span>
+      <span className="text-ds-2xs font-medium uppercase text-ds-faint">{label}</span>
       <pre
-        className={`max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md px-2.5 py-1.5 text-[11px] leading-5 ${
+        className={`max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md px-2.5 py-1.5 text-ds-xs leading-5 ${
           error ? 'bg-red-500/10 text-red-600' : 'bg-ds-subtle text-ds-muted'
         } ${mono ? 'font-mono' : ''}`}
       >

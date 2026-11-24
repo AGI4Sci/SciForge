@@ -1,0 +1,26 @@
+{
+  "name": "@sciforge/domain-review-control",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Staging contracts for the local review control plane.",
+  "exports": {
+    "./definition": "./src/definition.ts",
+    "./contract": "./src/contract.ts",
+    "./main": "./src/main.ts"
+  },
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/domain-artifact-versions": "^1.4.0",
+    "@sciforge/domain-sdk": "^0.2.24",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

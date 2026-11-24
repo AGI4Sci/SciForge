@@ -32,7 +32,7 @@ describe('domain Agent execution Host', () => {
     expect(runtime.startThread).toHaveBeenCalledWith(expect.objectContaining({ contextProfile: 'minimal',
       sidebarVisibility: 'hidden', mode: 'agent', allowedTools: [] }))
     expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({ contextProfile: 'minimal',
-      text: 'Only supplied data.', reasoningEffort: 'low', outputSchema: { type: 'object' }, allowedTools: [] }))
+      text: 'Only supplied data.', executionIntent: { mode: 'answer' }, reasoningEffort: 'low', outputSchema: { type: 'object' }, allowedTools: [] }))
   })
   it('settles the captured interrupted turn after HTTP 200 without task_complete', async () => {
     // final21 evidence 65/66/70: only task_started then turn_aborted;
@@ -625,3 +625,56 @@ function terminalEvent(
     occurredAt: '2026-08-15T00:00:00.000Z'
   }
 }
+
+
+describe('native Session continuation inspection', () => {
+  const session = { runtimeId: 'codex', threadId: 'thread-fixed' }
+  function host(runtime: ExecutionRuntime) {
+    return createDomainAgentExecutionHost({ runtime, defaultRuntimeId: () => 'codex',
+      runtimeReadiness: () => ({ state: 'ready', runtimeId: 'codex', capabilityTags: [] }) })
+  }
+  it('keeps transport, authentication and unrecognized native errors unknown', async () => {
+    for (const message of ['timeout', 'not found', 'authentication required', 'runtime_thread_not_found: unrelated']) {
+      const runtime = fakeRuntime({ readThreadStatus: vi.fn(async () => { throw new Error(message) }) })
+      expect(await host(runtime).inspectSession!(session)).toEqual({ state: 'unknown' })
+    }
+  })
+  it('recognizes only the exact native tombstone', async () => {
+    const runtime = fakeRuntime({ readThreadStatus: vi.fn(async () => { throw new Error('runtime_thread_not_found') }) })
+    expect(await host(runtime).inspectSession!(session)).toEqual({ state: 'missing' })
+  })
+  it.each(['codex', 'claude', 'dsh', 'pi'] as const)('inspects and continues the explicit %s binding without selecting another runtime', async (runtimeId) => {
+    const runtime = fakeRuntime({
+      readThreadSnapshot: vi.fn(async () => ({ ...threadSnapshot('/workspace/project'), runtimeId })),
+      readThreadStatus: vi.fn(async (): Promise<AgentRuntimeThreadStatus> => ({ id: session.threadId, runtimeId, latestSeq: 3,
+        latestTurnId: 'turn-1', latestTurnStatus: 'completed' })),
+      readThreadPage: vi.fn(async (): Promise<AgentRuntimeThreadPage> => ({ runtimeId, threadId: session.threadId, latestSeq: 3,
+        turns: [{ id: 'turn-1', threadId: session.threadId, status: 'completed',
+          items: [{ id: 'final', kind: 'assistant_message', text: 'continued' }] }], nextCursor: null }))
+    })
+    const execution = host(runtime)
+    expect(await execution.inspectSession!({ ...session, runtimeId })).toEqual({ state: 'quiescent' })
+    expect(await execution.run({ ...session, runtimeId, clientDirectiveId: 'exact-runtime-continuation', prompt: 'Continue.' }))
+      .toMatchObject({ runtimeId, threadId: session.threadId, state: 'completed', text: 'continued' })
+    expect(runtime.startThread).not.toHaveBeenCalled()
+    expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({ runtimeId, threadId: session.threadId }))
+  })
+  it('accepts a typed native missing code but rejects unrelated error codes and text', async () => {
+    for (const runtimeId of ['dsh', 'pi'] as const) {
+      const native = fakeRuntime({ readThreadStatus: vi.fn(async () => {
+        throw Object.assign(new Error(`Unknown native thread: ${session.threadId}`), { code: 'runtime_thread_not_found' })
+      }) })
+      expect(await host(native).inspectSession!({ ...session, runtimeId })).toEqual({ state: 'missing' })
+    }
+    const unavailable = fakeRuntime({ readThreadStatus: vi.fn(async () => {
+      throw Object.assign(new Error('runtime_thread_not_found: upstream unavailable'), { code: 'ECONNRESET' })
+    }) })
+    expect(await host(unavailable).inspectSession!(session)).toEqual({ state: 'unknown' })
+  })
+  it('active thread state overrides a stale terminal latest-turn projection', async () => {
+    const runtime = fakeRuntime({ readThreadStatus: vi.fn(async (): Promise<AgentRuntimeThreadStatus> => ({ ...session, id: session.threadId,
+      runtimeId: 'codex', latestSeq: 2, status: 'running', latestTurnStatus: 'completed' })) })
+    expect(await host(runtime).inspectSession!(session)).toEqual({ state: 'active' })
+    expect(await host(fakeRuntime()).inspectSession!(session)).toEqual({ state: 'quiescent' })
+  })
+})

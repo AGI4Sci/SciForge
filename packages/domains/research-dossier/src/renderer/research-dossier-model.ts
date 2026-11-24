@@ -183,14 +183,19 @@ export function previewableRef(
   return ref?.retention === 'snapshot' && ref.availability === 'available' ? ref : null
 }
 
-export function previewDestination(ref: ArtifactVersionRefV1): string {
+export const LOCAL_MATERIAL_KIND = 'research-material'
+
+export function previewDestination(ref: ArtifactVersionRefV1, observedPath?: string): string {
   const safeVersion = ref.versionId
     .normalize('NFKD')
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/gu, '-')
     .replace(/^-+|-+$/gu, '')
     .slice(0, 96) || 'artifact-version'
-  return `.sciforge/research-dossier/previews/${safeVersion}-${ref.contentDigest.slice(0, 12)}${mediaExtension(ref.mediaType)}`
+  // Preserve a registered file's format so the installed preview registry can select its owner.
+  // The source path contributes only a safe suffix; materialization still reads the exact CAS version.
+  const extension = observedPath?.split(/[\\/]/u).at(-1)?.match(/\.[a-z0-9]{1,16}$/iu)?.[0]?.toLowerCase()
+  return `.sciforge/research-dossier/previews/${safeVersion}-${ref.contentDigest.slice(0, 12)}${extension ?? mediaExtension(ref.mediaType)}`
 }
 
 export function previewIdempotencyKey(ref: ArtifactVersionRefV1): string {
@@ -216,7 +221,7 @@ export function researchDossierPreviewTarget(input: Readonly<{
   previewRef: ArtifactVersionRefV1
   recordDigest: string
   sessionId: string
-  surfaceId: string
+  surfaceId?: string
   workspaceRoot: string
   target: ResearchDossierTargetV1
   page: ResearchDossierPage
@@ -226,7 +231,7 @@ export function researchDossierPreviewTarget(input: Readonly<{
   return {
     path: input.destinationPath,
     sessionId: input.sessionId,
-    surfaceId: input.surfaceId,
+    ...(input.surfaceId ? { surfaceId: input.surfaceId } : {placement:'focused' as const}),
     workspaceRoot: input.workspaceRoot,
     ...(input.previewRef.mediaType ? { mimeType: input.previewRef.mediaType } : {}),
     kind: 'file',
@@ -304,4 +309,18 @@ function boundedString(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const normalized = value.trim()
   return normalized && normalized.length <= 4_000 ? normalized : null
+}
+
+/** Resolve only explicit parent/current identities, never the newest history row. */
+export function comparisonTargetVersionId(record: Extract<ResearchDossierExactRecord, { kind: 'artifact-version' }>): string | undefined {
+  const { descriptor, history } = record
+  const artifactId = descriptor.ref.artifactId
+  if (descriptor.artifact.artifactId !== artifactId || descriptor.version.artifactId !== artifactId || descriptor.version.versionId !== descriptor.ref.versionId) return undefined
+  const exactCurrent = history.items.filter(item => item.isCurrent &&
+    item.artifact.artifactId === artifactId && item.version.artifactId === artifactId &&
+    item.ref.artifactId === artifactId && item.ref.versionId === item.version.versionId)
+  const currentIds = new Set(exactCurrent.map(item => item.ref.versionId))
+  const target = descriptor.isCurrent ? descriptor.version.parentVersionId
+    : descriptor.artifact.currentVersionId ?? (currentIds.size === 1 ? [...currentIds][0] : undefined)
+  return target && target !== descriptor.ref.versionId ? target : undefined
 }

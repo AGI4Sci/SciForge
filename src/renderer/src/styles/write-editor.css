@@ -1,5 +1,5 @@
 .ds-chat-answer {
-  font-size: 15px;
+  font-size: var(--ds-text-xl);
   line-height: 1.6;
 }
 
@@ -16,7 +16,7 @@
   background: var(--ds-bubble-user);
   padding: 0.72rem 1.05rem;
   color: var(--ds-bubble-user-fg);
-  font-size: 15px;
+  font-size: var(--ds-text-xl);
   font-weight: 500;
   line-height: 1.58;
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
@@ -138,11 +138,19 @@ summary,
   --write-selection-text: #f8fbff;
 }
 
+/*
+ * The preview page is fluid: it fills whatever panel hosts it and only caps at
+ * the reading-page width once that panel is wide enough to hold it. The gutters
+ * are relative to the panel — never to the window — so a narrow right-sidebar
+ * pane reflows the document instead of clipping a fixed 860px page.
+ */
 .write-markdown-preview {
-  width: min(100%, 860px);
+  width: 100%;
+  max-width: 860px;
+  min-width: 0;
   margin: 0 auto;
-  padding: clamp(28px, 4vw, 56px) clamp(24px, 5vw, 72px) 72px;
-  font-size: 16px;
+  padding: clamp(16px, 6.5%, 56px) clamp(14px, 8.4%, 72px) clamp(28px, 8.4%, 72px);
+  font-size: var(--ds-text-xl);
   line-height: 1.76;
   color: color-mix(in srgb, var(--ds-text) 94%, var(--ds-text-muted));
 }
@@ -172,7 +180,7 @@ summary,
 .write-markdown-preview h6 {
   margin: 1.6em 0 0.6em;
   color: var(--ds-text);
-  font-family: 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  font-family: var(--ds-font-display);
   font-weight: 650;
   letter-spacing: 0;
   line-height: 1.24;
@@ -343,18 +351,97 @@ summary,
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-@media (max-width: 720px) {
+/*
+ * The Markdown viewer sizes its chrome and its document from the panel width it
+ * is rendered in, not from the window: `@container` queries are the only signal
+ * that follows a resizable right-sidebar pane, and they are what keeps the page
+ * readable without ever scaling it down.
+ */
+.workspace-preview-markdown-chrome {
+  container-type: inline-size;
+  container-name: markdown-viewer-chrome;
+  flex: 0 0 auto;
+}
+
+.workspace-preview-markdown-chrome__header {
+  /* The right gutter clears the panel's floating refresh / folder / close
+   * buttons, which are painted over the top-right corner of the viewer. */
+  padding: 0.75rem 7rem 0.75rem 1rem;
+}
+
+.workspace-preview-markdown-document {
+  container-type: inline-size;
+  container-name: markdown-viewer-document;
+}
+
+@container markdown-viewer-chrome (max-width: 640px) {
+  .workspace-preview-markdown-chrome__header {
+    align-items: center;
+    padding: 0.6rem 0.75rem;
+  }
+
+  /* Only the title shares its row with the floating panel buttons. */
+  .workspace-preview-markdown-chrome__title {
+    padding-right: 6rem;
+  }
+
+  /* The actions take the whole row below the title instead of squeezing the
+   * title to nothing or running past the panel edge. */
+  .workspace-preview-markdown-chrome__actions {
+    flex-basis: 100%;
+  }
+
+  /* Icon-only copy actions: the tooltip and the status strip keep the label and
+   * the full result text, so the row fits a narrow pane without clipping. */
+  [data-markdown-copy-label] {
+    display: none;
+  }
+}
+
+@container markdown-viewer-document (max-width: 640px) {
   .write-markdown-preview {
-    padding: 28px 24px 56px;
-    font-size: 15.5px;
+    padding: 20px 20px 40px;
+    font-size: var(--ds-text-lg);
+    line-height: 1.7;
   }
 
   .write-markdown-preview h1 {
-    font-size: 1.8rem;
+    font-size: 1.55em;
+    padding-bottom: 0.5rem;
   }
 
   .write-markdown-preview h2 {
-    font-size: 1.35rem;
+    font-size: 1.3em;
+  }
+
+  .write-markdown-preview h3 {
+    font-size: 1.12em;
+  }
+
+  .write-markdown-preview h4,
+  .write-markdown-preview h5,
+  .write-markdown-preview h6 {
+    font-size: 1em;
+  }
+
+  .write-markdown-preview pre code {
+    font-size: 0.94em;
+  }
+}
+
+@container markdown-viewer-document (max-width: 420px) {
+  .write-markdown-preview {
+    padding: 14px 14px 32px;
+    font-size: var(--ds-text-md);
+    line-height: 1.68;
+  }
+
+  .write-markdown-preview h1 {
+    font-size: 1.45em;
+  }
+
+  .write-markdown-preview h2 {
+    font-size: 1.24em;
   }
 }
 
@@ -467,8 +554,8 @@ summary,
 
 .cm-write-live-preview .cm-write-md-codeblock-line {
   background: color-mix(in srgb, var(--ds-text) 4.8%, transparent);
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  font-size: 12.5px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
   line-height: 1.62;
   white-space: pre;
 }
@@ -478,13 +565,13 @@ summary,
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--ds-font-sans);
   user-select: none;
 }
 
 .cm-write-live-preview .cm-write-md-codeblock-lang {
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  font-size: 10.5px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
   color: var(--ds-text-faint);
   text-transform: lowercase;
   pointer-events: none;
@@ -499,7 +586,7 @@ summary,
   background: transparent;
   color: var(--ds-text-faint);
   font-family: inherit;
-  font-size: 10.5px;
+  font-size: var(--ds-text-2xs);
   line-height: 1;
   cursor: pointer;
   opacity: 0.48;
@@ -541,8 +628,8 @@ summary,
   border-bottom: 1px solid var(--ds-border-muted);
   background: color-mix(in srgb, var(--ds-code-bg) 88%, var(--ds-card-muted));
   padding: 0.42rem 0.68rem;
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  font-size: 10px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
   color: var(--ds-text-muted);
   text-transform: lowercase;
 }
@@ -565,7 +652,7 @@ summary,
   border-radius: 0;
   background: transparent !important;
   padding: 0.56rem 0.72rem;
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
   line-height: 1.4;
   box-sizing: border-box;
   tab-size: 2;

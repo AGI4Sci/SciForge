@@ -1,7 +1,11 @@
 import { anchoredCommentListResultSchema, anchoredCommentThreadSchema } from '../core/contract.js'
 import { boundSelection, selectionFromResource, selectionCommentInput, type SelectionHostScope } from '../selection.js'
-import type { DomainRendererSelectionSnapshot } from '@sciforge/domain-sdk/renderer'
+import type { CommentSelection } from '../selection.js'
 import './style.css'
+import { conversationView } from './conversation'
+import { lineReviewList } from './line-review'
+import { sharedConversationsPanel } from './shared-conversations'
+import type { AnchoredCommentThread } from '../core/contract'
 
 // The existing sandbox is the transport; context does not authorize writes.
 const root = document.getElementById('root')!
@@ -20,28 +24,69 @@ notice.id = 'notice'; notice.setAttribute('role', 'status'); list.setAttribute('
 root.append(label, quote, origin, advanced, bodyLabel, replacement, save, refresh, notice, list)
 let host: SelectionHostScope = { workspaceRoot: '', sessionId: '', runtimeId: '' }
 let capabilities = new Set<string>(), epoch = 0, busy = false
-let current: DomainRendererSelectionSnapshot | undefined, queued: DomainRendererSelectionSnapshot | undefined
+let current: CommentSelection | undefined, queued: CommentSelection | undefined
 let draft: ReturnType<typeof selectionCommentInput> | undefined
 const pending = new Map<string, { resolve: (output: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+const conversations = new Map<string, ReturnType<typeof conversationView>>()
+const threads = new Map<string, AnchoredCommentThread>()
+const floating = () => window.parent.postMessage({ type: 'presentation.set', input: { mode: 'floating' } }, '*')
+const refreshNavigation = () => {
+  for (const [id, view] of conversations) view.setChildren([...threads.values()].filter(thread => thread.fork?.parentThreadId === id))
+}
+const navigate = async (id: string) => {
+  const version = epoch
+  try {
+    const result = await invoke('anchored-comments.get', { threadId: id }) as { thread?: unknown }
+    if (version !== epoch) return
+    const thread = anchoredCommentThreadSchema.parse(result.thread)
+    if (thread.id !== id || thread.workspaceKey !== host.workspaceRoot) throw new Error('讨论身份不匹配。')
+    openConversation(thread)
+  } catch (error) { if (version === epoch) notice.textContent = String(error) }
+}
+const openConversation = (thread: AnchoredCommentThread) => {
+  threads.set(thread.id, thread)
+  reviews.update([...threads.values()]); sharedPanel.refreshLocalThreads()
+  floating()
+  document.body.classList.add('conversations-open')
+  const existing = conversations.get(thread.id)
+  if (existing) { existing.update(thread); existing.reopen(root) }
+  else {
+    const view = conversationView(thread, invoke, openConversation, id => void navigate(id), () => {
+      if (![...conversations.values()].some(view => view.root.isConnected)) document.body.classList.remove('conversations-open')
+    }, updated => {
+      threads.set(updated.id, updated)
+      reviews.update([...threads.values()]); sharedPanel.refreshLocalThreads()
+    })
+    conversations.set(thread.id, view); root.append(view.root)
+  }
+  refreshNavigation()
+  const visible = conversations.get(thread.id)?.root
+  if (visible) root.scrollLeft = visible.offsetLeft
+}
 const controls = () => {
   save.disabled = busy || !current || !host.runtimeId || !host.sessionId || !capabilities.has('anchored-comments.upsert')
   refresh.disabled = busy || !host.workspaceRoot || !capabilities.has('anchored-comments.list')
   replace.disabled = busy; keep.disabled = busy; body.disabled = busy; selection.disabled = busy
 }
 const clear = (message: string) => {
+  for (const view of conversations.values()) view.dispose(false)
+  conversations.clear()
+  threads.clear(); document.body.classList.remove('conversations-open')
+  reviews.update([]); sharedPanel.resetScope()
   epoch++; busy = false; draft = undefined; current = undefined; queued = undefined
   selection.value = ''; body.value = ''; label.textContent = ''; quote.textContent = ''; origin.textContent = ''
   replacement.hidden = true; list.replaceChildren()
   for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(message)) }
   pending.clear(); notice.textContent = message; controls()
 }
-const applySelection = (value: DomainRendererSelectionSnapshot) => {
+const applySelection = (value: CommentSelection) => {
   current = value; queued = undefined; draft = undefined; selection.value = JSON.stringify(value, null, 2)
+  if (value.codeAnchor) floating()
   label.textContent = value.label; quote.textContent = value.quote
   origin.textContent = `${value.scope.runtimeId} / ${value.scope.threadId} · ${value.resourceId} · 来源仍待核对`
   replacement.hidden = true; controls(); notice.textContent = '选区已带入。请填写正文并保存；尚未保存批注。'
 }
-const receiveSelection = (value: DomainRendererSelectionSnapshot) => {
+const receiveSelection = (value: CommentSelection) => {
   if (JSON.stringify(current) === JSON.stringify(value)) return
   if (current && (body.value.trim() || busy)) { queued = value; replacement.hidden = false; controls(); return }
   applySelection(value)
@@ -53,21 +98,48 @@ const invoke = (actionId: string, input: unknown): Promise<unknown> => {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('操作结果未知：宿主响应超时。请先刷新核对；不会自动重试。')) }, 120000)
     pending.set(requestId, { resolve, reject, timer })
-    window.parent.postMessage({ type: 'capability.invoke', requestId, actionId, input }, '*')
+    window.parent.postMessage({ type: 'capability.invoke', requestId, actionId,
+      input: { ...(input as Record<string, unknown>), workspaceRoot: host.workspaceRoot } }, '*')
   })
+}
+const reviews = lineReviewList([], id => void navigate(id))
+const sharedPanel = sharedConversationsPanel({ invoke, listLocalThreads: () => [...threads.values()] })
+root.append(reviews.root, sharedPanel.root)
+const reconcileCurrent = async (version: number) => {
+  const snapshot = current?.codeAnchor
+  if (!snapshot || !capabilities.has('anchored-comments.anchor.reconcile')) return
+  for (const saved of [...threads.values()]) {
+    const anchor = saved.anchor.codeAnchor
+    if (!anchor || anchor.filePath !== snapshot.filePath || anchor.side !== snapshot.side) continue
+    // Selection digests describe only selected code; unrelated ranges are not evidence of change.
+    if (anchor.line !== snapshot.line || (anchor.endLine ?? anchor.line) !== (snapshot.endLine ?? snapshot.line)) continue
+    const result = anchoredCommentThreadSchema.parse(await invoke('anchored-comments.anchor.reconcile', { threadId: saved.id, current: snapshot }))
+    if (version !== epoch) return
+    if (result.id !== saved.id || result.workspaceKey !== host.workspaceRoot) throw new Error('定位核对响应身份不匹配。')
+    threads.set(result.id, result); conversations.get(result.id)?.update(result)
+  }
 }
 const reload = async () => {
   const version = epoch
   const result = anchoredCommentListResultSchema.parse(await invoke('anchored-comments.list', { purpose: 'research', includeResolved: true }))
   if (version !== epoch) return
+  threads.clear()
   list.replaceChildren()
   for (const thread of result.threads.slice(0, 200)) {
+    threads.set(thread.id, thread)
+    conversations.get(thread.id)?.update(thread)
+    if (thread.anchor.codeAnchor) continue
     const article = make('article'); article.append(make('strong', thread.anchor.targetLabel), make('p', thread.status + ' · ' + thread.anchorResolution))
     const text = thread.anchor.canonical.selection?.quote
     if (typeof text === 'string') article.append(make('blockquote', text))
     for (const message of thread.messages) article.append(make('p', message.body))
     const details = make('details'); details.append(make('summary', '精确定位与原始记录'), make('pre', JSON.stringify(thread, null, 2))); article.append(details); list.append(article)
   }
+  await reconcileCurrent(version)
+  if (version !== epoch) return
+  refreshNavigation()
+  reviews.update([...threads.values()])
+  sharedPanel.refreshLocalThreads()
   notice.textContent = '已读取 ' + result.threads.length + ' 条批注' + (result.threads.length > 200 ? '；本页展示前 200 条，请用公开 list/get 工具检索其余记录。' : '。来源仍待核对。')
 }
 const run = async (operation: () => Promise<void>) => {
@@ -90,6 +162,7 @@ save.addEventListener('click', () => void run(async () => {
   if (result.id !== input.thread.id) throw new Error('宿主返回的批注身份不匹配；请刷新核对。')
   if (version !== epoch) return
   draft = undefined; body.value = ''
+  if (result.anchor.codeAnchor) openConversation(result)
   if (capabilities.has('anchored-comments.list')) await reload()
   if (version === epoch) notice.textContent = '批注已保存。原始选区快照保留；来源是否变化仍待核对。'
 }))
@@ -116,6 +189,6 @@ window.addEventListener('message', event => {
     if (data.ok === false) request.reject(new Error(data.error?.message || '宿主拒绝了此操作。'))
     else request.resolve(data.output)
   }
-  if (data.type === 'dispose') { host = { workspaceRoot: '', sessionId: '', runtimeId: '' }; capabilities.clear(); clear('插件已停用，旧草稿已清除。') }
+  if (data.type === 'dispose') { host = { workspaceRoot: '', sessionId: '', runtimeId: '' }; capabilities.clear(); clear('插件已停用，旧草稿已清除。'); sharedPanel.dispose() }
 })
 window.parent.postMessage({ type: 'ready' }, '*')

@@ -1,0 +1,46 @@
+.collaboration-requirements-editor,
+.collaboration-requirements-editor fieldset {
+  min-width: 0;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-control, 12px);
+}
+
+.collaboration-requirements-editor legend { padding: 0 6px; font-weight: 600; }
+.collaboration-requirements-editor label { margin-bottom: 12px; }
+.collaboration-requirements-editor input:not([type='checkbox']) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  background: var(--ds-surface-elevated);
+}
+.collaboration-requirements-editor textarea { box-sizing: border-box; min-height: 72px; }
+.collaboration-requirements-editor label:has(> input[type='checkbox']) {
+  flex-direction: row;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.collaboration-requirements-editor input[type='checkbox'] { flex: 0 0 auto; }
+.collaboration-requirements-output,
+.collaboration-requirements-criterion {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.collaboration-requirements-criterion {
+  margin: 16px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--ds-border-muted);
+}
+.collaboration-requirements-criterion > button { justify-self: start; }
+.collaboration-requirements-editor button { margin: 4px 0; }
+@media (max-width: 640px) {
+  .collaboration-requirements-output,
+  .collaboration-requirements-criterion { grid-template-columns: 1fr; }
+  .collaboration-requirements-editor,
+  .collaboration-requirements-editor fieldset { padding: 10px; }
+}

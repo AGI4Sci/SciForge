@@ -577,3 +577,86 @@ async function waitFor(predicate: () => Promise<boolean>): Promise<void> {
   }
   throw new Error('Timed out waiting for producer provenance delivery.')
 }
+
+
+for (const stop of ['disable-enable', 'close'] as const) {
+  test(`pending preparation cannot append after ${stop}`, async () => {
+    const workspaceRoot = await realpath(await mkdtemp(join(tmpdir(), 'evidence-producer-fence-')))
+    const receipt = plotReceipt('plot-operation-fenced-0001')
+    await writeProducerReceipt(workspaceRoot, receipt)
+    let release!: () => void
+    let entered!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    let appends = 0
+    const consumer = consumerFor({ workspaceRoot, receipt,
+      prepare: async (_workspace, received) => { entered(); await gate; return preparation(workspaceRoot, received) },
+      append: async input => { appends++; return appendToStore(input, workspaceRoot) }
+    })
+    try {
+      await consumer.start(true)
+      const polling = consumer.pollNow()
+      await waiting
+      if (stop === 'disable-enable') { await consumer.setEnabled(false); await consumer.setEnabled(true) }
+      const closing = stop === 'close' ? consumer.close() : undefined
+      release()
+      const report = await polling
+      await closing
+      assert.equal(appends, 0)
+      assert.match(report.pending[0]?.message ?? '', /interrupted/)
+      assert.equal(await optionalDelivery(workspaceRoot, receipt.operationId), undefined)
+      assert.ok((await producerBytes(workspaceRoot, receipt.operationId)).length)
+    } finally { release?.(); await consumer.close() }
+  })
+}
+
+
+test('close during append preserves the committed delta and restart finishes its exact delivery once', async () => {
+  const workspaceRoot = await realpath(await mkdtemp(join(tmpdir(), 'evidence-producer-close-replay-')))
+  const receipt = plotReceipt('plot-operation-close-replay-0001')
+  await writeProducerReceipt(workspaceRoot, receipt)
+  let release!: () => void
+  let committed!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const waiting = new Promise<void>(resolve => { committed = resolve })
+  let firstResult: EvidenceDagAppendResult | undefined
+  let followups = 0
+  const first = consumerFor({ workspaceRoot, receipt,
+    append: async input => {
+      firstResult = await appendToStore(input, workspaceRoot)
+      committed(); await gate
+      return firstResult
+    },
+    afterAppend: async () => { followups++ }
+  })
+  let restarted: EvidenceProducerProvenanceConsumer | undefined
+  try {
+    await first.start(true)
+    const polling = first.pollNow()
+    await waiting
+    const closing = first.close()
+    release()
+    const report = await polling
+    await closing
+    assert.equal(firstResult?.idempotent, false)
+    assert.equal(followups, 0)
+    assert.match(report.pending[0]?.message ?? '', /interrupted/)
+    assert.equal(await optionalDelivery(workspaceRoot, receipt.operationId), undefined)
+    restarted = consumerFor({ workspaceRoot, receipt,
+      append: async input => {
+        const replay = await appendToStore(input, workspaceRoot)
+        assert.equal(replay.idempotent, true)
+        assert.equal(replay.delta.deltaDigest, firstResult!.delta.deltaDigest)
+        return replay
+      },
+      afterAppend: async () => { followups++ }
+    })
+    await restarted.start(true)
+    await restarted.pollNow()
+    assert.equal(followups, 1)
+    const delivery = evidenceProducerDeliveryReceiptV1Schema.parse(await optionalDelivery(workspaceRoot, receipt.operationId))
+    assert.equal(delivery.state, 'committed')
+    if (delivery.state !== 'committed') assert.fail('Expected a committed delivery receipt')
+    assert.equal(delivery.deltaDigest, firstResult!.delta.deltaDigest)
+  } finally { release?.(); await first.close(); await restarted?.close() }
+})

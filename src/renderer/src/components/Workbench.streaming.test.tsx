@@ -3,6 +3,9 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatBlock } from '../agent/types'
+import { addSessionRightPanelPane, createSessionRightPanelWorkspace } from './session-right-panel-workspaces'
+
+const panelLayout = vi.hoisted(() => ({ workspaces: [] as import('./session-right-panel-workspaces').SessionRightPanelWorkspace[] }))
 
 const probes = vi.hoisted(() => ({
   sidebarRender: vi.fn(),
@@ -60,7 +63,7 @@ vi.mock('./workbench-layout', () => ({
     placeRightPanelPaneForSession: vi.fn(),
     rebindRightPanelPaneForSession: vi.fn(),
     rightPanelDockViewportWidth: 0,
-    rightPanelWorkspaces: [],
+    rightPanelWorkspaces: panelLayout.workspaces,
     rightPanelVisible: false,
     setRightPanelPaneWidthForSession: vi.fn(),
     shellRef: { current: null },
@@ -79,6 +82,7 @@ vi.mock('../domain-modules/installed-renderer-contributions', () => ({
     toolbarActions: { list: () => [] },
     navigationSections: { list: () => [] },
     mainAreas: { list: () => [] },
+    settingsSections: { list: () => [] },
     composerContexts: { list: () => [] },
     commands: { execute: vi.fn() }
   }
@@ -93,8 +97,8 @@ vi.mock('./chat/Sidebar', () => ({
 }))
 
 vi.mock('./chat/MessageTimeline', () => ({
-  MessageTimeline: (props: { live: string; liveReasoning: string; blocks: ChatBlock[] }) => {
-    probes.timelineRender({ live: props.live, liveReasoning: props.liveReasoning, blocks: props.blocks })
+  MessageTimeline: (props: { live: string; liveReasoning: string; blocks: ChatBlock[]; onRetryConnection: () => void }) => {
+    probes.timelineRender({ live: props.live, liveReasoning: props.liveReasoning, blocks: props.blocks, onRetryConnection: props.onRetryConnection })
     return null
   }
 }))
@@ -140,6 +144,7 @@ vi.mock('./chat/use-child-agent-attention', () => ({
 
 import { Workbench } from './Workbench'
 import { useChatStore } from '../store/chat-store'
+import { useErrorPresentationStore } from '../store/error-presentation-store'
 import type { SideConversation } from '../store/chat-store-types'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -203,7 +208,9 @@ describe('Workbench streaming render isolation', () => {
         runDesktopCommand: () => Promise.resolve()
       }
     })
+    panelLayout.workspaces = []
     seedStreamingState()
+    useErrorPresentationStore.setState({ dismissed: {} })
     container = document.createElement('div')
     document.body.append(container)
   })
@@ -215,6 +222,88 @@ describe('Workbench streaming render isolation', () => {
     vi.clearAllMocks()
     seedStreamingState()
     useChatStore.setState({ blocks: [], activeThreadId: null, busy: false, sideConversations: {} })
+  })
+
+  it('binds a resident plugin panel to its owning session workspace when the global workspace changes', async () => {
+    const mode = 'development:@example/notes:panel'
+    const ownerId = 'thread-1'
+    const workspaces = addSessionRightPanelPane(
+      { [ownerId]: createSessionRightPanelWorkspace(ownerId) }, ownerId, { mode }
+    )
+    panelLayout.workspaces = [workspaces[ownerId]]
+    window.sciforge.extensions.rendererContributions = vi.fn(async () => [{
+      pluginId: '@example/notes', contributionId: 'panel', kind: 'panel' as const,
+      title: 'Notes', generation: 1, version: '1.0.0', stateVersion: 1,
+      entryUrl: 'about:blank', capabilityIds: ['notes.read']
+    }])
+    useChatStore.setState(state => ({
+      workspaceRoot: '/other-workspace',
+      threads: state.threads.map(thread => ({ ...thread, runtimeId: 'dsh' as const }))
+    }))
+    root = createRoot(container)
+    await act(async () => root!.render(createElement(Workbench)))
+    const frame = document.querySelector<HTMLIFrameElement>('iframe[title="Notes"]')!
+    expect(frame).not.toBeNull()
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage')
+    await act(async () => frame.dispatchEvent(new Event('load')))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'host.init', workspaceRoot: '/workspace', sessionId: ownerId, runtimeId: 'dsh'
+    }), '*')
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ workspaceRoot: '/other-workspace' }), '*')
+  })
+
+  it('dismisses runtime diagnostics without clearing failure state, survives refresh, and shows new failures', async () => {
+    useChatStore.setState({ error: 'failed request', runtimeErrorDetail: 'timeout', runtimeConnection: 'offline' })
+    root = createRoot(container)
+    await act(async () => root!.render(createElement(Workbench)))
+    const close = (): HTMLButtonElement | null => container.querySelector('[data-testid="runtime-error-dismiss"]')
+    expect(close()).not.toBeNull()
+    await act(async () => close()?.click())
+    expect(close()).toBeNull()
+    expect(useChatStore.getState().error).toBe('failed request')
+    expect(useChatStore.getState().runtimeConnection).toBe('offline')
+    await act(async () => useChatStore.setState({ error: null }))
+    await act(async () => useChatStore.setState({ error: 'failed request' }))
+    expect(close()).toBeNull()
+    await act(async () => root?.unmount())
+    root = createRoot(container)
+    await act(async () => root!.render(createElement(Workbench)))
+    expect(close()).toBeNull()
+    await act(async () => useChatStore.setState((state) => ({
+      threads: state.threads.map((thread) => ({ ...thread, latestTurnId: 'new-failed-turn' }))
+    })))
+    expect(close()).not.toBeNull()
+    await act(async () => close()?.click())
+    await act(async () => useChatStore.setState({ activeThreadId: 'another-session' }))
+    expect(close()).not.toBeNull()
+  })
+
+  it('shows an identical failure after an explicit connection retry without a new turn', async () => {
+    const originalProbe = useChatStore.getState().probeRuntime
+    const probe = vi.fn(async () => {
+      useChatStore.setState({ error: null, runtimeConnection: 'checking' })
+      await Promise.resolve()
+      useChatStore.setState({ error: 'failed request', runtimeErrorDetail: 'timeout', runtimeConnection: 'offline' })
+    })
+    useChatStore.setState({ error: 'failed request', runtimeErrorDetail: 'timeout', runtimeConnection: 'offline', probeRuntime: probe })
+    try {
+      root = createRoot(container)
+      await act(async () => root!.render(createElement(Workbench)))
+      const close = (): HTMLButtonElement | null => container.querySelector('[data-testid="runtime-error-dismiss"]')
+      await act(async () => close()?.click())
+      expect(close()).toBeNull()
+      await act(async () => useChatStore.setState({ error: null }))
+      await act(async () => useChatStore.setState({ error: 'failed request' }))
+      expect(close()).toBeNull()
+      const retry = probes.timelineRender.mock.calls.at(-1)?.[0].onRetryConnection as () => void
+      await act(async () => retry())
+      expect(probe).toHaveBeenCalledWith('user')
+      expect(close()).not.toBeNull()
+      expect(useChatStore.getState().error).toBe('failed request')
+      expect(useChatStore.getState().activeThreadId).toBe('thread-1')
+    } finally {
+      await act(async () => useChatStore.setState({ probeRuntime: originalProbe }))
+    }
   })
 
   it('keeps the root tree idle on streaming deltas while the timeline container updates', async () => {

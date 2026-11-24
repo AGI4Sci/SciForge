@@ -1,6 +1,7 @@
 import {
   agentInboxMessageSchema,
   createCollaborationError,
+  humanAnswerDecisionText,
   projectRecordSchema,
   taskDeliveryFactsSchema,
   taskExecutionSchema,
@@ -63,6 +64,14 @@ test('Owner delete derives Cloud CAS once and replays the same durable command a
     }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -161,6 +170,14 @@ test('Project delete does not infer Owner success from not_found on its first at
     }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -226,6 +243,14 @@ test('Project delete converges with a new invocation after its local completion 
     }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -302,6 +327,14 @@ test('Project delete rejects a non-Owner and a mismatched receipt before local s
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => memberWorkspace }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -333,6 +366,14 @@ test('Project delete rejects a non-Owner and a mismatched receipt before local s
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => ownerWorkspace }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -379,6 +420,14 @@ test('Project delete abandons its pending intent after a definitive 4xx rejectio
     }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -1104,7 +1153,8 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
       coordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch
     },
     targetUserId: TEST_IDS.secondUserId,
-    requestedByAgentId: projectFixture.coordinatorAgentId
+    requestedByAgentId: projectFixture.coordinatorAgentId,
+    prompt: 'Which accepted direction should become the official Project decision?'
   }
   const answer = {
     ...humanAnswerFixture,
@@ -1126,6 +1176,14 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
     subscribe: () => () => undefined
   }
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -1160,6 +1218,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
     expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
     requiredAssurance: 'verified',
     prompt: 'Which accepted direction should become the official Project decision?',
+    interaction: { kind: 'clarification' },
     expiresAt: TEST_LATER_TIMESTAMP
   }, 'idem_CoordinatorHuman01')
   await port.answerHumanNeeded({
@@ -1183,6 +1242,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
     },
     requiredAssurance: 'verified',
     prompt: 'Which accepted direction should become the official Project decision?',
+    interaction: { kind: 'clarification' },
     confirmableAction: null,
     expiresAt: TEST_LATER_TIMESTAMP
   }])
@@ -1198,7 +1258,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
   }])
 })
 
-test('durable Coordinator Inbox turns the exact target member HumanAnswer into one official decision', async () => {
+for (const interactionKind of ['clarification', 'choice', 'approval'] as const) test(`durable Coordinator Inbox grounds ${interactionKind} in one official decision`, async () => {
   const answer = {
     ...humanAnswerFixture,
     context: {
@@ -1206,16 +1266,23 @@ test('durable Coordinator Inbox turns the exact target member HumanAnswer into o
       coordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch
     },
     answer: 'Use the lower-risk plan and keep the cost cap.',
-    decision: null,
-    confirmationId: null
+    selectedOptionId: interactionKind === 'choice' ? 'lower-risk' : null,
+    decision: interactionKind === 'approval' ? 'approve' as const : null,
+    confirmationId: interactionKind === 'approval' ? 'cfm_ProjectApproval0001' : null
   }
+  const request = { ...humanNeededFixture, humanRequestId: answer.humanRequestId,
+    targetUserId: answer.answeredByUserId, context: answer.context,
+    status: 'answered' as const, revision: answer.requestRevision + 1,
+    interaction: interactionKind === 'choice' ? { kind: 'choice' as const, options: [{ id: 'lower-risk', label: 'Lower-risk plan' }, { id: 'other', label: 'Other plan' }] } : { kind: interactionKind },
+    confirmableAction: interactionKind === 'approval' ? { actionType: 'collaboration.project.decision', safeSummary: 'Record this project proposal decision only', effect: 'external-write' as const, actionDigest: 'a'.repeat(64) } : null }
+  const decisionText = humanAnswerDecisionText(answer, request)
   const message = agentInboxMessageSchema.parse({
     ...agentInboxMessageFixture,
     recipientAgentId: projectFixture.coordinatorAgentId,
     payload: {
       protocolVersion: '1.0',
       type: 'human.answer.received',
-      answer
+      answer, request
     }
   })
   const decisionRecord = projectRecordSchema.parse({
@@ -1225,7 +1292,7 @@ test('durable Coordinator Inbox turns the exact target member HumanAnswer into o
     projectId: TEST_IDS.projectId,
     kind: 'decision',
     status: 'accepted',
-    body: answer.answer,
+    body: decisionText,
     authorUserId: projectFixture.ownerUserId,
     authorAgentId: projectFixture.coordinatorAgentId,
     sourceTaskId: null,
@@ -1273,6 +1340,9 @@ test('durable Coordinator Inbox turns the exact target member HumanAnswer into o
   })
 
   await port.handleInbox(message)
+  // Accepted records retain their original text; exact answer provenance
+  // prevents a formatter change from producing another official decision.
+  decisionRecord.body = 'Previously accepted decision text.'
   await port.handleInbox(message)
 
   assert.equal(commands.length, 1)
@@ -1299,7 +1369,7 @@ test('durable Coordinator Inbox turns the exact target member HumanAnswer into o
     expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
     expectedHumanRequestRevision: answer.requestRevision + 1,
     expectedHumanAnswerRevision: answer.revision,
-    decision: answer.answer
+    decision: decisionText
   })
   assert.match(
     commands[0]!.type === 'project.decision.submit' ? commands[0]!.idempotencyKey : '',
@@ -1531,6 +1601,14 @@ function unusedCoordinatorCloudCommands(): CoordinatorCloudCommandService {
 
 function unusedTransport(): AuthenticatedCloudTransport {
   return {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({ state: 'unavailable', reason: 'OIDC transport is unused.' }),
@@ -1602,6 +1680,14 @@ test('Project delete completes a matching durable replay after Cloud reports the
     }),
     coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
     transport: {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
       status: () => ({
@@ -1729,6 +1815,14 @@ test('HumanAnswer verifies decision, reviewed revision, explanation and authenti
     transport: {
       status: () => ({ state: 'ready', baseUrl: 'https://fixture.invalid/', userId: projectFixture.ownerUserId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
       execute: async ({ payload }) => { const command = payload as RestRequest; commands.push(command); return { contractVersion: 1, status: 200, body: entityResponse(command.requestId, receipt) } },
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('unused') }, readObject: async () => { throw new Error('unused') }
     },
     state: coordinatorState(), requirementsDispatch: { reconcileProject: async () => undefined },
@@ -1740,9 +1834,119 @@ test('HumanAnswer verifies decision, reviewed revision, explanation and authenti
     const input = { projectId: receipt.projectId, humanRequestId: receipt.humanRequestId, requestRevision: receipt.requestRevision, answer: receipt.answer, decision }
     await port.answerHumanNeeded(input, `idem_HumanDecision_${decision}`)
     assert.equal((commands.at(-1) as any).decision, decision)
-    for (const mutation of [{ decision: decision === 'approve' ? 'reject' : 'approve' }, { decision: null, confirmationId: null }, { requestRevision: receipt.requestRevision + 1 }, { answer: 'different explanation' }, { answeredByUserId: TEST_IDS.secondUserId }]) {
+    for (const mutation of [{ decision: decision === 'approve' ? 'reject' : 'approve' }, { decision: null, confirmationId: null }, { selectedOptionId: 'unrequested-option' }, { requestRevision: receipt.requestRevision + 1 }, { answer: 'different explanation' }, { answeredByUserId: TEST_IDS.secondUserId }]) {
       receipt = { ...exact, decision, ...mutation } as typeof receipt
       await assert.rejects(port.answerHumanNeeded(input, 'idem_HumanMismatch0001'), /exact Project request answer/u)
     }
   }
+  receipt = { ...exact, decision: null, confirmationId: null, selectedOptionId: 'lower-risk' }
+  await port.answerHumanNeeded({ projectId: receipt.projectId, humanRequestId: receipt.humanRequestId,
+    requestRevision: receipt.requestRevision, answer: receipt.answer, selectedOptionId: 'lower-risk' }, 'idem_SelectedOption0001')
+  assert.equal((commands.at(-1) as any).selectedOptionId, 'lower-risk')
 })
+
+test('HumanNeeded deferral uses the User command and verifies the exact pending revision without resuming work', async () => {
+  const workspace = workspaceFixture()
+  const reason = 'Wait for the next review meeting.'
+  const original = { ...humanNeededFixture, targetUserId: projectFixture.ownerUserId }
+  let receipt = { ...original, revision: original.revision + 1,
+    deferred: { deferredAt: TEST_TIMESTAMP, deferredByUserId: projectFixture.ownerUserId, reason } }
+  const commands: RestRequest[] = []
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: { ...unusedTransport(),
+      status: () => ({ state: 'ready', baseUrl: 'https://fixture.invalid/', userId: projectFixture.ownerUserId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+      execute: async ({ payload }) => { const command = payload as RestRequest; commands.push(command); return { contractVersion: 1, status: 200, body: entityResponse(command.requestId, receipt) } }
+    }, state: coordinatorState(), requirementsDispatch: { reconcileProject: async () => { throw new Error('Deferral must not dispatch.') } }
+  })
+  const input = { projectId: original.projectId, humanRequestId: original.humanRequestId, requestRevision: original.revision, reason }
+  await port.deferHumanNeeded(input, 'idem_HumanDeferral0001')
+  assert.equal(commands[0]?.type, 'human.needed.defer')
+  receipt = { ...receipt, revision: original.revision }
+  await assert.rejects(port.deferHumanNeeded(input, 'idem_HumanDeferral0002'), /exact User deferral/)
+})
+
+test('decision request retries resume the existing Cloud command instead of changing its expiry envelope', async () => {
+  const workspace = workspaceFixture()
+  const command = { protocolVersion: '1.0' as const, type: 'human.needed.create' as const,
+    requestId: TEST_IDS.requestId, idempotencyKey: 'idem_DecisionReplay0001', projectId: projectFixture.projectId,
+    targetUserId: projectFixture.ownerUserId, context: { scope: 'coordinator_project' as const,
+      expectedProjectRevision: projectFixture.revision, expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch },
+    prompt: 'Choose a reviewer', interaction: { kind: 'clarification' as const }, requiredAssurance: 'verified' as const,
+    confirmableAction: null, expiresAt: TEST_LATER_TIMESTAMP }
+  const request = { ...humanNeededFixture, projectId: command.projectId, targetUserId: command.targetUserId,
+    prompt: command.prompt, context: { scope: 'coordinator_project' as const, coordinatorAuthorityEpoch: command.context.expectedCoordinatorAuthorityEpoch } }
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: { ...unusedCoordinatorCloudCommands(), resume: async (_key, validate) => {
+      validate(command); return { command, response: entityResponse(command.requestId, request) }
+    } }, transport: unusedTransport(), state: coordinatorState(), requirementsDispatch: { reconcileProject: async () => undefined }
+  })
+  const input = { projectId: command.projectId, targetUserId: command.targetUserId,
+    expectedProjectRevision: command.context.expectedProjectRevision + 1,
+    expectedCoordinatorAuthorityEpoch: command.context.expectedCoordinatorAuthorityEpoch,
+    prompt: command.prompt, interaction: command.interaction, requiredAssurance: command.requiredAssurance,
+    expiresAt: '2026-12-31T00:00:00Z' }
+  await port.createHumanNeeded(input, command.idempotencyKey)
+  await assert.rejects(port.createHumanNeeded({ ...input, prompt: 'Different decision' }, command.idempotencyKey), /replay does not match/)
+})
+
+test('project proposal approvals derive an exact bounded action and reject caller digests or tampered receipts', async () => {
+  const commands: RestRequest[] = []
+  let tamper = false
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspaceFixture() }),
+    coordinatorCloudCommands: { ...unusedCoordinatorCloudCommands(), resume: async () => null, execute: async command => {
+      if (command.type !== 'human.needed.create' || command.context.scope !== 'coordinator_project') throw new Error('Unexpected dispatch or execution.')
+      commands.push(command)
+      return entityResponse(command.requestId, { ...humanNeededFixture, projectId: command.projectId,
+        targetUserId: command.targetUserId, prompt: command.prompt, interaction: command.interaction,
+        context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: command.context.expectedCoordinatorAuthorityEpoch },
+        confirmableAction: command.confirmableAction ? { ...command.confirmableAction,
+          ...(tamper ? { actionDigest: '0'.repeat(64) } : {}) } : null })
+    } }, transport: unusedTransport(), state: coordinatorState(),
+    requirementsDispatch: { reconcileProject: async () => { throw new Error('Proposal approval cannot dispatch.') } }
+  })
+  const input = { projectId: projectFixture.projectId, targetUserId: projectFixture.ownerUserId,
+    expectedProjectRevision: projectFixture.revision, expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
+    requiredAssurance: 'verified' as const, interaction: { kind: 'approval' as const },
+    prompt: 'Adopt the proposed review criteria for this project.', expiresAt: TEST_LATER_TIMESTAMP }
+  await port.createHumanNeeded(input, 'idem_ProposalApproval0001')
+  const first = commands[0]!
+  assert.equal(first.type, 'human.needed.create')
+  if (first.type !== 'human.needed.create') return
+  assert.equal(first.confirmableAction?.actionType, 'collaboration.project.decision')
+  assert.match(first.confirmableAction!.safeSummary, /do not dispatch or start/)
+  assert.match(first.confirmableAction!.actionDigest, /^[a-f0-9]{64}$/)
+  await port.createHumanNeeded({ ...input, prompt: 'Change the review criteria.' }, 'idem_ProposalApproval0002')
+  assert.notEqual((commands[1] as typeof first).confirmableAction?.actionDigest, first.confirmableAction!.actionDigest)
+  await assert.rejects(port.createHumanNeeded({ ...input, confirmableAction: first.confirmableAction } as typeof input, 'idem_ProposalApproval0003'), /unrecognized|Unrecognized/)
+  tamper = true
+  await assert.rejects(port.createHumanNeeded(input, 'idem_ProposalApproval0004'), /exact Coordinator Project request/)
+})
+
+for (const recipientAgentId of [projectFixture.coordinatorAgentId, 'agt_ProjectMember0001']) {
+  test(`project.updated consumes current and older project revisions without writes for ${recipientAgentId}`, async () => {
+    const current = workspaceFixture()
+    const revision = current.projects[0]!.project.revision
+    let reads = 0
+    const port = createProjectCoordinatorActionPort({
+      workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async input => {
+        assert.equal(input.projectId, projectFixture.projectId)
+        reads += 1
+        return current
+      } }),
+      coordinatorCloudCommands: unusedCoordinatorCloudCommands(), transport: unusedTransport(), state: coordinatorState(),
+      requirementsDispatch: { reconcileProject: async () => { throw new Error('Project update must not dispatch.') } }
+    })
+    const message = (notifiedRevision: number) => agentInboxMessageSchema.parse({
+      ...agentInboxMessageFixture, recipientAgentId,
+      payload: { protocolVersion: '1.0', type: 'project.updated', projectId: projectFixture.projectId, revision: notifiedRevision }
+    })
+    await port.handleInbox(message(revision))
+    await port.handleInbox(message(Math.max(1, revision - 1)))
+    await assert.rejects(port.handleInbox(message(revision + 1)), /newer than current Cloud facts/)
+    assert.equal(reads, 3)
+  })
+}

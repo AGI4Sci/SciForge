@@ -862,8 +862,7 @@ describe('app-ipc-schemas', () => {
           extraArgs: ['--allowedTools', 'Edit']
         },
         dsh: {
-          command: 'dsh',
-          executablePath: '/opt/dsh/bin/dsh',
+          command: '/opt/dsh/bin/dsh',
           selectedModel: 'deepseek-chat',
           reasoningEffort: 'high'
         }
@@ -896,7 +895,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.codex?.codexHome).toBe('/tmp/codex-home')
     expect(payload.agents?.codex?.model).toBe('runtime-discovered-model')
     expect(payload.agents?.codex?.reasoningEffort).toBe('ultra')
-    expect(payload.agents?.dsh?.executablePath).toBe('/opt/dsh/bin/dsh')
+    expect(payload.agents?.dsh?.command).toBe('/opt/dsh/bin/dsh')
     expect(payload.agents?.dsh?.selectedModel).toBe('deepseek-chat')
     expect(payload.agents?.dsh?.reasoningEffort).toBe('high')
     expect(payload.agents?.codex?.serviceTier).toBe('priority')
@@ -944,7 +943,6 @@ describe('app-ipc-schemas', () => {
       agents: {
         dsh: {
           command: ' /opt/dsh/bin/dsh ',
-          executablePath: '/opt/dsh/bin/dsh',
           selectedModel: 'deepseek-chat',
           reasoningEffort: 'high'
         }
@@ -953,7 +951,6 @@ describe('app-ipc-schemas', () => {
       agents: {
         dsh: {
           command: '/opt/dsh/bin/dsh',
-          executablePath: '/opt/dsh/bin/dsh',
           selectedModel: 'deepseek-chat',
           reasoningEffort: 'high'
         }
@@ -963,9 +960,9 @@ describe('app-ipc-schemas', () => {
     // Clearing a selection sends an empty string and must fall back to the
     // runtime default rather than being rejected.
     expect(settingsPatchSchema.parse({
-      agents: { dsh: { executablePath: '', selectedModel: '', reasoningEffort: '' } }
+      agents: { dsh: { command: '', selectedModel: '', reasoningEffort: '' } }
     })).toEqual({
-      agents: { dsh: { executablePath: '', selectedModel: '', reasoningEffort: '' } }
+      agents: { dsh: { command: '', selectedModel: '', reasoningEffort: '' } }
     })
 
     expect(() => settingsPatchSchema.parse({

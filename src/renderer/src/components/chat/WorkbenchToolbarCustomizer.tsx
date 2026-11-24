@@ -110,17 +110,17 @@ export function WorkbenchToolbarCustomizer({
     <div
       ref={panelRef}
       data-toolbar-popup
-      role="dialog"
+      data-native-view-occluder="true" role="dialog"
       aria-label={t('workbenchToolbarCustomize')}
       style={position}
       className="ds-card-strong fixed z-[1001] max-h-[min(32rem,calc(100vh-3rem))] overflow-y-auto rounded-[18px] border border-ds-border shadow-[0_18px_52px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:shadow-[0_22px_58px_rgba(0,0,0,0.38)]"
     >
       <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-ds-border-muted bg-ds-card-strong px-4 py-3">
         <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-ds-ink">
+          <div className="text-ds-md font-semibold text-ds-ink">
             {t('workbenchToolbarCustomize')}
           </div>
-          <div className="mt-0.5 text-[11px] leading-4 text-ds-faint">
+          <div className="mt-0.5 text-ds-xs leading-4 text-ds-faint">
             {t('workbenchToolbarCustomizeDescription')}
           </div>
         </div>
@@ -128,7 +128,7 @@ export function WorkbenchToolbarCustomizer({
           type="button"
           onClick={() => onChange(resetWorkbenchToolbarPreferences())}
           disabled={saving}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
         >
           <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.8} />
           {t('workbenchToolbarReset')}
@@ -155,10 +155,10 @@ export function WorkbenchToolbarCustomizer({
                 <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] font-medium text-ds-ink">
+                <span className="block truncate text-ds-sm font-medium text-ds-ink">
                   {label}
                 </span>
-                <span className="block truncate text-[10.5px] text-ds-faint">
+                <span className="block truncate text-ds-2xs text-ds-faint">
                   {action.ownerId}
                 </span>
               </span>
@@ -206,7 +206,7 @@ export function WorkbenchToolbarCustomizer({
                 aria-label={visible
                   ? t('workbenchToolbarRemoveAction', { label })
                   : t('workbenchToolbarAddAction', { label })}
-                className={`inline-flex w-[4.75rem] shrink-0 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${
+                className={`inline-flex w-[4.75rem] shrink-0 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-ds-xs font-semibold transition disabled:opacity-50 ${
                   visible
                     ? 'border-ds-border-muted text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                     : 'border-accent/30 bg-accent/10 text-accent hover:bg-accent/15'
@@ -226,7 +226,7 @@ export function WorkbenchToolbarCustomizer({
 
       {saving || error ? (
         <div
-          className={`border-t border-ds-border-muted px-4 py-2 text-[11px] ${
+          className={`border-t border-ds-border-muted px-4 py-2 text-ds-xs ${
             error ? 'text-red-600 dark:text-red-300' : 'text-ds-faint'
           }`}
           role={error ? 'alert' : 'status'}

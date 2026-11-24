@@ -110,9 +110,9 @@ export function GuiUpdateControl({
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} />
           )}
           <div className="min-w-0">
-            <div className="break-words text-[13px] font-semibold">{title}</div>
+            <div className="break-words text-ds-md font-semibold">{title}</div>
             {detail ? (
-              <div className="mt-0.5 break-words text-[12px] leading-5 opacity-75">{detail}</div>
+              <div className="mt-0.5 break-words text-ds-sm leading-5 opacity-75">{detail}</div>
             ) : null}
           </div>
         </div>
@@ -122,7 +122,7 @@ export function GuiUpdateControl({
           type="button"
           onClick={() => void onCheck()}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${checking ? 'animate-spin' : ''}`} strokeWidth={1.75} />
           {t('guiUpdateCheck')}
@@ -132,7 +132,7 @@ export function GuiUpdateControl({
             type="button"
             onClick={() => void onDownload()}
             disabled={!canDownload || busy}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
           >
             {downloading ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
@@ -147,7 +147,7 @@ export function GuiUpdateControl({
             type="button"
             onClick={() => void onInstall()}
             disabled={!canInstall || installing}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-medium text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-55"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-ds-userbubble px-3 py-2 text-ds-md font-medium text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-55"
           >
             {installing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
@@ -161,7 +161,7 @@ export function GuiUpdateControl({
           <button
             type="button"
             onClick={() => void openSafeExternalUrl(releaseUrl).catch(() => undefined)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-medium text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-ds-userbubble px-3 py-2 text-ds-md font-medium text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
           >
             {t('guiUpdateOpenRelease')}
           </button>

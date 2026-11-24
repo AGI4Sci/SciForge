@@ -1,4 +1,5 @@
 import { agentRuntimeClient } from '../agent/agent-runtime-client'
+import { effectiveTurnOptions } from '../lib/runtime-effective-turn-options'
 import { acceptSessionInput, abandonSessionInput, canDispatchSessionInput, readSessionInputs, ensureSessionInputRecovery } from './chat-session-admission'
 import type {
   AgentProvider,
@@ -25,6 +26,8 @@ import { createClientDirectiveId } from './chat-store-helpers'
 import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
 import { currentVisibleContextThreadId } from '../lib/visible-context'
 import { upsertAssistantMessageBlock } from './chat-store-runtime'
+import { workspaceRootIdentityKey } from '../lib/workspace-path'
+import type { DiscussionCheckpoint } from './discussion-checkpoint'
 
 type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -39,6 +42,11 @@ type SideContext = {
 type ActiveSideAbort = {
   sideId: string
   abort: AbortController
+}
+
+function discussionParentMatches(state: ChatState, checkpoint: DiscussionCheckpoint): boolean {
+  return state.threads.some(thread => thread.id === checkpoint.parentThreadId && thread.runtimeId === checkpoint.runtimeId &&
+    (!checkpoint.workspaceRoot || (thread.workspace && workspaceRootIdentityKey(thread.workspace) === workspaceRootIdentityKey(checkpoint.workspaceRoot))))
 }
 
 const sideAbortControllers = new Map<string, AbortController>()
@@ -458,7 +466,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
   try {
     rememberSideThreadRuntime(provider, sideId, side)
     const ownerThreadId = visibleContextOwnerThreadIdFor(side)
-    const { turnId } = await provider.sendUserMessage(sideId, queued.text, {
+    const { turnId } = await provider.sendUserMessage(sideId, queued.text, effectiveTurnOptions(side.runtimeId ?? ctx.get().activeAgentRuntime, {
       ...sideTurnPolicy(side, queued.chatMode ?? sideChatMode(side)),
       clientDirectiveId: queued.id,
       inputRevision: queued.admissionReceipt?.revision,
@@ -470,7 +478,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
       ...(fileReferences.length ? { fileReferences } : {}),
       ...(queued.displayText ? { displayText: queued.displayText } : {}),
       ...(ownerThreadId ? { visibleContextOwnerThreadId: ownerThreadId } : {})
-    })
+    }))
     ctx.set((s) =>
       patchSide(s, sideId, (cur) => ({
         ...cur,
@@ -614,8 +622,13 @@ export function createSideActions(ctx: SideContext): Pick<
       const parentThreadId = input.parentThreadId.trim()
       if (!threadId || !parentThreadId) return null
       const state = ctx.get()
+      const checkpoint = state.discussionCheckpoints?.[threadId]
+      if (checkpoint) {
+        if (!discussionParentMatches(state, checkpoint) || checkpoint.parentThreadId !== parentThreadId ||
+          (input.runtimeId && input.runtimeId !== checkpoint.runtimeId)) return null
+      }
       if (state.runtimeConnection !== 'ready') {
-        ctx.set({ error: ctx.t('common:runtimeActionNeedsConnection') })
+        if (input.reportErrors !== false) ctx.set({ error: ctx.t('common:runtimeActionNeedsConnection') })
         return null
       }
 
@@ -655,11 +668,15 @@ export function createSideActions(ctx: SideContext): Pick<
       try {
         detail = await provider.getRecentThreadView(threadId)
       } catch (e) {
-        ctx.set({ error: ctx.formatRuntimeError(e) })
+        // An explicit caller-owned restore keeps delayed errors in that view.
+        if (input.reportErrors !== false) ctx.set({ error: ctx.formatRuntimeError(e) })
         return null
       }
 
       const runtimeId = input.runtimeId ?? runtimeOwnerFromThreadDetail(detail)
+      const observedRuntimeId = runtimeOwnerFromThreadDetail(detail)
+      if (checkpoint && ((observedRuntimeId && observedRuntimeId !== checkpoint.runtimeId) || runtimeId !== checkpoint.runtimeId ||
+        !discussionParentMatches(ctx.get(), checkpoint))) return null
       const workspaceLocator = detail.workspaceLocator ?? attachedThread?.workspaceLocator
       if (runtimeId) {
         provider.rememberThreadRuntime?.(threadId, runtimeId, workspaceLocator)
@@ -680,7 +697,8 @@ export function createSideActions(ctx: SideContext): Pick<
         liveReasoning: '',
         liveAssistant: '',
         lastSeq: detail.latestSeq,
-        input: '',
+        input: checkpoint?.input ?? '',
+        ...(checkpoint ? { context: checkpoint.context, handoffDraft: checkpoint.handoffDraft, handedOffBasis: checkpoint.handedOffBasis, handoffPending: checkpoint.handoffPending } : {}),
         queuedMessages: (await readSessionInputs({ runtimeId: runtimeId ?? state.activeAgentRuntime, threadId }))
           .map((message) => ({ ...message, model: message.model ?? '' })),
         model: input.model?.trim() || defaultSideModel(state, parentThreadId),
@@ -691,6 +709,7 @@ export function createSideActions(ctx: SideContext): Pick<
         error: null
       }
 
+      if (checkpoint && (ctx.get().discussionCheckpoints[threadId] !== checkpoint || !discussionParentMatches(ctx.get(), checkpoint))) return null
       ctx.set((s) => ({
         sideConversations: { ...s.sideConversations, [threadId]: side },
         ...(input.openPanel
@@ -952,7 +971,7 @@ export function createSideActions(ctx: SideContext): Pick<
       try {
         rememberSideThreadRuntime(provider, sideId, side)
         const ownerThreadId = visibleContextOwnerThreadIdFor(side)
-        const { turnId } = await provider.sendUserMessage(sideId, contextualText, {
+        const { turnId } = await provider.sendUserMessage(sideId, contextualText, effectiveTurnOptions(side.runtimeId ?? state.activeAgentRuntime, {
           ...sideTurnPolicy(side, chatMode),
           clientDirectiveId,
           ...(side.workspaceLocator ? { workspaceLocator: side.workspaceLocator } : {}),
@@ -963,7 +982,7 @@ export function createSideActions(ctx: SideContext): Pick<
           ...(fileReferences?.length ? { fileReferences } : {}),
           ...(displayText ? { displayText } : {}),
           ...(ownerThreadId ? { visibleContextOwnerThreadId: ownerThreadId } : {})
-        })
+        }))
         ctx.set((s) =>
           patchSide(s, sideId, (cur) => ({
             ...cur,
@@ -1148,6 +1167,8 @@ export function createSideActions(ctx: SideContext): Pick<
       ctx.set((s) => {
         const next = { ...s.sideConversations }
         delete next[sideId]
+        const checkpoints = { ...s.discussionCheckpoints }
+        delete checkpoints[sideId]
         const nextActiveId =
           s.sidePanel.activeSideId === sideId && side
             ? Object.values(next).find((candidate) =>
@@ -1158,7 +1179,7 @@ export function createSideActions(ctx: SideContext): Pick<
           open: nextActiveId ? s.sidePanel.open : false,
           activeSideId: nextActiveId
         }
-        return { sideConversations: next, sidePanel: nextPanel }
+        return { sideConversations: next, sidePanel: nextPanel, discussionCheckpoints: checkpoints }
       })
       if (side) {
         const provider = ctx.getProvider()
@@ -1200,6 +1221,11 @@ export function createSideActions(ctx: SideContext): Pick<
       // Closing is a structural teardown; call directly so a stubbed
       // `state.closeSideConversation` (e.g. in tests) cannot swallow it.
       await actions.closeSideConversation(sideId)
+      ctx.set(current => {
+        const checkpoints = { ...current.discussionCheckpoints }
+        delete checkpoints[sideId]
+        return { discussionCheckpoints: checkpoints }
+      })
     }
   }
   return actions

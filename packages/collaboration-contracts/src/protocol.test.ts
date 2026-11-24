@@ -611,7 +611,7 @@ describe('provider-neutral contract', () => {
       humanRequestId: TEST_IDS.humanRequestId,
       requestRevision: 2,
       answer: '采用已确认的冻结边界。'
-    }).success).toBe(true)
+    }).success).toBe(false)
     expect(providerEventSchema.safeParse({
       protocolVersion: '1.0',
       type: 'provider.human_answer.candidate',

@@ -29,6 +29,14 @@ test('Owner transfer derives every Cloud CAS fact from the exact fresh Owner Age
   const current = transferWorkspace(false)
   const updated = transferWorkspace(true)
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -272,6 +280,14 @@ function unusedCoordinatorCommands(): CoordinatorCloudCommandService {
 
 function unusedTransport(): AuthenticatedCloudTransport {
   return {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Unexpected object staging.') },
       readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({ state: 'unavailable', reason: 'unused' }),

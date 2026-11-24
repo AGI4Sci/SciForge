@@ -8,6 +8,11 @@ receipts、主进程 lifecycle/capability、可选 workbench UI 与进程无关�
 compiler 的 HTTP 旁路。Project DAG 仅通过 Evidence DAG 的公开合同与正式
 Python 依赖消费 Evidence，不依赖宿主私有路径或相邻目录注入。
 
+显式 Session scope 先由 Host 校验 runtime/thread/workspace，再通过 Evidence
+公开状态读取解析该工作区的权威链。若 Session 切换工作区产生后继链，Project
+使用返回 Snapshot 的完整 threadId 构建 evidenceVector 和 includedSessions，
+并检查其与 Evidence authoritativeHead 的身份一致；不会重写 Snapshot 身份。
+
 桌面生命周期未显式配置 `SCIFORGE_PROJECT_DAG_SERVICE_URL` 时，会为自己拥有的
 sidecar 分配私有动态 loopback 端口，并合并并发 readiness 请求；子进程提前退出会
 立即失败，停止时只终止该生命周期创建的进程。显式外部 endpoint 保持原语义，包不

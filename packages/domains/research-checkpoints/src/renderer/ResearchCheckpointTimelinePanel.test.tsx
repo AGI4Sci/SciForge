@@ -113,7 +113,7 @@ test('does not flash a loading card before an unrecorded turn status is known', 
   assert.equal(html, '')
 })
 
-test('renders a neutral exact-Dossier entry without a duplicate aggregate card, badge, outputs, or warnings', () => {
+test('renders a neutral exact evidence chain entry without a duplicate aggregate card, badge, outputs, or warnings', () => {
   const html = renderToStaticMarkup(
     <ResearchCheckpointStatusCard
       status={committed()}
@@ -122,9 +122,9 @@ test('renders a neutral exact-Dossier entry without a duplicate aggregate card, 
   )
   assert.match(html, /data-research-checkpoint-state="committed"/u)
   assert.match(html, /data-research-checkpoint-version-id="artifact-version:research-checkpoint:2"/u)
-  assert.match(html, /researchCheckpointOpenDossier/u)
+  assert.match(html, /researchCheckpointOpenEvidenceChain/u)
   const visibleText = html.replace(/<[^>]+>/gu, '')
-  assert.equal(visibleText, 'researchCheckpointOpenDossier')
+  assert.equal(visibleText, 'researchCheckpointOpenEvidenceChain')
   assert.doesNotMatch(visibleText, /Treatment response analysis|artifact|version|sha256|treatment-response|not run|incomplete|untracked|pending|image\/png/iu)
   assert.doesNotMatch(html, /title="[^"]*(?:artifact|version|sha256)/iu)
 })

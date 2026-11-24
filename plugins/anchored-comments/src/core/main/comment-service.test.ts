@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  ANCHORED_COMMENT_SCHEMA_VERSION,
+  ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
   type AnchoredCommentThread,
   type CommentScreenshotAssetRef
 } from '../contract'
@@ -56,7 +56,7 @@ function thread(
   assets?: { full: CommentScreenshotAssetRef; focused: CommentScreenshotAssetRef }
 ): AnchoredCommentThread {
   return {
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     id,
     workspaceKey: '/workspace/example',
     purpose: 'research',
@@ -93,6 +93,34 @@ function thread(
 }
 
 describe('AnchoredCommentService', () => {
+  it('freezes fork context across restart and refuses parent deletion or history edits', async () => {
+    const root = await tempDir()
+    const service = new AnchoredCommentService(root)
+    const parent = thread('code-parent')
+    parent.anchor.codeAnchor = { filePath: 'src/example.ts', side: 'new', line: 1,
+      hunkHeader: '@@ -1 +1 @@', code: 'const value = 1', baseRevision: 'abc', contentDigest: 'a'.repeat(64) }
+    await service.upsertThread(parent)
+    const child = await service.forkThread(parent.id, parent.messages[0]!.id, 'code-child', 'Alternative?')
+    expect(child.fork?.messages).toEqual(parent.messages)
+    const appended = { ...parent, messages: [...parent.messages, { ...parent.messages[0]!, id: 'later', body: 'Later reply' }] }
+    await service.upsertThread(appended)
+    const restarted = new AnchoredCommentService(root)
+    expect((await restarted.getThread(child.id))?.fork?.messages).toEqual(parent.messages)
+    expect(await restarted.deleteThread(parent.id)).toMatchObject({ deleted: false, warnings: [expect.stringMatching(/child threads/)] })
+    await expect(restarted.upsertThread({ ...appended, messages: parent.messages })).rejects.toThrow(/append-only/)
+    await expect(restarted.upsertThread({ ...child, fork: { ...child.fork!, truncated: true } })).rejects.toThrow(/immutable/)
+    await expect(restarted.forkThread(parent.id, 'missing', 'bad-child', 'Question')).rejects.toThrow(/fork point/)
+    expect((await restarted.listThreads()).map((item) => item.id).sort()).toEqual(['code-child', 'code-parent'])
+  })
+
+  it.each(['../secret.ts', '/Users/private/code.ts', 'src/./code.ts', 'src/a\n.ts'])('rejects unsafe frozen code path %s', async (filePath) => {
+    const service = new AnchoredCommentService(await tempDir())
+    const value = thread('unsafe-code')
+    value.anchor.codeAnchor = { filePath, side: 'new', line: 1, hunkHeader: '', code: 'value', baseRevision: 'abc', contentDigest: 'a'.repeat(64) }
+    await expect(service.upsertThread(value)).rejects.toThrow()
+    expect(await service.listThreads()).toEqual([])
+  })
+
   it('rejects checksum-correct high-bit chunk types before ASCII decoding, using only bytes', async () => {
     const service = new AnchoredCommentService(await tempDir())
     const header = Buffer.alloc(13)
@@ -134,8 +162,51 @@ describe('AnchoredCommentService', () => {
     await expect(reloaded.listThreads({ targetKey: 'table:cells:A1:B3' }))
       .resolves.toMatchObject([{ id: 'thread-2' }])
     expect(JSON.parse(await readFile(anchoredCommentStorePath(root), 'utf8'))).toMatchObject({
-      schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION
+      schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION
     })
+  })
+
+  it('branches a thread from an existing parent and reads it back', async () => {
+    const root = await tempDir()
+    const service = new AnchoredCommentService(root)
+    await service.upsertThread(thread('thread-1'))
+    await service.upsertThread({ ...thread('thread-2'), parentThreadId: 'thread-1' })
+
+    const child = await service.getThread('thread-2')
+    expect(child).toMatchObject({ id: 'thread-2', parentThreadId: 'thread-1' })
+    expect((await service.listThreads({})).find((item) => item.id === 'thread-2')?.parentThreadId).toBe('thread-1')
+  })
+
+  it('rejects a branch whose parent does not exist', async () => {
+    const service = new AnchoredCommentService(await tempDir())
+    await expect(service.upsertThread({ ...thread('thread-2'), parentThreadId: 'missing' }))
+      .rejects.toThrow(/parent comment thread does not exist/)
+  })
+
+  it('rejects a thread that names itself as its parent', async () => {
+    const service = new AnchoredCommentService(await tempDir())
+    await expect(service.upsertThread({ ...thread('thread-1'), parentThreadId: 'thread-1' }))
+      .rejects.toThrow(/own parent/)
+  })
+
+  it('rejects a parent chain that would form a cycle', async () => {
+    const service = new AnchoredCommentService(await tempDir())
+    await service.upsertThread(thread('thread-1'))
+    await service.upsertThread({ ...thread('thread-2'), parentThreadId: 'thread-1' })
+    // Reparenting thread-1 under thread-2 would close the loop thread-1 -> thread-2 -> thread-1.
+    await expect(service.upsertThread({ ...thread('thread-1'), parentThreadId: 'thread-2' }))
+      .rejects.toThrow(/cycle/)
+  })
+
+  it('refuses to delete a thread that still has branches', async () => {
+    const service = new AnchoredCommentService(await tempDir())
+    await service.upsertThread(thread('thread-1'))
+    await service.upsertThread({ ...thread('thread-2'), parentThreadId: 'thread-1' })
+
+    const result = await service.deleteThread('thread-1')
+    expect(result).toMatchObject({ deleted: false })
+    expect(result.warnings?.join(' ')).toMatch(/branches/)
+    expect(await service.getThread('thread-1')).not.toBeNull()
   })
 
   it('migrates a version-zero persisted store and writes the current version', async () => {
@@ -149,11 +220,11 @@ describe('AnchoredCommentService', () => {
 
     const service = new AnchoredCommentService(root)
     await expect(service.getThread('legacy-thread')).resolves.toMatchObject({
-      schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+      schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
       id: 'legacy-thread'
     })
     expect(JSON.parse(await readFile(anchoredCommentStorePath(root), 'utf8')).schemaVersion)
-      .toBe(ANCHORED_COMMENT_SCHEMA_VERSION)
+      .toBe(ANCHORED_COMMENT_THREAD_SCHEMA_VERSION)
   })
 
   it('stores PNGs by content digest, validates reads, and garbage-collects unreferenced assets', async () => {

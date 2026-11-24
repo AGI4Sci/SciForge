@@ -1,3 +1,4 @@
+import { collaborationRendererContracts } from './renderer/collaboration-capability-client.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
@@ -153,6 +154,7 @@ test('global collaboration mutations satisfy the production broker contract with
     retrySynchronization: async () => undefined,
     decideTaskOffer: async () => undefined,
     returnTask: async () => undefined,
+    startTask: async () => undefined,
     submitWorkerDelivery: async () => ({
       projectId: TEST_IDS.projectId,
       taskId: TEST_IDS.taskId,
@@ -213,6 +215,10 @@ test('global collaboration mutations satisfy the production broker contract with
       taskOfferId: TEST_IDS.taskOfferId,
       decision: 'reject'
     },
+    [COLLABORATION_CAPABILITY_IDS.taskStart]: {
+      projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId, mode: 'manual'
+    },
     [COLLABORATION_CAPABILITY_IDS.taskReturn]: {
       projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId,
       executionId: TEST_IDS.executionId, reason: '模型服务不可用'
@@ -240,7 +246,7 @@ test('global collaboration mutations satisfy the production broker contract with
   }
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
-  assert.equal(mutations.length, 13)
+  assert.equal(mutations.length, 14)
   const returnTask = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskReturn)!
   assert.equal(returnTask.approval, 'confirmation')
   assert.deepEqual(returnTask.audiences, ['ui'])
@@ -306,7 +312,10 @@ test('private Task Session capability resolves only the current exact Worker bin
     updatedAt: '2026-10-14T00:00:00.000Z'
   })
   const runtime = {
-    listWorkerSessionBindings: async () => [binding]
+    openTaskSession: async (input: { taskId: string }) => {
+      if (input.taskId !== binding.taskId) throw new Error('no private Session bound')
+      return { opened: true, sessionId: binding.threadId, runtimeId: binding.runtimeId, threadId: binding.threadId }
+    }
   } as unknown as CollaborationRuntime
   const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({
     defineCapability: (definition) => definition,
@@ -314,6 +323,8 @@ test('private Task Session capability resolves only the current exact Worker bin
   }).createDefinitions()
   const definition = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskSessionOpen)
   assert.ok(definition)
+  assert.equal(definition.effect, 'workspace-write')
+  assert.equal(definition.approval, 'none')
   const opened = await definition.handler({ projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId })
   assert.deepEqual(opened.output, {
     opened: true,
@@ -342,7 +353,7 @@ test('delivery materials list is one UI read capability bound to the exact local
   assert.throws(() => list.inputSchema.parse({ ...input, workspaceRoot: '/arbitrary/path' }))
 })
 
-test('local Worker draft autosave is UI-only workspace state and never asks for a confirmation', async () => {
+test('Worker draft autosave supports UI and associated Agents without publishing', async () => {
   const calls: unknown[] = []
   const runtime = { saveWorkerDeliveryDraft: async (input: unknown) => { calls.push(input); return { saved: true } } } as unknown as CollaborationRuntime
   const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({
@@ -351,11 +362,16 @@ test('local Worker draft autosave is UI-only workspace state and never asks for 
   const save = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.workerDeliveryDraftSave)!
   assert.equal(save.effect, 'workspace-write')
   assert.equal(save.approval, 'none')
-  assert.deepEqual(save.audiences, ['ui'])
+  assert.deepEqual(save.audiences, ['ui', 'agent'])
   const input = { projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
     summary: '', expectedDraftRevision: 1 }
   await save.handler(input)
   assert.deepEqual(calls, [input])
+  const mapped = { ...input, declaredMaterial: { relativePath: '.sciforge/uploads/task-session/human.csv', source: 'member' } }
+  await save.handler(mapped)
+  assert.deepEqual(calls[1], mapped)
+  assert.throws(() => save.inputSchema.parse({ ...input, declaredMaterial: { relativePath: '../outside.csv' } }))
+  assert.throws(() => save.inputSchema.parse({ ...input, declaredMaterial: { relativePath: 'generated.csv', source: 'ai' } }))
   assert.throws(() => save.inputSchema.parse({ ...input, target: {} }))
   const submit = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.deliverySubmit)!
   const target = { projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
@@ -459,6 +475,14 @@ test('the Collaboration entry publishes one Coordinator command service backed b
       deviceId: TEST_IDS.deviceId,
       deviceRevision: 1
     }),
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Object staging is unused.') },
     readObject: async () => { throw new Error('Object reads are unused.') },
     execute: async (request) => ({
@@ -671,4 +695,49 @@ test('the Collaboration entry fails closed without Identity service mediation', 
       clear: async () => ({ revision: 1, value: null })
     }
   }), /Identity Cloud service mediation/u)
+})
+
+
+test('explicit Session continuation has one UI-only strict public capability', async () => {
+  const calls: unknown[] = []
+  const output = { opened: true, sessionId: 'successor', runtimeId: 'codex', threadId: 'successor', context: 'Historical task data', clientDirectiveId: 'continuation-test' }
+  const runtime = { continueTaskSession: async (input: unknown) => { calls.push(input); return output } } as unknown as CollaborationRuntime
+  const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({ defineCapability: (definition) => definition, getRuntime: () => runtime }).createDefinitions()
+  const definition = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskSessionContinue)!
+  assert.deepEqual(definition.audiences, ['ui'])
+  assert.equal(definition.effect, 'workspace-write')
+  const input = { projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    predecessorRuntimeId: 'codex', predecessorThreadId: 'old-native-thread', reason: 'Permanently unavailable' }
+  assert.deepEqual((await definition.handler(input)).output, output)
+  assert.deepEqual(calls, [input])
+  assert.throws(() => definition.inputSchema.parse({ ...input, workspaceRoot: '/arbitrary' }))
+})
+
+test('task execution choice requires a human UI invocation and rejects undeclared start modes', async () => {
+  const calls: unknown[] = []
+  const runtime = { startTask: async (input: unknown) => { calls.push(input) } } as unknown as CollaborationRuntime
+  const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({ defineCapability: definition => definition, getRuntime: () => runtime }).createDefinitions()
+  const start = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskStart)!
+  const input = { projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId, mode: 'manual' }
+  assert.deepEqual(start.audiences, ['ui'])
+  assert.equal(start.approval, 'confirmation')
+  await assert.rejects(start.handler(input, { caller: { audience: 'agent' }, assertPrincipalCurrent: () => undefined }), /明确授权/u)
+  assert.equal(calls.length, 0)
+  assert.throws(() => start.inputSchema.parse({ ...input, mode: 'automatic' }))
+  assert.throws(() => start.inputSchema.parse({ ...input, bypassApproval: true }))
+  assert.deepEqual((await start.handler(input)).output, { started: true })
+  assert.deepEqual(calls, [input])
+})
+
+
+test('every renderer capability effect matches the canonical main definition used by invocation metadata', () => {
+  const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({
+    defineCapability: definition => definition,
+    getRuntime: () => { throw new Error('Effect audit must not invoke capabilities') }
+  }).createDefinitions()
+  for (const contract of Object.values(collaborationRendererContracts)) {
+    const definition = definitions.find(item => item.id === contract.actionId)
+    assert.ok(definition, `Missing main definition for ${contract.actionId}`)
+    assert.equal(contract.effect, definition.effect, `${contract.actionId} must generate invocation metadata for its canonical effect`)
+  }
 })

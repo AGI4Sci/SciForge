@@ -41,7 +41,7 @@ export function SecretInput({
         type={visible ? 'text' : 'password'}
         autoComplete={autoComplete}
         placeholder={placeholder}
-        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[14px] text-ds-ink focus:outline-none"
+        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-ds-lg text-ds-ink focus:outline-none"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -69,7 +69,7 @@ export function SectionJumpButton({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
+      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-ds-sm font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
     >
       {label}
     </button>
@@ -89,7 +89,7 @@ export function InlineNoticeView({
         : 'border-ds-border bg-ds-main/50 text-ds-muted'
 
   return (
-    <div className={`rounded-xl border px-3 py-2 text-[12.5px] leading-5 ${className}`}>
+    <div className={`rounded-xl border px-3 py-2 text-ds-sm leading-5 ${className}`}>
       {notice.message}
     </div>
   )
@@ -109,7 +109,7 @@ export function SettingsCard({
       className={`rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25 ${className}`}
     >
       <div className="border-b border-ds-border-muted px-5 py-3">
-        <h2 className="text-[16px] font-semibold text-ds-ink">{title}</h2>
+        <h2 className="text-ds-xl font-semibold text-ds-ink">{title}</h2>
       </div>
       <div className="divide-y divide-ds-border-muted px-2 py-1">{children}</div>
     </section>
@@ -136,9 +136,9 @@ export function SettingRow({
       }`}
     >
       <div className={`min-w-0 ${wideControl ? 'w-full max-w-none shrink-0' : 'flex-1'}`}>
-        <div className="text-[14px] font-semibold text-ds-ink">{title}</div>
+        <div className="text-ds-lg font-semibold text-ds-ink">{title}</div>
         {description ? (
-          <p className="mt-0.5 text-[13px] leading-relaxed text-ds-muted">{description}</p>
+          <p className="mt-0.5 text-ds-md leading-relaxed text-ds-muted">{description}</p>
         ) : null}
       </div>
       <div className={`w-full min-w-0 ${wideControl ? '' : 'sm:max-w-[420px]'}`}>

@@ -1,3 +1,4 @@
+import { translateWorkspace } from './workspace/workspace-i18n.js'
 import type { DomainRendererWorkbenchHost } from '@sciforge/domain-sdk/host'
 import { COLLABORATION_MAIN_AREA_CONTRIBUTION } from '../definition.js'
 
@@ -14,7 +15,7 @@ export async function openCollaborationTaskSession(
     focusComposer: true,
     returnTo: {
       contributionId: COLLABORATION_MAIN_AREA_CONTRIBUTION.id,
-      label: `协作任务 ${task.taskReference} · 返回交付草稿`,
+      label: translateWorkspace('协作任务 {{reference}} · 返回交付草稿', { reference: task.taskReference }),
       activation: { revision: 1, payload: { projectId: task.projectId, taskId: task.taskId } }
     }
   })

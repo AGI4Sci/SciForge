@@ -15,7 +15,7 @@ it('retains ownership while collapsed and releases it only when the contribution
     return <button id="owned-session" onClick={() => context.selectSession('owned')}>Task title</button>
   }
   const registry = new WorkbenchNavigationSectionContributionRegistry()
-  registry.register({ id: 'fixture.navigation', ownerId: 'fixture', contract: { location: WORKBENCH_NAVIGATION_SECTION_LOCATION, contractVersion: WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION, label: 'fixture' }, value: { ownsSessions: true, render: context => <Contribution context={context} /> } })
+  registry.register({ id: 'fixture.navigation', ownerId: 'fixture', contract: { location: WORKBENCH_NAVIGATION_SECTION_LOCATION, contractVersion: WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION, label: 'fixture', placement: 'body' }, value: { ownsSessions: true, render: context => <Contribution context={context} /> } })
   const section = registry.list()[0]
   expect(section.contribution.ownsSessions).toBe(true)
   const selections: string[] = []

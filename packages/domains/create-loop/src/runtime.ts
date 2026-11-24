@@ -21,6 +21,7 @@ import {
 } from '@sciforge/domain-sdk/workflow-template'
 import {
   type CreateLoopSnapshot,
+  type ProcessReceiptView,
   type WorkflowApprovalDecision,
   type WorkflowApprovalRecordV2,
   type WorkflowCodeCheckResult,
@@ -69,7 +70,9 @@ import {
   missingCreateLoopWorkflowResourceProvider,
   type CreateLoopResourceExecutor
 } from './resource-executor.js'
+import { executeReceiptedProcess, ProcessReceiptError, readProcessReceipt, readProcessReceipts } from './process-receipts.js'
 import { workflowCallTrigger, workflowReachableNodeIds } from './workflow-execution-graph.js'
+import { isValidCronExpression, nextCronAt } from './schedule-cron.js'
 
 const SCHEMA_VERSION = 3
 const SCHEDULER_POLL_MS = 30_000
@@ -158,6 +161,7 @@ export class CreateLoopRuntime {
   #nodeResults: WorkflowRuntimeStatus['nodeResults'] = {}
   #approvals = new Map<string, ApprovalWaiter>()
   #runSecretValues = new Map<string, Set<string>>()
+  #runProcessReceipts = new Map<string, Map<string, ProcessReceiptView>>()
   #scheduler: unknown = null
   #webhookServer: Server | null = null
   #disposed = false
@@ -229,13 +233,15 @@ export class CreateLoopRuntime {
     this.#activeRuns.clear()
     this.#approvals.clear()
     this.#runSecretValues.clear()
+    this.#runProcessReceipts.clear()
     this.#context = null
   }
 
   async read(): Promise<CreateLoopSnapshot> {
     this.#requireActive()
     await this.#stateOperation
-    return snapshot(await this.#load())
+    const processes = await readProcessReceipts(this.#statePath)
+    return { ...snapshot(await this.#load()), processReceipts: processes.receipts, processReceiptCoverage: processes.coverage }
   }
 
   async save(
@@ -491,6 +497,7 @@ export class CreateLoopRuntime {
       }
     } finally {
       this.#runSecretValues.delete(runId)
+      this.#runProcessReceipts.delete(runId)
     }
   }
 
@@ -547,6 +554,7 @@ export class CreateLoopRuntime {
         : { ok: false, message: safeResult.error || safeResult.message }
     } finally {
       this.#runSecretValues.delete(runId)
+      this.#runProcessReceipts.delete(runId)
     }
   }
 
@@ -637,6 +645,7 @@ export class CreateLoopRuntime {
         this.#pendingExecutionEventReservations - 1
       )
       this.#runSecretValues.delete(runId)
+      this.#runProcessReceipts.delete(runId)
       throw error
     }
     const promise = this.#executeRun(
@@ -661,6 +670,7 @@ export class CreateLoopRuntime {
           this.#pendingExecutionEventReservations - 1
         )
         this.#runSecretValues.delete(runId)
+        this.#runProcessReceipts.delete(runId)
         this.#activeRuns.delete(workflow.id)
         const cleanup = setTimeout(() => {
           if (!this.#activeRuns.has(workflow.id)) {
@@ -826,7 +836,7 @@ export class CreateLoopRuntime {
         manifestDigest: workflowFingerprint(manifest),
         comparison: manifest.comparison ?? null
       }),
-      artifacts: [toJsonValue({
+      artifacts: [...(this.#runProcessReceipts.get(runId)?.values() ?? [])].map((receipt) => toJsonValue({ kind: 'sciforge.create-loop.process-receipt', producer: 'create-loop', receipt })).concat([toJsonValue({
         kind: 'sciforge.create-loop.run-manifest',
         contractVersion: 2,
         workflowId: workflow.id,
@@ -835,7 +845,7 @@ export class CreateLoopRuntime {
       }), toJsonValue({
         kind: SCIFORGE_REPRO_SPEC_RESOURCE_KIND,
         spec: reproSpec
-      })]
+      })])
     }, secretValues)
     await this.#mutate((current) => {
       const workflows = current.settings.workflows.map((candidate) =>
@@ -906,6 +916,10 @@ export class CreateLoopRuntime {
         [node.id]: safeResult
       }
       if (result.status !== 'success') {
+        if (result.attempts.some((attempt) => ['process_outcome_unknown', 'process_result_delivery_failed'].includes(attempt.receipt.errorCode ?? ''))) {
+          throw new ProcessReceiptError(result.error || result.message, true,
+            result.attempts.some((attempt) => attempt.receipt.errorCode === 'process_result_delivery_failed'))
+        }
         if (node.onError === 'continue') continue
         throw new Error(result.error || result.message)
       }
@@ -936,7 +950,10 @@ export class CreateLoopRuntime {
       (candidate) => candidate.id === node.id
     )
     const componentFingerprint = activityFingerprint(snapshotNode ?? node)
+    // Workflow fingerprints cover the public JSON payload; the producer's
+    // prepared receipt separately binds exact JSON plus WORKFLOW_TEXT bytes.
     const inputFingerprint = workflowFingerprint(payload.json)
+    const invocationId = randomUUID()
     const attempts: WorkflowNodeRunResultV1['attempts'] = []
     this.#nodeStatus[workflow.id] = {
       ...(this.#nodeStatus[workflow.id] ?? {}),
@@ -978,37 +995,46 @@ export class CreateLoopRuntime {
           inputFingerprint
         })
       })
+      let processCompleted = false
       try {
         const remainingTimeoutMs = timeoutMs > 0
           ? Math.max(1, timeoutDeadline - Date.now())
           : 0
-        const output = timeoutMs > 0
-          ? await withAbortTimeout(
-              (nodeSignal) => this.#nodeOutput(
-                workflow,
-                node,
-                payload,
-                runId,
-                nodeSignal,
-                callerWorkspaceRoot,
-                startedAt
-              ),
-              remainingTimeoutMs,
-              signal,
-              `Node '${node.id}' timed out after ${timeoutMs} ms.`
-            )
-          : await this.#nodeOutput(
-              workflow,
-              node,
-              payload,
-              runId,
-              signal,
-              callerWorkspaceRoot,
-              startedAt
-            )
+        const runOutput = async (nodeSignal: AbortSignal): Promise<{ payload: Payload; message: string; threadId?: string; processArtifacts?: WorkflowNodeRunResultV1['artifactRefs'] }> => {
+          if (!node.disabled && node.type === 'code' && node.config.language !== 'javascript') {
+            const identity = { workflowId: workflow.id, runId, nodeId: node.id, invocationId, attempt }
+            const remember = (receipt: ProcessReceiptView): void => {
+              const receipts = this.#runProcessReceipts.get(runId) ?? new Map<string, ProcessReceiptView>()
+              receipts.set(receipt.executionId, receipt)
+              this.#runProcessReceipts.set(runId, receipts)
+            }
+            let execution: Awaited<ReturnType<typeof executeReceiptedProcess>>
+            try {
+              execution = await executeReceiptedProcess({
+              statePath: this.#statePath,
+              identity,
+              command: node.config.language === 'python' ? pythonCommand() : 'bash',
+              knownSecretValues: this.#knownSecretValues(runId),
+              script: node.config.code, payload, cwd: callerWorkspaceRoot, signal: nodeSignal,
+              timeoutMs: timeoutMs > 0 ? Math.min(CODE_TIMEOUT_MS, remainingTimeoutMs) : CODE_TIMEOUT_MS
+              })
+              remember(execution.receipt)
+            } catch (error) {
+              if (error instanceof ProcessReceiptError) remember(await readProcessReceipt(this.#statePath, identity))
+              throw error
+            }
+            return { payload: payloadFromInput(parseJsonOrText(execution.text)), message: execution.text,
+              processArtifacts: [{ kind: 'file', ref: path.join(execution.receipt.directory, 'terminal.json'), digest: execution.receipt.terminalDigest, mediaType: 'application/json' }] }
+          }
+          return this.#nodeOutput(workflow, node, payload, runId, nodeSignal, callerWorkspaceRoot, startedAt)
+        }
+        const output = timeoutMs > 0 && !(node.type === 'code' && node.config.language !== 'javascript')
+          ? await withAbortTimeout(runOutput, remainingTimeoutMs, signal, `Node '${node.id}' timed out after ${timeoutMs} ms.`)
+          : await runOutput(signal)
+        processCompleted = node.type === 'code' && node.config.language !== 'javascript'
         this.#registerRunSecretValues(runId, output.payload.json, output.message)
         const finishedAt = this.#now().toISOString()
-        const artifactRefs = discoverWorkflowArtifactReferences(output.payload.json)
+        const artifactRefs = [...discoverWorkflowArtifactReferences(output.payload.json), ...(output.processArtifacts ?? [])]
         const outputFingerprint = workflowFingerprint(output.payload.json)
         const receipt = {
           status: 'success' as const,
@@ -1066,13 +1092,19 @@ export class CreateLoopRuntime {
       } catch (error) {
         const finishedAt = this.#now().toISOString()
         const timeoutBudgetExhausted = timeoutMs > 0 && Date.now() >= timeoutDeadline
-        const terminal = signal.aborted || timeoutBudgetExhausted || attempt >= retries
+        const unknownProcess = error instanceof ProcessReceiptError && error.unknown
+        const stopProcessRetry = unknownProcess || processCompleted
+        const terminal = stopProcessRetry || signal.aborted || timeoutBudgetExhausted || attempt >= retries
+        const processRefs: WorkflowNodeRunResultV1['artifactRefs'] = [...(this.#runProcessReceipts.get(runId)?.values() ?? [])]
+          .filter((receipt) => receipt.runId === runId && receipt.invocationId === invocationId && receipt.attempt === attempt)
+          .map((receipt) => ({ kind: 'file' as const, ref: path.join(receipt.directory, 'prepared.json'), digest: receipt.preparedDigest, mediaType: 'application/json' }))
         const errorDetail = errorMessage(error)
         this.#registerRunSecretValues(runId, errorDetail)
         const receipt = {
           status: 'error' as const,
           outcome: terminal ? 'fatal_error' as const : 'retryable_error' as const,
-          errorCode: signal.aborted ? 'aborted' : 'node_execution_failed',
+          errorCode: processCompleted || (error instanceof ProcessReceiptError && error.deliveryFailed)
+            ? 'process_result_delivery_failed' : unknownProcess ? 'process_outcome_unknown' : signal.aborted ? 'aborted' : 'node_execution_failed',
           detail: truncateString(
             errorDetail,
             MAX_WORKFLOW_RECEIPT_DETAIL_LENGTH,
@@ -1087,28 +1119,36 @@ export class CreateLoopRuntime {
           inputFingerprint,
           receiptFingerprint: workflowActivityReceiptFingerprint(receipt),
           receipt,
-          artifactRefs: []
+          artifactRefs: processRefs
         }
         attempts.push(recordedAttempt)
-        await this.#publishExecutionEvent(workflow.id, {
-          phase: terminal ? 'activity_completed' : 'tool_attempted',
-          executionId: runId,
-          runId,
-          activityId: node.id,
-          occurredAt: finishedAt,
-          ...(executionWorkspaceRoot ? { workspaceRoot: executionWorkspaceRoot } : {}),
-          payload: toJsonValue({
-            workflowId: workflow.id,
-            nodeId: node.id,
-            attempt,
-            receipt
+        try {
+          await this.#publishExecutionEvent(workflow.id, {
+            phase: terminal ? 'activity_completed' : 'tool_attempted',
+            executionId: runId,
+            runId,
+            activityId: node.id,
+            occurredAt: finishedAt,
+            ...(executionWorkspaceRoot ? { workspaceRoot: executionWorkspaceRoot } : {}),
+            payload: toJsonValue({
+              workflowId: workflow.id,
+              nodeId: node.id,
+              attempt,
+              receipt
+            }),
+            artifacts: processRefs.map((reference) => toJsonValue(reference))
           })
-        })
-        if (!signal.aborted && !timeoutBudgetExhausted && attempt < retries) {
+        } catch (deliveryError) {
+          // A second publication failure must not erase the non-dispatchable
+          // state while unwinding through a parent workflow's retry policy.
+          if (stopProcessRetry) throw new ProcessReceiptError(errorDetail, true, receipt.errorCode === 'process_result_delivery_failed')
+          throw deliveryError
+        }
+        if (!stopProcessRetry && !signal.aborted && !timeoutBudgetExhausted && attempt < retries) {
           await abortableDelay(Math.max(0, node.retryDelayMs ?? 0), signal)
           continue
         }
-        if (!signal.aborted && receiptProvider?.recoverAgentResult) {
+        if (!stopProcessRetry && !signal.aborted && receiptProvider?.recoverAgentResult) {
           try {
             const recoveredText = await receiptProvider.recoverAgentResult({
               workflow,
@@ -1143,7 +1183,7 @@ export class CreateLoopRuntime {
             // receipt provider cannot prove a recoverable execution.
           }
         }
-        if (!signal.aborted && node.onError === 'fallback') {
+        if (!stopProcessRetry && !signal.aborted && node.onError === 'fallback') {
           const fallback = parseJsonOrText(node.fallbackJson ?? '{}')
           const outputFingerprint = workflowFingerprint(fallback)
           const artifactRefs = discoverWorkflowArtifactReferences(fallback)
@@ -1180,7 +1220,7 @@ export class CreateLoopRuntime {
           inputFingerprint,
           outputFingerprint: workflowFingerprint(null),
           attempts,
-          artifactRefs: []
+          artifactRefs: processRefs
         }
       }
     }
@@ -1247,6 +1287,16 @@ export class CreateLoopRuntime {
           mode: node.config.mode,
           signal
         })
+        // A terminal agent state is a node outcome, not a formatting detail: a
+        // failed or cancelled turn usually still has a thread and no assistant
+        // text, and reporting that as success hides the failure from every
+        // downstream node and from the run history.
+        if (result.state !== 'completed') {
+          const detail = result.failure
+            ? `${result.failure.code}: ${result.failure.message}`
+            : `the runtime ended the turn as ${result.state}`
+          throw new Error(`Agent execution ${result.state}: ${detail}`)
+        }
         const receiptProvider = this.#executionReceiptProvider(workflow)
         const resultText = receiptProvider?.hydrateAgentResult
           ? await receiptProvider.hydrateAgentResult({
@@ -1798,6 +1848,13 @@ export class CreateLoopRuntime {
       )
       const due = triggers.find((node) => isScheduleDue(node.config.schedule, workflow.nextRunAt, now))
       if (!due) return workflow
+      // Preserve source-order selection: only the selected legal cron can initialize.
+      // An impossible expression remains unscheduled and must never run every tick.
+      if (due.config.schedule.kind === 'cron' &&
+          (!workflow.nextRunAt || !Number.isFinite(Date.parse(workflow.nextRunAt)))) {
+        const nextRunAt = nextScheduleAt(due.config.schedule, now)
+        return nextRunAt === workflow.nextRunAt ? workflow : { ...workflow, nextRunAt }
+      }
       void this.#startRun(workflow, due.id, { json: {}, text: '' }, due.id)
       return { ...workflow, nextRunAt: nextScheduleAt(due.config.schedule, now) }
     })
@@ -2349,7 +2406,7 @@ async function executeCode(
   language: WorkflowCodeLanguage,
   code: string,
   payload: Payload,
-  signal: AbortSignal
+  _signal: AbortSignal
 ): Promise<{ payload: Payload; message: string }> {
   if (language === 'javascript') {
     const output = runInNewContext(
@@ -2360,13 +2417,7 @@ async function executeCode(
     const json = await output
     return { payload: payloadFromInput(json), message: 'JavaScript completed.' }
   }
-  const bin = language === 'python' ? pythonCommand() : 'bash'
-  const args = language === 'python' ? ['-c', code] : ['-c', code]
-  const text = await runProcess(bin, args, JSON.stringify(payload.json), signal, {
-    WORKFLOW_JSON: JSON.stringify(payload.json),
-    WORKFLOW_TEXT: payload.text
-  })
-  return { payload: payloadFromInput(parseJsonOrText(text)), message: text }
+  throw new Error('External code requires the canonical receipted node route.')
 }
 
 async function runProcess(
@@ -2424,6 +2475,14 @@ function isScheduleDue(
   now: Date
 ): boolean {
   if (schedule.kind === 'manual') return false
+  if (schedule.kind === 'cron') {
+    // An invalid expression must never read as "due now": that would run the
+    // workflow on every scheduler tick instead of once per matching minute.
+    if (!isValidCronExpression(schedule.cron)) return false
+    // Missing/corrupt cron timestamps are initialization candidates, never permission to run.
+    if (!nextRunAt || !Number.isFinite(Date.parse(nextRunAt))) return true
+    return Date.parse(nextRunAt) <= now.getTime()
+  }
   if (!nextRunAt) return true
   return Date.parse(nextRunAt) <= now.getTime()
 }
@@ -2436,6 +2495,7 @@ function nextScheduleAt(
     return new Date(now.getTime() + Math.max(1, schedule.everyMinutes) * 60_000).toISOString()
   }
   if (schedule.kind === 'at') return schedule.atTime
+  if (schedule.kind === 'cron') return nextCronAt(schedule.cron, now)
   if (schedule.kind === 'daily') {
     const [hour, minute] = schedule.timeOfDay.split(':').map(Number)
     const next = new Date(now)

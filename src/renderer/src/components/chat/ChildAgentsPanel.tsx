@@ -655,7 +655,7 @@ function ChildStatusBadge({
 }): ReactElement {
   return (
     <span
-      className={`inline-flex min-h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-[10.5px] font-semibold leading-none ${childStatusTone(status)}`}
+      className={`inline-flex min-h-5 shrink-0 items-center gap-1 rounded-full border px-1.5 text-ds-2xs font-semibold leading-none ${childStatusTone(status)}`}
       title={childAgentStatusLabel(status, t)}
     >
       <ChildAgentStatusIcon status={status} className="h-3 w-3" />
@@ -1054,16 +1054,16 @@ function ChildAgentOverview({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-ds-ink">{name}</span>
+            <span className="min-w-0 flex-1 truncate text-ds-md font-semibold text-ds-ink">{name}</span>
             <ChildStatusBadge status={child.status} t={t} />
           </div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">
+          <div className="mt-1 truncate text-ds-xs text-ds-faint">
             {childKindLabel(child, t)} · {formatChildUsage(child, t)}
           </div>
         </div>
       </div>
 
-      <dl className="mt-2 grid grid-cols-[auto,minmax(0,1fr)] gap-x-2 gap-y-1 border-t border-ds-border-muted pt-2 text-[10.5px] leading-4 text-ds-faint">
+      <dl className="mt-2 grid grid-cols-[auto,minmax(0,1fr)] gap-x-2 gap-y-1 border-t border-ds-border-muted pt-2 text-ds-2xs leading-4 text-ds-faint">
         {attempt ? (
           <>
             <dt>{t('sidebarChildrenAttemptLabel')}</dt>
@@ -1084,7 +1084,7 @@ function ChildAgentOverview({
 
       {child.status === 'aborted' ? (
         <div
-          className="mt-2 rounded-md border border-red-400/25 bg-red-500/8 px-2 py-1.5 text-[11px] leading-4 text-red-700 dark:text-red-300"
+          className="mt-2 rounded-md border border-red-400/25 bg-red-500/8 px-2 py-1.5 text-ds-xs leading-4 text-red-700 dark:text-red-300"
           role="status"
         >
           {t('sidebarChildrenAbortedNotice')}
@@ -1092,7 +1092,7 @@ function ChildAgentOverview({
       ) : null}
 
       {visibleChildSummary(child.summary) ? (
-        <div className="mt-2 line-clamp-2 whitespace-pre-wrap text-[12px] leading-5 text-ds-muted">
+        <div className="mt-2 line-clamp-2 whitespace-pre-wrap text-ds-sm leading-5 text-ds-muted">
           {childDetailText(visibleChildSummary(child.summary), t('sidebarChildrenSummaryEmpty'))}
         </div>
       ) : null}
@@ -1141,7 +1141,7 @@ function ChildTranscriptProcessGroup({
 
   return (
     <div ref={viewportRef} className="min-w-0 space-y-1">
-      <div className="text-[12px] font-medium text-ds-muted">
+      <div className="text-ds-sm font-medium text-ds-muted">
         {t('processed')} · {t('processStepCount', { count: blocks.length })}
       </div>
       <div className="space-y-0.5">
@@ -1172,7 +1172,7 @@ function ChildAgentTranscriptTimeline({
 }): ReactElement {
   if (state.status === 'loading' && state.childId === child.id) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-ds-border-muted bg-ds-subtle/55 px-3 py-2 text-[12px] text-ds-faint">
+      <div className="flex items-center gap-2 rounded-lg border border-ds-border-muted bg-ds-subtle/55 px-3 py-2 text-ds-sm text-ds-faint">
         <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
         {t('sidebarChildrenTranscriptLoading')}
       </div>
@@ -1181,7 +1181,7 @@ function ChildAgentTranscriptTimeline({
 
   if (state.status === 'error' && state.childId === child.id) {
     return (
-      <div className="rounded-lg border border-red-400/25 bg-red-500/8 px-3 py-2 text-[12px] leading-5 text-red-700 dark:text-red-300">
+      <div className="rounded-lg border border-red-400/25 bg-red-500/8 px-3 py-2 text-ds-sm leading-5 text-red-700 dark:text-red-300">
         {t('sidebarChildrenTranscriptError')}: {state.message}
       </div>
     )
@@ -1190,7 +1190,7 @@ function ChildAgentTranscriptTimeline({
   const blocks = childTranscriptBlocks(child, state, t)
   if (blocks.length === 0) {
     return (
-      <div className="rounded-lg border border-ds-border-muted bg-ds-subtle/45 px-3 py-3 text-[12.5px] leading-5 text-ds-faint">
+      <div className="rounded-lg border border-ds-border-muted bg-ds-subtle/45 px-3 py-3 text-ds-sm leading-5 text-ds-faint">
         {child.transcriptRef ? t('sidebarChildrenTranscriptEmpty') : t('sidebarChildrenTranscriptUnavailable')}
       </div>
     )
@@ -1324,7 +1324,7 @@ export function FocusedChildAgentWorkbench({
 
   if (loading || !side) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-3 py-3 text-[12.5px] text-ds-faint">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-3 py-3 text-ds-sm text-ds-faint">
         <div className="flex items-center gap-2">
           <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
           {t('sidebarChildrenTranscriptLoading')}
@@ -1354,7 +1354,7 @@ export function FocusedChildAgentWorkbench({
         turnReasoningLastAtByUserIdOverride={{}}
       />
       {side.error ? (
-        <div className="mx-3 mb-2 rounded-lg border border-red-400/25 bg-red-500/8 px-3 py-2 text-[12px] leading-5 text-red-700 dark:text-red-300">
+        <div className="mx-3 mb-2 rounded-lg border border-red-400/25 bg-red-500/8 px-3 py-2 text-ds-sm leading-5 text-red-700 dark:text-red-300">
           {side.error}
         </div>
       ) : null}
@@ -1539,7 +1539,7 @@ export function ChildAgentsPanelView({
           </button>
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Bot className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.85} />
-            <span className="truncate text-[13px] font-semibold text-ds-ink">
+            <span className="truncate text-ds-md font-semibold text-ds-ink">
               {t('sidebarChildren')}
             </span>
           </div>
@@ -1574,7 +1574,7 @@ export function ChildAgentsPanelView({
         </div>
         {navigationPath.length > 0 ? (
           <nav
-            className="flex min-w-0 items-center gap-1 overflow-x-auto px-4 pb-2 text-[11.5px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="flex min-w-0 items-center gap-1 overflow-x-auto px-4 pb-2 text-ds-xs [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             aria-label={t('sidebarChildrenNavigation')}
           >
             <button
@@ -1610,7 +1610,7 @@ export function ChildAgentsPanelView({
           </nav>
         ) : null}
         {listFilter === 'recent' && buckets.recentTurnId ? (
-          <div className="px-4 pb-2 text-[11px] font-medium text-ds-faint">
+          <div className="px-4 pb-2 text-ds-xs font-medium text-ds-faint">
             {t('sidebarChildrenCurrentTurn', { turnId: childIdFragment(buckets.recentTurnId) })}
           </div>
         ) : null}
@@ -1632,7 +1632,7 @@ export function ChildAgentsPanelView({
                     })
                     if (!expanded && section.groups[0]) onSelectChild(section.groups[0].primary.id)
                   }}
-                  className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                  className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                 >
                   {expanded
                     ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
@@ -1678,7 +1678,7 @@ export function ChildAgentsPanelView({
                         title={`${displayName}\n${childAgentStatusLabel(child.status, t)}\n${t('sidebarChildrenParentTurn')}: ${child.parentTurnId ?? '—'}\n${t('sidebarChildrenChildId')}: ${child.id}`}
                         onContextMenu={(event) => deepLinkContextMenu.open(event, childOpenThreadId(child) || child.id)}
                         onClick={() => onSelectChild(child.id)}
-                        className={`inline-flex h-9 max-w-44 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition ${
+                        className={`inline-flex h-9 max-w-44 shrink-0 items-center gap-1.5 rounded-full border px-3 text-ds-sm font-medium transition ${
                           active
                             ? 'border-accent/45 bg-accent/10 text-ds-ink shadow-sm'
                             : 'border-ds-border-muted bg-ds-card/72 text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -1731,7 +1731,7 @@ export function ChildAgentsPanelView({
               type="button"
               disabled={loadingMore}
               onClick={onLoadMore}
-              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card/72 px-3 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+              className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card/72 px-3 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
             >
               {loadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} /> : null}
               {loadingMore ? t('sidebarChildrenLoadingMore') : t('sidebarChildrenLoadMore')}
@@ -1739,7 +1739,7 @@ export function ChildAgentsPanelView({
           </div>
         ) : null}
         {listFilter === 'history' && !nextCursor && historyTruncated ? (
-          <div className="px-4 pb-3 text-[11px] leading-4 text-ds-faint" role="status">
+          <div className="px-4 pb-3 text-ds-xs leading-4 text-ds-faint" role="status">
             {t('sidebarChildrenHistoryTruncated')}
           </div>
         ) : null}
@@ -1751,7 +1751,7 @@ export function ChildAgentsPanelView({
             <ChildAgentsEmpty icon={<Bot className="h-6 w-6" strokeWidth={1.6} />} title={t('sidebarChildrenNoThread')} />
           </div>
         ) : directChildren.length === 0 && loading ? (
-          <div className="flex items-center gap-2 px-5 py-5 text-[12.5px] text-ds-faint">
+          <div className="flex items-center gap-2 px-5 py-5 text-ds-sm text-ds-faint">
             <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} />
             {t('sidebarChildrenLoading')}
           </div>
@@ -1776,7 +1776,7 @@ export function ChildAgentsPanelView({
                   <button
                     type="button"
                     onClick={() => onOpenChildInFocus(selectedChild)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[11.5px] font-medium text-white transition hover:bg-accent/90"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-ds-xs font-medium text-white transition hover:bg-accent/90"
                     title={t('sidebarChildrenOpenInFocus')}
                   >
                     <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />
@@ -1787,7 +1787,7 @@ export function ChildAgentsPanelView({
                   <button
                     type="button"
                     onClick={() => onOpenSelectedChildren(selectedChild)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                     title={t('sidebarChildrenViewNested')}
                   >
                     {t('sidebarChildrenViewNested')}
@@ -1830,7 +1830,7 @@ export function ChildAgentsPanelView({
           </div>
         ) : null}
         {error ? (
-          <div className="mx-3 mt-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-800 dark:text-amber-200">
+          <div className="mx-3 mt-3 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-ds-sm leading-5 text-amber-800 dark:text-amber-200">
             {t('sidebarChildrenLoadError')}: {error}
           </div>
         ) : null}
@@ -1866,8 +1866,8 @@ function ChildAgentStat({
           : 'border-transparent bg-ds-surface-subtle hover:border-ds-border-muted hover:bg-ds-hover dark:bg-white/6'
       }`}
     >
-      <div className="text-[15px] font-semibold leading-none text-ds-ink">{value}</div>
-      <div className={`mt-1 truncate text-[10.5px] font-medium ${active ? 'text-accent' : 'text-ds-faint'}`}>{label}</div>
+      <div className="text-ds-xl font-semibold leading-none text-ds-ink">{value}</div>
+      <div className={`mt-1 truncate text-ds-2xs font-medium ${active ? 'text-accent' : 'text-ds-faint'}`}>{label}</div>
     </button>
   )
 }
@@ -1876,7 +1876,7 @@ function ChildAgentsEmpty({ icon, title }: { icon: ReactElement; title: string }
   return (
     <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-3 text-center">
       <div className="rounded-full bg-ds-surface-subtle p-3 text-ds-faint dark:bg-white/6">{icon}</div>
-      <div className="max-w-64 text-[12.5px] font-medium leading-5 text-ds-muted">{title}</div>
+      <div className="max-w-64 text-ds-sm font-medium leading-5 text-ds-muted">{title}</div>
     </div>
   )
 }

@@ -754,66 +754,74 @@ export function MarkdownWorkspaceViewer({
       data-truncated={model.truncated ? 'true' : 'false'}
       data-markdown-wechat-copy-state={wechatCopyFeedback.phase}
     >
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-28">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <h3 className="truncate text-sm font-semibold text-ds-text" title={model.title}>{model.title}</h3>
+      <div
+        className="workspace-preview-markdown-chrome shrink-0"
+        data-markdown-viewer-chrome
+      >
+        <header
+          className="workspace-preview-markdown-chrome__header flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b border-ds-border"
+          data-markdown-viewer-header
+        >
+          <div className="workspace-preview-markdown-chrome__title min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h3 className="truncate text-ds-lg font-semibold text-ds-text" title={model.title}>{model.title}</h3>
+              {model.status === 'ready' ? (
+                <CopyTextButton text={model.title} iconOnly className="-mr-1" />
+              ) : null}
+            </div>
+            {model.subtitle ? <p className="mt-1 text-ds-sm text-ds-muted">{model.subtitle}</p> : null}
+          </div>
+          <div className="workspace-preview-markdown-chrome__actions flex min-w-0 flex-wrap items-center gap-2">
+            {model.status === 'ready' && onCopyForWechat ? (
+              <MarkdownWechatCopyButton
+                state={wechatCopyState}
+                disabled={model.truncated}
+                onCopy={() => void copyForWechat()}
+              />
+            ) : null}
+            {model.status === 'ready' && onCopyForFeishu ? (
+              <MarkdownFeishuCopyButton
+                state={feishuCopyState}
+                disabled={model.truncated}
+                onCopy={() => void copyForFeishu()}
+              />
+            ) : null}
+            {model.status === 'ready' && onCopyForZhihu ? (
+              <MarkdownZhihuCopyButton
+                state={zhihuCopyState}
+                disabled={model.truncated}
+                onCopy={() => void copyForZhihu()}
+              />
+            ) : null}
+            {model.status === 'ready' && onToggleAnnotations ? (
+              <button
+                type="button"
+                className={compactClassName(
+                  'inline-flex h-8 w-8 items-center justify-center rounded-lg transition hover:bg-ds-hover hover:text-ds-text',
+                  annotationsOpen ? 'bg-ds-hover text-ds-text' : 'text-ds-muted'
+                )}
+                title={t('writeDocxAnnotations')}
+                aria-label={t('writeDocxAnnotations')}
+                aria-pressed={annotationsOpen}
+                onClick={onToggleAnnotations}
+                data-markdown-open-annotations
+              >
+                <MessageSquare className="h-4 w-4" aria-hidden="true" />
+              </button>
+            ) : null}
             {model.status === 'ready' ? (
-              <CopyTextButton text={model.title} iconOnly className="-mr-1" />
+              <MarkdownModeControl mode={mode} onModeChange={setMode} />
             ) : null}
           </div>
-          {model.subtitle ? <p className="mt-1 text-xs text-ds-muted">{model.subtitle}</p> : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          {model.status === 'ready' && onCopyForWechat ? (
-            <MarkdownWechatCopyButton
-              state={wechatCopyState}
-              disabled={model.truncated}
-              onCopy={() => void copyForWechat()}
-            />
-          ) : null}
-          {model.status === 'ready' && onCopyForFeishu ? (
-            <MarkdownFeishuCopyButton
-              state={feishuCopyState}
-              disabled={model.truncated}
-              onCopy={() => void copyForFeishu()}
-            />
-          ) : null}
-          {model.status === 'ready' && onCopyForZhihu ? (
-            <MarkdownZhihuCopyButton
-              state={zhihuCopyState}
-              disabled={model.truncated}
-              onCopy={() => void copyForZhihu()}
-            />
-          ) : null}
-          {model.status === 'ready' && onToggleAnnotations ? (
-            <button
-              type="button"
-              className={compactClassName(
-                'inline-flex h-8 w-8 items-center justify-center rounded-lg transition hover:bg-ds-hover hover:text-ds-text',
-                annotationsOpen ? 'bg-ds-hover text-ds-text' : 'text-ds-muted'
-              )}
-              title={t('writeDocxAnnotations')}
-              aria-label={t('writeDocxAnnotations')}
-              aria-pressed={annotationsOpen}
-              onClick={onToggleAnnotations}
-              data-markdown-open-annotations
-            >
-              <MessageSquare className="h-4 w-4" aria-hidden="true" />
-            </button>
-          ) : null}
-          {model.status === 'ready' ? (
-            <MarkdownModeControl mode={mode} onModeChange={setMode} />
-          ) : null}
-        </div>
-        <p className="sr-only" data-markdown-agent-summary>
-          {model.summary}
-        </p>
-      </header>
+          <p className="sr-only" data-markdown-agent-summary>
+            {model.summary}
+          </p>
+        </header>
+      </div>
 
       {model.status === 'ready' ? (
         <div
-          className="shrink-0 border-b border-ds-border bg-ds-panel/70 px-4 py-2 pr-20"
+          className="shrink-0 border-b border-ds-border bg-ds-panel/70 px-4 py-2"
           data-markdown-search-toolbar
         >
           <div className="flex min-w-0 items-center gap-1 rounded-lg border border-ds-border bg-ds-bg px-2 py-1">
@@ -821,7 +829,7 @@ export function MarkdownWorkspaceViewer({
             <input
               ref={searchInputRef}
               type="search"
-              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ds-text outline-none placeholder:text-ds-faint"
+              className="min-w-0 flex-1 bg-transparent text-ds-sm text-ds-text outline-none placeholder:text-ds-faint"
               value={searchQuery}
               placeholder={t('writeDocxSearchPlaceholder')}
               aria-label={t('writeDocxSearchPlaceholder')}
@@ -838,7 +846,7 @@ export function MarkdownWorkspaceViewer({
               }}
             />
             <span
-              className="min-w-[42px] shrink-0 text-right text-[11px] tabular-nums text-ds-faint"
+              className="min-w-[42px] shrink-0 text-right text-ds-xs tabular-nums text-ds-faint"
               aria-live="polite"
               data-markdown-search-count
             >
@@ -882,7 +890,7 @@ export function MarkdownWorkspaceViewer({
 
       {model.status !== 'ready' ? (
         <div
-          className="p-4 text-sm text-ds-text"
+          className="p-4 text-ds-lg text-ds-text"
           role={model.status === 'unsupported' ? 'alert' : 'status'}
         >
           <strong>{model.status === 'empty' ? 'No Markdown observation' : 'Unsupported observation'}</strong>
@@ -916,7 +924,9 @@ export function MarkdownWorkspaceViewer({
             <div
               ref={previewScrollerRef}
               className={compactClassName(
-                'relative min-h-0 overflow-auto bg-ds-bg px-5 py-4 pr-20',
+                // The document page owns its own measure and gutters, so this
+                // scroller keeps no horizontal padding of its own.
+                'relative min-h-0 overflow-auto bg-ds-bg py-4',
                 showEditor ? false : 'flex-1'
               )}
               data-markdown-preview-pane
@@ -928,7 +938,11 @@ export function MarkdownWorkspaceViewer({
               onContextMenu={handlePreviewContextMenu}
               onScroll={(event) => handlePreviewScroll(event.currentTarget)}
             >
-              <div ref={previewTextRootRef} data-markdown-annotation-text-root>
+              <div
+                ref={previewTextRootRef}
+                className="workspace-preview-markdown-document"
+                data-markdown-annotation-text-root
+              >
                 <WriteMarkdownPreview
                   content={model.markdown}
                   isMarkdown
@@ -1011,7 +1025,7 @@ function MarkdownWechatCopyButton({
     <button
       type="button"
       className={compactClassName(
-        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium transition',
+        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-ds-sm font-medium transition',
         'hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45',
         toneClassName
       )}
@@ -1032,7 +1046,7 @@ function MarkdownWechatCopyButton({
       ) : (
         <ClipboardCopy className="h-3.5 w-3.5" aria-hidden="true" />
       )}
-      <span>{label}</span>
+      <span data-markdown-copy-label>{label}</span>
     </button>
   )
 }
@@ -1071,7 +1085,7 @@ function MarkdownFeishuCopyButton({
     <button
       type="button"
       className={compactClassName(
-        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium transition',
+        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-ds-sm font-medium transition',
         'hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45',
         toneClassName
       )}
@@ -1092,7 +1106,7 @@ function MarkdownFeishuCopyButton({
       ) : (
         <ClipboardCopy className="h-3.5 w-3.5" aria-hidden="true" />
       )}
-      <span>{label}</span>
+      <span data-markdown-copy-label>{label}</span>
     </button>
   )
 }
@@ -1131,7 +1145,7 @@ function MarkdownZhihuCopyButton({
     <button
       type="button"
       className={compactClassName(
-        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium transition',
+        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-ds-sm font-medium transition',
         'hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45',
         toneClassName
       )}
@@ -1152,7 +1166,7 @@ function MarkdownZhihuCopyButton({
       ) : (
         <ClipboardCopy className="h-3.5 w-3.5" aria-hidden="true" />
       )}
-      <span>{label}</span>
+      <span data-markdown-copy-label>{label}</span>
     </button>
   )
 }
@@ -1207,7 +1221,7 @@ function MarkdownWechatCopyNotice({
   return (
     <div
       className={compactClassName(
-        'shrink-0 border-b px-4 py-2 text-xs leading-relaxed',
+        'shrink-0 border-b px-4 py-2 text-ds-sm leading-relaxed',
         toneClassName
       )}
       role={feedback.phase === 'error' ? 'alert' : 'status'}
@@ -1261,7 +1275,7 @@ function MarkdownFeishuCopyNotice({
   }
 
   return (
-    <div className={compactClassName('shrink-0 border-b px-4 py-2 text-xs', toneClassName)} data-markdown-feishu-copy-notice>
+    <div className={compactClassName('shrink-0 border-b px-4 py-2 text-ds-sm', toneClassName)} data-markdown-feishu-copy-notice>
       {body}
     </div>
   )
@@ -1308,7 +1322,7 @@ export function MarkdownZhihuCopyNotice({
   }
 
   return (
-    <div className={compactClassName('shrink-0 border-b px-4 py-2 text-xs', toneClassName)} data-markdown-zhihu-copy-notice>
+    <div className={compactClassName('shrink-0 border-b px-4 py-2 text-ds-sm', toneClassName)} data-markdown-zhihu-copy-notice>
       {body}
     </div>
   )
@@ -1688,7 +1702,7 @@ function MarkdownSelectionCopyMenu({
   return (
     <div
       ref={menuRef}
-      role="menu"
+      data-native-view-occluder="true" role="menu"
       aria-label={t('markdownSelectionCopyMenuLabel')}
       className="fixed z-50 w-[220px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-ds-text shadow-[0_14px_42px_rgba(15,23,42,0.18)] backdrop-blur-xl"
       style={style}
@@ -1699,7 +1713,7 @@ function MarkdownSelectionCopyMenu({
           key={item.key}
           type="button"
           role="menuitem"
-          className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45"
+          className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-ds-sm font-medium transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45"
           disabled={item.disabled}
           onClick={item.onSelect}
           {...{ [item.testId]: true }}
@@ -1747,7 +1761,7 @@ function MarkdownModeControl({
           type="button"
           onClick={() => onModeChange(item.mode)}
           className={compactClassName(
-            'inline-flex h-7 w-7 min-w-0 items-center justify-center rounded-md text-[11.5px] font-semibold transition',
+            'inline-flex h-7 w-7 min-w-0 items-center justify-center rounded-md text-ds-xs font-semibold transition',
             mode === item.mode
               ? 'bg-white text-accent shadow-sm ring-1 ring-ds-border dark:bg-white/10 dark:ring-white/10'
               : 'text-ds-muted hover:bg-ds-hover hover:text-ds-text'

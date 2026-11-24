@@ -1,6 +1,6 @@
 .ds-markdown {
   color: var(--ds-text);
-  font-size: 15px;
+  font-size: var(--ds-text-xl);
   line-height: 1.5;
 }
 
@@ -36,7 +36,7 @@
 .ds-markdown h2,
 .ds-markdown h3 {
   margin: 0 0 0.42rem;
-  font-family: 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  font-family: var(--ds-font-display);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.2;
@@ -87,7 +87,12 @@
   margin-top: 0.06rem;
 }
 
+/* Streamdown renders list-item paragraphs with an `inline` utility so short
+ * items stay compact. Multi-paragraph items and items holding block content
+ * need to keep their block layout, otherwise separate paragraphs merge into a
+ * single run-on line. */
 .ds-markdown li > p {
+  display: block;
   margin: 0;
 }
 
@@ -104,6 +109,9 @@
 .ds-markdown a {
   color: var(--ds-accent);
   text-decoration: none;
+  /* Long URLs and file paths must not widen the message bubble. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ds-markdown a:hover {
@@ -137,7 +145,7 @@
   border-radius: 4px;
   background: var(--ds-inline-code-bg);
   padding: 0.05em 0.28em;
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-family: var(--ds-font-mono);
   font-size: 0.82em;
   line-height: 1.22;
   vertical-align: baseline;
@@ -176,7 +184,7 @@
   border-radius: 4px;
   background: var(--ds-inline-code-bg);
   padding: 0.05em 0.28em;
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-family: var(--ds-font-mono);
   font-size: 0.82em;
   line-height: 1.22;
   vertical-align: baseline;
@@ -255,8 +263,8 @@
 
 .ds-markdown .ds-code-block-language {
   min-width: 0;
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  font-size: 10px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
   text-transform: lowercase;
   letter-spacing: 0.02em;
   color: var(--ds-text-muted);
@@ -320,7 +328,7 @@
   border-radius: 0;
   background: transparent !important;
   padding: 0.52rem 0.66rem;
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
   line-height: 1.4;
   box-sizing: border-box;
 }
@@ -388,7 +396,7 @@ html[data-theme='dark'] .ds-code-sidebar {
   background: var(--ds-card-muted);
   padding: 0 0.75rem 0 0.45rem;
   color: var(--ds-text);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
   font-weight: 600;
   box-shadow: var(--ds-shadow-chip);
 }
@@ -408,8 +416,8 @@ html[data-theme='dark'] .ds-code-sidebar {
   background: #202020;
   padding: 0 0.3rem;
   color: #ffffff;
-  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
-  font-size: 9px;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-2xs);
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -456,7 +464,7 @@ html[data-theme='dark'] .ds-code-sidebar {
   border-bottom: 1px solid var(--ds-border-muted);
   background: var(--ds-bg-canvas);
   padding: 0 0.75rem;
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
 }
 
 .ds-file-preview-scroll {
@@ -621,7 +629,7 @@ html[data-theme='dark'] .ds-file-preview-code-html > pre span {
 .ds-markdown th {
   background: var(--ds-table-head-bg);
   color: var(--ds-text-muted);
-  font-size: 13px;
+  font-size: var(--ds-text-md);
   font-weight: 600;
 }
 

@@ -45,7 +45,7 @@ test('resolves source and packaged paths only inside the installed Evidence doma
   assert.doesNotMatch(packagedDomain, /packages[\\/]workers/u)
 })
 
-test('imports the stdlib-only engine from source and packaged domain roots', async () => {
+test('imports and reads the stdlib-only engine without a model from source and packaged domain roots', async () => {
   const sourcePackage = fileURLToPath(new URL('../../', import.meta.url))
   const sourcePython = resolveEvidenceDagPythonPath(sourcePackage, {})
   await assertSelfContainedPythonImport(sourcePython)
@@ -216,33 +216,78 @@ test('coalesces concurrent startup failures and detects an early child exit', as
   }
 })
 
-test('does not fall back to Router environment variables when model access is unavailable', async () => {
-  let fetched = false
-  let spawned = false
+test('unset reasoning starts read service, then configures and revokes without inherited keys', async () => {
+  let running = false
+  let stops = 0
+  let reasoner: DomainMainTextReasoner | null = null
+  const environments: NodeJS.ProcessEnv[] = []
   const sidecar = new EvidenceDagSidecar({
-    fetchImpl: async () => {
-      fetched = true
-      return evidenceServiceResponse()
-    },
-    spawnImpl: () => {
-      spawned = true
-      return fakeChild(() => undefined)
+    fetchImpl: async () => running ? evidenceServiceResponse() : new Response('{}', { status: 503 }),
+    spawnImpl: (_command, _args, options) => {
+      environments.push({ ...options.env }); running = true
+      return fakeChild(() => { running = false; stops++ })
     }
   })
   sidecar.configure(lifecycleContext({
     EDAG_MODEL_ROUTER_BASE_URL: 'http://stale-domain-env/v1',
-    EDAG_MODEL_ROUTER_API_KEY: 'stale-domain-key',
-    EDAG_MODEL_ROUTER_MODEL: 'stale-domain-model',
+    EDAG_MODEL_ROUTER_API_KEY: 'synthetic-stale-key',
+    EDAG_MODEL_ROUTER_MODEL: 'stale-model',
     SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://stale-host-env/v1',
-    SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'stale-host-key'
-  }, async () => null))
+    SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'synthetic-stale-host-key'
+  }, async () => reasoner))
+  try {
+    await sidecar.ensureReady()
+    await sidecar.ensureReady()
+    assert.equal(environments.length, 1)
+    reasoner = { baseUrl: 'http://127.0.0.1:3892/v1', apiKey: 'synthetic-new-key', model: 'model' }
+    await sidecar.ensureReady()
+    assert.equal(environments[1]?.EDAG_MODEL_ROUTER_MODEL, 'model')
+    reasoner = null
+    await sidecar.ensureReady()
+    assert.equal(stops, 2)
+    assert.equal(environments.length, 3)
+    for (const index of [0, 2]) for (const name of [
+      'EDAG_MODEL_ROUTER_BASE_URL', 'EDAG_MODEL_ROUTER_API_KEY', 'EDAG_MODEL_ROUTER_MODEL',
+      'SCIFORGE_MODEL_ROUTER_BASE_URL', 'SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY'
+    ]) assert.equal(environments[index]?.[name], undefined)
+  } finally { await sidecar.stop() }
+})
 
-  await assert.rejects(
-    sidecar.ensureReady(),
-    /requires configured text reasoning model access/
-  )
-  assert.equal(fetched, false)
-  assert.equal(spawned, false)
+test('invalid access stops an already configured child and remains an explicit failure', async () => {
+  let running = false
+  let reasoner = { baseUrl: 'http://127.0.0.1:3892/v1', apiKey: 'synthetic-key', model: 'model' }
+  let starts = 0
+  const sidecar = new EvidenceDagSidecar({
+    fetchImpl: async () => running ? evidenceServiceResponse() : new Response('{}', { status: 503 }),
+    spawnImpl: () => { running = true; starts++; return fakeChild(() => { running = false }) }
+  })
+  sidecar.configure(lifecycleContext({}, async () => reasoner))
+  try {
+    await sidecar.ensureReady()
+    reasoner = { ...reasoner, apiKey: '' }
+    await assert.rejects(sidecar.ensureReady(), /incomplete/)
+    assert.equal(running, false)
+    assert.equal(starts, 1)
+  } finally { await sidecar.stop() }
+})
+
+test('stop invalidates a pending model lookup before any child can start', async () => {
+  let release!: (value: null) => void
+  let entered!: () => void
+  const entering = new Promise<void>(resolve => { entered = resolve })
+  let starts = 0
+  const sidecar = new EvidenceDagSidecar({
+    fetchImpl: async () => new Response('{}', { status: 503 }),
+    spawnImpl: () => { starts++; return fakeChild(() => undefined) }
+  })
+  sidecar.configure(lifecycleContext({}, () => { entered(); return new Promise(resolve => { release = resolve }) }))
+  const starting = sidecar.ensureReady()
+  await entering
+  const stopped = sidecar.stop()
+  release(null)
+  await assert.rejects(starting, /lifecycle changed/)
+  await stopped
+  assert.equal(starts, 0)
 })
 
 function lifecycleContext(
@@ -350,12 +395,35 @@ async function assertSelfContainedPythonImport(pythonPath: string): Promise<void
     '-S',
     '-c',
     [
-      'import sys',
+      'import sys, os',
+      'os.environ.clear()',
       'sys.path.insert(0, sys.argv[1])',
       'import evidence_dag.server',
+      'engine = evidence_dag.server.build_engine()',
+      'assert engine.llm is None',
+      'assert engine.list_threads_for_read() == []',
+      'assert engine.get("missing-fixture-thread") is None',
       'print(evidence_dag.server.SERVICE_ID)'
     ].join(';'),
     pythonPath
   ])
   assert.equal(stdout.trim(), 'evidence-dag-engine')
 }
+
+
+test('lifecycle abort during readiness stops the newly spawned child', async () => {
+  const controller = new AbortController()
+  let running = false
+  const sidecar = new EvidenceDagSidecar({
+    fetchImpl: async () => {
+      if (!running) return new Response('{}', { status: 503 })
+      controller.abort()
+      return evidenceServiceResponse()
+    },
+    spawnImpl: () => { running = true; return fakeChild(() => { running = false }) }
+  })
+  sidecar.configure({ ...lifecycleContext({}), signal: controller.signal })
+  await assert.rejects(sidecar.ensureReady(), /lifecycle changed/)
+  assert.equal(running, false)
+  await sidecar.stop()
+})

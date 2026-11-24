@@ -2,8 +2,10 @@ import type { HumanAnswer } from '@sciforge/collaboration-contracts'
 
 const WORKER_RESULT_FORMAT_INSTRUCTION = [
   'The Worker result envelope is closed and always contains exactly one top-level key: result.',
-  'The result value must match exactly one closed shape: completed or needs_human.',
+  'The result value must match exactly one closed shape: completed, needs_human, or deferred.',
+  'For deferred, result contains exactly schemaVersion, outcome, followup. followup contains exactly key (stable identifier, max 64 ASCII letters/digits/._:-), at (ISO timestamp with timezone), about (what to verify next, max 2000 characters). The due time must be between one minute and seven days from now; at most eight followups are allowed per execution. End this turn; never sleep or repeatedly poll. Waiting for a person to restore login, permission or a connection requires needs_human instead. A deferral is not a completed deliverable or permission to repeat an external write.',
   'For completed, result contains exactly schemaVersion, outcome, and summary; summary must be one JSON string containing non-whitespace content, and every task-specific table, matrix, recommendation, or design specification belongs inside that string.',
+  'Begin summary with which task was handled and what actually completed. Preserve negative results and unverified acceptance; a completed model turn is not human adoption or scientific validation.',
   'For needs_human, result contains exactly schemaVersion, outcome, question, and requiredAssurance; question must be one complete question the Worker User can answer directly, must contain real content after trimming, must not be only punctuation or symbols, and must not be a placeholder such as "请", "question", "TBD", or "N/A"; it must state exactly which information is missing; requiredAssurance must be verified or strong.',
   'Never omit result, emit an object-valued summary, add another root key, add an inactive branch field, or use a Markdown fence.'
 ].join(' ')
@@ -12,6 +14,7 @@ const WORKER_RESULT_RESPONSE_INSTRUCTIONS = Object.freeze([
   'Return exactly one JSON object and no Markdown fence.',
   WORKER_RESULT_FORMAT_INSTRUCTION,
   'If the task is complete: {"result":{"schemaVersion":1,"outcome":"completed","summary":"bounded result summary"}}',
+  'If a bounded revisit is needed: {"result":{"schemaVersion":1,"outcome":"deferred","followup":{"key":"check-result","at":"2026-11-16T09:00:00+08:00","about":"Read the existing job result; preserve completed work, do not restart the job."}}}',
   'If the authenticated Worker User input is required: {"result":{"schemaVersion":1,"outcome":"needs_human","question":"Which organism should be used for the expression experiment?","requiredAssurance":"verified"}}'
 ])
 
@@ -108,7 +111,7 @@ export function workerHumanAnswerPrompt(answer: HumanAnswer): string {
 export function workerResultRepairPrompt(): string {
   return [
     'Your previous Worker response did not match the required result protocol.',
-    'Continue the same Project Task; do not repeat the full explanation.',
+    'Only rewrite the previous result in the same Session. Do not call tools, repeat business actions, restart jobs, or redo the full explanation. Preserve what actually completed, failed or remains unverified.',
     ...WORKER_RESULT_RESPONSE_INSTRUCTIONS
   ].join('\n')
 }

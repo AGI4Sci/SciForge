@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.browser-preview",
     "displayName": "Browser Preview",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"

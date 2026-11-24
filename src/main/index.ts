@@ -63,6 +63,7 @@ import type { GuiUpdateState } from '../shared/gui-update'
 import { installedDomainPackages } from '../shared/installed-domain-packages'
 import { fetchUpstreamModelIds } from './upstream-models'
 import { isTrustedRendererUrl } from './renderer-trust'
+import { attachWorkbenchWindowHost } from './workbench-window-host'
 import { codingPlanCredentialStateForAdapter, getModelAccessStatus } from './model-access-status'
 import { synchronizeModelAccessSidecar } from './model-access-sidecars'
 import { stopModelAccessGatewaySidecar } from './model-access-gateway-sidecar'
@@ -70,7 +71,6 @@ import { relocateModelRouterIfPortIsOccupied } from './model-router-port'
 import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
 import { stopDisallowedAgentRuntimes } from './model-access-runtime-lifecycle'
 import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
-import { projectAgentRuntimeThreadSnapshot } from './runtime/agent-runtime/thread-wire-projection'
 import { FileWorkRecordStore } from '@sciforge/multi-agent/work-record'
 import {
   composeAgentRuntimeToolSurfaces,
@@ -210,9 +210,10 @@ import {
 } from './extensions/dsh-plugin-signature'
 import { ensureDshAgentResolverModule } from './extensions/dsh-agent-resolver'
 import { HOST_BUSINESS_INVOKE_TIMEOUT_MS } from './extensions/invocation-budgets'
-import { createEvidenceModelReasoner } from './extensions/evidence-model-reasoner'
 import { createAgentThreadsHostServiceResolver } from './extensions/agent-threads-host-service'
+import { createAgentDiscussionHostServiceResolver } from './extensions/agent-discussion-host-service'
 import { createReadGrantedHostServicePorts, mergeHostServiceResolutions } from './extensions/host-service-resolution'
+import { createDomainHostCapabilityInvoker } from './extensions/domain-host-capability-invoker'
 import { ModelReasoningService } from './model-reasoning/service'
 import { createUpstreamReasoningDeclarationProvider } from './model-reasoning/upstream-declaration'
 import { createUpstreamCatalogObserver } from './model-reasoning/upstream-catalog'
@@ -251,6 +252,7 @@ import {
 } from './workspace-preview-asset-protocol'
 import { startDevBrowserBridgeServer, type DevBrowserBridgeServer } from './dev-browser-bridge'
 import { CodexRuntimeService } from './runtime/codex'
+import { resolveManagedCodexHome } from './runtime/codex/codex-config'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
 import {
@@ -500,6 +502,8 @@ let isQuitting = false
 let devBrowserBridgeServer: DevBrowserBridgeServer | null = null
 let codexRuntimePrewarmTimer: ReturnType<typeof setTimeout> | null = null
 let codexRuntimePrewarmPromise: Promise<void> | null = null
+let dshRuntimePrewarmTimer: ReturnType<typeof setTimeout> | null = null
+let dshRuntimePrewarmPromise: Promise<void> | null = null
 
 async function captureMainWindowPage(bounds?: VisibleContextBounds): Promise<CapturedVisualPage> {
   const window = mainWindow
@@ -640,9 +644,7 @@ function getCodexRuntime(): CodexRuntimeService {
     settings: async () => store.load(),
     appVersion: app.getVersion(),
     storageRoot: codexStorageRoot,
-    managedCodexHome: app.isPackaged
-      ? join(app.getPath('userData'), 'runtime-codex', 'codex-home')
-      : join(process.cwd(), '.codex-runtime', 'codex-home'),
+    managedCodexHome: resolveManagedCodexHome(app.getPath('userData')),
     standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
     planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
     preToolUseHookLaunch: getManagedGuiMcpLaunchConfig(),
@@ -712,6 +714,59 @@ function cancelCodexRuntimePrewarm(): void {
   if (!codexRuntimePrewarmTimer) return
   clearTimeout(codexRuntimePrewarmTimer)
   codexRuntimePrewarmTimer = null
+}
+
+/**
+ * A cold DSH ACP boot loads the whole plugin graph and can exceed the normal
+ * lifecycle budget, which made the first message of a session wait for it.
+ * Prewarming after the window is visible moves that cost off the critical path;
+ * `probe` performs the same connect + initialize handshake a turn would, and
+ * the resulting connection is reused because the model-router identity matches.
+ */
+function scheduleDshRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' | 'settings-switch'): void {
+  if (getActiveAgentRuntime(settings) !== 'dsh') return
+  if (!resolveModelAccessRuntimePolicy(settings).dsh) return
+  if (dshRuntimePrewarmTimer) {
+    clearTimeout(dshRuntimePrewarmTimer)
+    dshRuntimePrewarmTimer = null
+  }
+  dshRuntimePrewarmTimer = setTimeout(
+    () => {
+      dshRuntimePrewarmTimer = null
+      const adapter = dshRuntimeAdapterForLifecycle
+      if (!adapter || dshRuntimePrewarmPromise) return
+      const startedAt = Date.now()
+      const task = adapter
+        .probe({ settings }, {})
+        .then((result) => {
+          if (!result.available) {
+            logWarn('dsh-runtime', 'Failed to prewarm the DSH ACP runtime.', {
+              reason,
+              failure: result.failure
+            })
+            return
+          }
+          if (startupTraceEnabled) {
+            traceStartup('dsh runtime prewarmed', {
+              elapsedMs: Date.now() - startedAt,
+              reason,
+              source: result.source ?? null
+            })
+          }
+        })
+        .catch((error) => {
+          logWarn('dsh-runtime', 'Failed to prewarm the DSH ACP runtime.', {
+            reason,
+            message: error instanceof Error ? error.message : String(error)
+          })
+        })
+        .finally(() => {
+          if (dshRuntimePrewarmPromise === task) dshRuntimePrewarmPromise = null
+        })
+      dshRuntimePrewarmPromise = task
+    },
+    reason === 'startup' ? 4_000 : 400
+  )
 }
 
 async function reconcileSelectedAgentRuntime(settings: AppSettingsV1): Promise<void> {
@@ -1114,6 +1169,7 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   const devUrl = devServerHintUrl()
   const rendererFile = join(__dirname, '../renderer/index.html')
   const trustedRendererUrl = devUrl ?? pathToFileURL(rendererFile).toString()
+  attachWorkbenchWindowHost(mainWindow, trustedRendererUrl)
   mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
     if (!isTrustedRendererUrl(navigationUrl, trustedRendererUrl)) event.preventDefault()
   })
@@ -1158,12 +1214,30 @@ app
   .then(async () => {
     traceStartup('app.whenReady:start')
     // Ensure Chromium exposes the host renderer's accessibility tree to
-    // macOS AX clients (including desktop automation) from first paint.
-    app.setAccessibilitySupportEnabled(true)
+    // macOS AX clients (including desktop automation) from first paint. The
+    // accessibility tree is expensive to maintain and needs no other platform,
+    // so keep it scoped to darwin to avoid paying that cost on Windows/Linux.
+    if (process.platform === 'darwin') app.setAccessibilitySupportEnabled(true)
     if (!gotSingleInstanceLock) {
-      // electron-vite has already launched Electron by this point. Exiting here
-      // ensures its supervisor tears down the renderer instead of leaving a
-      // headless, port-owning development instance behind.
+      // Two very different situations land here: a second launch that should
+      // hand off to the running window, and a profile that cannot take the
+      // singleton lock at all (the Chromium log reports "Lock file can not be
+      // created"). Quitting silently makes the second case look like a dead
+      // shortcut, so say what happened instead of vanishing.
+      const userDataPath = app.getPath('userData')
+      const message =
+        app.isPackaged
+          ? `SciForge 无法启动：用户数据目录里的单实例锁创建失败。\n\n` +
+            `目录：${userDataPath}\n\n` +
+            `通常是 SciForge 已经在运行（请查看任务栏/托盘），或该目录不可写。\n` +
+            `请先结束所有 SciForge 进程后重试；如果仍然失败，请把这段文字截图反馈。`
+          : 'SciForge 已经在运行（开发模式实例），本次启动已退出。'
+      console.error(`[sciforge] single instance lock unavailable; userData=${userDataPath}`)
+      try {
+        dialog.showErrorBox('SciForge 无法启动', message)
+      } catch {
+        /* a missing window station must not mask the exit */
+      }
       app.quit()
       return
     }
@@ -1237,6 +1311,7 @@ app
     const agentTraceRecorder = new AgentRuntimeTraceRecorder(fullTraceStore)
     traceStartup('full trace store initialized')
     await synchronizeSelectedModelAccessSidecar(initial, 'Failed to start the selected model access service.')
+    traceStartup('model access sidecar:done')
     codeNavigationService = new LspCodeNavigationService()
     const contextStateService = new RuntimeContextStateService()
     const sharedMemoryService = new SharedMemoryService(app.getPath('userData'))
@@ -1596,50 +1671,7 @@ app
           : join(app.getAppPath(), 'packages/plugin-sdk/src/host-service-client.mjs'),
       authorizeWorkspace: workspaceAuthority,
       authorizeHostService,
-      environment: process.env,
-      reasoner: createEvidenceModelReasoner(() => store.load(), () => undefined),
-      threads: {
-        read: async (scope: { runtimeId: string; threadId: string; workspaceRoot: string }) => {
-          const host = agentRuntimeHostRef.current
-          if (!host) throw new Error('Agent runtime Host is not ready for extension invocation.')
-          const detail = await host.readThreadSnapshot({ runtimeId: scope.runtimeId as never, threadId: scope.threadId })
-          return projectAgentRuntimeThreadSnapshot(detail, scope)
-        },
-        list: async (scope: { runtimeId: string; threadId: string; workspaceRoot: string }) => {
-          const host = agentRuntimeHostRef.current
-          if (!host) throw new Error('Agent runtime Host is not ready for extension invocation.')
-          return (await host.listThreads({}))
-            .filter((thread) => thread.runtimeId === scope.runtimeId && thread.id === scope.threadId)
-            .map((thread) => ({ runtimeId: thread.runtimeId, threadId: thread.id, workspaceRoot: thread.workspace?.trim() ?? scope.workspaceRoot }))
-        }
-      },
-      capabilities: {
-        invoke: async (
-          request: { actionId: string; input: unknown; invocationId?: string },
-          context: { caller: unknown; ordinarySession?: unknown; originalContext?: Readonly<Record<string, unknown>>; signal: AbortSignal; assertCurrent(): void }
-        ) => {
-          context.assertCurrent()
-          context.signal.throwIfAborted()
-          const broker = capabilityBrokerForDomainServices
-          if (!broker) throw new Error('The Host capability broker is not ready.')
-          const result = context.ordinarySession
-            ? await broker.invokeOrdinarySession(
-                context.caller as Parameters<CapabilityBroker['invokeOrdinarySession']>[0],
-                request as Parameters<CapabilityBroker['invokeOrdinarySession']>[1],
-                context.ordinarySession as Parameters<CapabilityBroker['invokeOrdinarySession']>[2],
-                { signal: context.signal, ...(context.originalContext ? { context: context.originalContext } : {}) }
-              )
-            : await broker.invoke(
-                context.caller as Parameters<CapabilityBroker['invoke']>[0],
-                request as Parameters<CapabilityBroker['invoke']>[1],
-                { signal: context.signal }
-              )
-          context.assertCurrent()
-          context.signal.throwIfAborted()
-          return result.output
-        }
-      },
-      logUnavailable: () => logWarn('domain-host-services', 'A bundled domain Host service is unavailable because its trusted runtime configuration is incomplete.')
+      capabilities: createDomainHostCapabilityInvoker(() => capabilityBrokerForDomainServices)
     }
 
     if (developmentPluginOptions) {
@@ -1664,42 +1696,7 @@ app
         hostServiceClientModule,
         authorizeWorkspace: workspaceAuthority,
         authorizeHostService,
-        environment: process.env,
-        reasoner: createEvidenceModelReasoner(() => store.load(), () => undefined),
-        threads: {
-          read: async (scope: { runtimeId: string; threadId: string; workspaceRoot: string }) => {
-            const detail = await requireAgentRuntimeHost().readThreadSnapshot({ runtimeId: scope.runtimeId as never, threadId: scope.threadId })
-            return projectAgentRuntimeThreadSnapshot(detail, scope)
-          },
-          list: async (scope: { runtimeId: string; threadId: string; workspaceRoot: string }) => (await requireAgentRuntimeHost().listThreads({})).filter((thread) => thread.runtimeId === scope.runtimeId && thread.id === scope.threadId).map((thread) => ({ runtimeId: thread.runtimeId, threadId: thread.id, workspaceRoot: thread.workspace?.trim() ?? scope.workspaceRoot }))
-        },
-        capabilities: {
-          invoke: async (
-            request: { actionId: string; input: unknown; invocationId?: string },
-            context: { caller: unknown; ordinarySession?: unknown; originalContext?: Readonly<Record<string, unknown>>; signal: AbortSignal; assertCurrent(): void }
-          ) => {
-            context.assertCurrent()
-            context.signal.throwIfAborted()
-            const broker = capabilityBrokerForDomainServices
-            if (!broker) throw new Error('The Host capability broker is not ready.')
-            const result = context.ordinarySession
-              ? await broker.invokeOrdinarySession(
-                  context.caller as Parameters<CapabilityBroker['invokeOrdinarySession']>[0],
-                  request as Parameters<CapabilityBroker['invokeOrdinarySession']>[1],
-                  context.ordinarySession as Parameters<CapabilityBroker['invokeOrdinarySession']>[2],
-                  { signal: context.signal, ...(context.originalContext ? { context: context.originalContext } : {}) }
-                )
-              : await broker.invoke(
-                  context.caller as Parameters<CapabilityBroker['invoke']>[0],
-                  request as Parameters<CapabilityBroker['invoke']>[1],
-                  { signal: context.signal }
-                )
-            context.assertCurrent()
-            context.signal.throwIfAborted()
-            return result.output
-          }
-        },
-        logUnavailable: () => logWarn('domain-host-services', 'A bundled domain Host service is unavailable because its trusted runtime configuration is incomplete.')
+        capabilities: installedHostServiceOptions.capabilities
       }), createAgentThreadsHostServiceResolver({
         readGrantedPorts,
         hostServiceClientModule,
@@ -1716,6 +1713,11 @@ app
           signal.throwIfAborted()
           return snapshot
         }
+      }), createAgentDiscussionHostServiceResolver({
+        readGrantedPorts, hostServiceClientModule, authorizeWorkspace: workspaceAuthority,
+        execution: () => createDomainAgentExecutionHost({ runtime: requireAgentRuntimeHost(),
+          defaultRuntimeId: async () => getActiveAgentRuntime(await store.load()),
+          runtimeReadiness: async () => resolveDomainAgentRuntimeReadiness(await store.load()) })
       }), { resolveHostServiceProviders: visualCaptureServices.resolve, resolveHostServiceClients: visualCaptureServices.resolveClients, hostServiceIds: visualCaptureServices.serviceIds })
       const hostServiceResolution = composeNativeExecutionHostServices({
         domains: domainHostServiceResolution,
@@ -1777,6 +1779,18 @@ app
             return snapshot
           }
         }),
+        createAgentDiscussionHostServiceResolver({
+          readGrantedPorts: readInstalledGrantedPorts,
+          hostServiceClientModule: installedHostServiceOptions.hostServiceClientModule,
+          authorizeWorkspace: workspaceAuthority,
+          execution: () => {
+            const runtime = agentRuntimeHostRef.current
+            if (!runtime) throw new Error('Agent runtime Host is not ready for extension invocation.')
+            return createDomainAgentExecutionHost({ runtime,
+              defaultRuntimeId: async () => getActiveAgentRuntime(await store.load()),
+              runtimeReadiness: async () => resolveDomainAgentRuntimeReadiness(await store.load()) })
+          }
+        }),
         { resolveHostServiceProviders: visualCaptureServices.resolve, resolveHostServiceClients: visualCaptureServices.resolveClients, hostServiceIds: visualCaptureServices.serviceIds }
       )
       const hostServiceResolution = composeNativeExecutionHostServices({
@@ -1823,14 +1837,29 @@ app
     // The Host capability registry is created later in composition than this surface,
     // so the market reads it through a holder instead of capturing it.
     const capabilityRegistryRef: { current: CapabilityRegistry | undefined } = { current: undefined }
+    // Packaged builds ship the catalog as an extra resource. An unpackaged
+    // `npm run dev` process has no such resource directory, so the repository's
+    // own catalog is used instead of reporting a missing file.
+    const bundledMarketIndexPath = [
+      resolve(process.resourcesPath, 'market', 'index.json'),
+      resolve(app.getAppPath(), 'market', 'index.json')
+    ].find((candidate) => existsSync(candidate))
+    const marketSource = resolveDshMarketSource({
+      ...(bundledMarketIndexPath ? { bundledIndexPath: bundledMarketIndexPath } : {}),
+      env: process.env
+    })
+    // When a configured (possibly remote) catalog cannot be read the bundled
+    // copy is still listed, marked as the local catalog in the renderer.
+    const marketFallbackSource = bundledMarketIndexPath !== undefined &&
+      !(marketSource?.kind === 'file' && resolve(marketSource.path) === resolve(bundledMarketIndexPath))
+      ? { kind: 'file' as const, path: resolve(bundledMarketIndexPath) }
+      : undefined
     const dshMarket = developmentPluginOptions !== undefined || dshRuntimeVersion === undefined ||
       developmentPlugins === undefined
       ? undefined
       : createDshMarketSurface({
-          source: resolveDshMarketSource({
-            bundledIndexPath: resolve(process.resourcesPath, 'market', 'index.json'),
-            env: process.env
-          }),
+          source: marketSource,
+          ...(marketFallbackSource ? { fallbackSource: marketFallbackSource } : {}),
           installDeps: {
             installedRoot: installedPluginRoot,
             stagingRoot: resolve(app.getPath('userData'), 'extensions', 'staging'),
@@ -2263,6 +2292,17 @@ app
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.workspaceLocator ? { workspaceLocator: context.workspaceLocator } : {})
       }),
+      assertInvocationAllowed: async (context, descriptor) => {
+        const host = agentRuntimeHostRef.current
+        if (!host) throw new Error('Runtime permission policy is unavailable.')
+        const mode = await host.resolveCapabilitySandboxMode(context)
+        if (mode === 'read-only' && descriptor.effect !== 'read') {
+          throw new Error('Read-only permission does not allow this operation.')
+        }
+        if (mode === 'workspace-write' && (descriptor.scope !== 'workspace' || descriptor.effect === 'external-write' || descriptor.effect === 'destructive') && descriptor.effect !== 'read') {
+          throw new Error('This operation requires full access permission.')
+        }
+      },
       requestApproval: (request, options) =>
         agentRuntimeHostRef.current?.requestCapabilityApproval(request, options) ?? 'cancelled',
       cancelApprovalTurn: (identity, reason) =>
@@ -2397,13 +2437,11 @@ app
     })
     agentRuntimeHostRef.current = agentRuntimeHost
     agentRuntimeHostForShutdown = agentRuntimeHost
+    traceStartup('agent runtime host:done')
     // Restoring enabled plugins can resolve Host services during activation.
     // Publish the Host before initialization, then publish contributions once.
     await developmentPlugins?.initialize()
     await developmentPlugins?.attachCapabilityRegistry(applicationCapabilityRegistry)
-    void agentRuntimeHost.recoverIncompleteWork().catch((error) => {
-      logWarn('agent-runtime-work-recovery', 'Failed to recover incomplete Agent work.', error)
-    })
     installElectronDomainNativeVisualSmoke(
       capabilityAgentTools,
       (identity, operation) =>
@@ -2413,15 +2451,24 @@ app
     // the Change Inspector Host thin layer, so the thin layer reads the same real
     // session data the static domain would have read.
     const domainAgentThreadsHost = createDomainAgentThreadsHost(agentRuntimeHost)
+    scheduleRuntime = createScheduleRuntime({
+      store,
+      agentRuntime: agentRuntimeHost,
+      logError,
+      powerSaveBlocker
+    })
+    traceStartup('domain activation:start')
     mainRuntimeContributions = await activateMainRuntimeContributions(catalog, {
       userDataDir: app.getPath('userData'),
       appRoot: app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : app.getAppPath(),
       environment: Object.freeze({ ...process.env }),
       agentThreads: domainAgentThreadsHost,
+      wakeups: { schedule: (at, wake) => scheduleRuntime!.scheduleWakeup(at, wake) },
       turnEvents: {
         subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener),
         subscribeRequiredBeforeTurn: (listener) =>
           agentRuntimeHost.subscribeRequiredBeforeTurn(listener),
+        subscribeAcceptedInput: (listener) => agentRuntimeHost.subscribeAcceptedInput(listener),
         subscribeRequiredAdmission: (listener) =>
           agentRuntimeHost.subscribeRequiredAdmission(listener),
         subscribeRequiredOutput: (listener) =>
@@ -2482,9 +2529,15 @@ app
         } else if (entry.level === 'warn') {
           logWarn('domain-runtime', entry.message, entry.detail)
         } else {
-          logInfo('domain-runtime', entry.message)
+          logInfo('domain-runtime', entry.message, entry.detail)
         }
       }
+    })
+    traceStartup('domain activation:done')
+    scheduleRuntime.sync(initial)
+    // Recovery can complete turns and publish artifacts; all consumers must be active first.
+    void agentRuntimeHost.recoverIncompleteWork().catch((error) => {
+      logWarn('agent-runtime-work-recovery', 'Failed to recover incomplete Agent work.', error)
     })
     void domainExecutionEvents.startDelivery().catch((error) => {
       logError('domain-execution-events', 'Durable execution event replay failed.', error)
@@ -2495,13 +2548,7 @@ app
     void turnArtifactHandoff.replayPending().catch((error) => {
       logError('turn-artifact-handoff', 'Durable completed turn replay failed.', error)
     })
-    scheduleRuntime = createScheduleRuntime({
-      store,
-      agentRuntime: agentRuntimeHost,
-      logError,
-      powerSaveBlocker
-    })
-    scheduleRuntime.sync(initial)
+
 
     traceStartup('ipc registration:start')
     const applySettingsPatch = async (partial: AppSettingsPatch): Promise<AppSettingsV1> => {
@@ -2594,6 +2641,7 @@ app
         await getCodexRuntime().synchronizeModelAccess()
       }
       scheduleCodexRuntimePrewarm(saved, 'settings-switch')
+      scheduleDshRuntimePrewarm(saved, 'settings-switch')
       scheduleRuntime?.sync(saved)
       syncLoginItemSettings(saved)
       syncTray(saved)
@@ -2793,6 +2841,7 @@ app
     createWindow({ suppressInitialShow: shouldStartHidden(initial) })
     traceStartup('createWindow:returned')
     scheduleCodexRuntimePrewarm(initial, 'startup')
+    scheduleDshRuntimePrewarm(initial, 'startup')
 
     void pruneOnStartup().catch((err) => {
       console.warn('[sciforge] prune logs:', err)

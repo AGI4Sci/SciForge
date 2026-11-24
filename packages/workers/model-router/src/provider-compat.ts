@@ -7,7 +7,7 @@ import {
 
 export type ProviderWireProtocol = 'responses' | 'chat-completions' | 'anthropic-messages';
 export type ProviderSchemaPatternPolicy = 'preserve' | 'reject';
-/** Strongest Chat Completions `response_format` the upstream accepts. */
+/** Strongest structured-output format accepted by the OpenAI Responses and Chat wires. */
 export type ProviderChatStructuredOutputMode = 'json_schema' | 'json_object';
 /** Whether Chat uses effort alone or also requires an explicit thinking toggle. */
 export type ProviderChatReasoningControl = 'effort' | 'thinking-type';
@@ -108,10 +108,11 @@ export function providerCompatibilityConfigurationIssue(
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return 'compatibility settings must be an object';
   }
-  const unknownKey = Object.keys(value).find((key) => !PROVIDER_COMPATIBILITY_KEYS.has(key));
-  if (unknownKey) return `unknown compatibility setting "${unknownKey}"`;
+  if (Object.keys(value).some((key) => !PROVIDER_COMPATIBILITY_KEYS.has(key))) {
+    return 'unknown compatibility setting';
+  }
   if (value.preferredProtocol !== undefined && !PROTOCOLS.includes(value.preferredProtocol)) {
-    return `unknown preferred protocol "${String(value.preferredProtocol)}"`;
+    return 'preferredProtocol is invalid';
   }
   if (value.allowedProtocols !== undefined) {
     if (!Array.isArray(value.allowedProtocols) || value.allowedProtocols.length === 0) {

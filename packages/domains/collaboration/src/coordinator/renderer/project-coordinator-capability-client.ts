@@ -1,3 +1,4 @@
+import { DELIVERY_VALIDATION_ACTION, deliveryValidationSpecSchema, deliveryValidationRecordSchema, type DeliveryValidationSpec, type DeliveryValidationRecord } from '../delivery-validation-contract.js'
 import {
   deliveryDriveViewSchema,
   deliveryReadViewSchema,
@@ -27,6 +28,20 @@ import {
 } from '../delivery-content-contract.js'
 
 import {
+  projectCoordinatorProjectRenameInputSchema,
+  type ProjectCoordinatorProjectRenameInput,
+  projectCoordinatorProjectExecutionModeSetInputSchema,
+  type ProjectCoordinatorProjectExecutionModeSetInput,
+  projectCoordinatorProjectDispatchAuthorizeInputSchema,
+  type ProjectCoordinatorProjectDispatchAuthorizeInput,
+  projectCoordinatorTaskContentUpdateInputSchema,
+  type ProjectCoordinatorTaskContentUpdateInput,
+  projectCoordinatorTaskContentDecideInputSchema,
+  type ProjectCoordinatorTaskContentDecideInput,
+  projectCoordinatorLeaderProposalRetryInputSchema,
+  type ProjectCoordinatorLeaderProposalRetryInput,
+  projectCoordinatorLeaderProposalDeferInputSchema,
+  type ProjectCoordinatorLeaderProposalDeferInput,
   PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorActivationAcknowledgeInputSchema,
   projectCoordinatorActivationAcknowledgeResultSchema,
@@ -35,6 +50,7 @@ import {
   projectCoordinatorDeliveryReadInputSchema,
   projectCoordinatorDriveListInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
+  projectCoordinatorHumanNeededDeferInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorMembershipAcceptInputSchema,
   projectCoordinatorMembershipAddInputSchema,
@@ -57,7 +73,7 @@ import {
   projectCoordinatorTaskOfferReassignInputSchema,
   projectCoordinatorTaskOfferWithdrawInputSchema,
   projectCoordinatorTransferInputSchema,
-  projectCoordinatorWorkspaceReadInputSchema,
+  projectCoordinatorWorkspaceReadContract,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorActivationAcknowledgeInput,
   type ProjectCoordinatorAdoptionInput,
@@ -65,6 +81,7 @@ import {
   type ProjectCoordinatorDeliveryReadInput,
   type ProjectCoordinatorDriveListInput,
   type ProjectCoordinatorHumanAnswerInput,
+  type ProjectCoordinatorHumanNeededDeferInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorMembershipAcceptInput,
   type ProjectCoordinatorMembershipAddInput,
@@ -89,12 +106,7 @@ import {
 } from '../contract.js'
 import { publishProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
-const workspaceReadContract = Object.freeze({
-  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
-  effect: 'read' as const,
-  inputSchema: projectCoordinatorWorkspaceReadInputSchema,
-  outputSchema: projectCoordinatorWorkspaceSchema
-})
+
 
 const projectCreateContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
@@ -160,8 +172,8 @@ export const requirementsCompletionMessages: Readonly<Record<ProjectCoordinatorR
 export class ProjectCoordinatorRequirementsCompletionClientError extends Error {
   readonly reason: ProjectCoordinatorRequirementsCompletionFailureReason
 
-  constructor(reason: ProjectCoordinatorRequirementsCompletionFailureReason) {
-    super(requirementsCompletionMessages[reason])
+  constructor(reason: ProjectCoordinatorRequirementsCompletionFailureReason, invalidFields?: readonly string[]) {
+    super(`${requirementsCompletionMessages[reason]}${invalidFields?.length ? ` (${invalidFields.join(', ')})` : ''}`)
     this.name = 'ProjectCoordinatorRequirementsCompletionClientError'
     this.reason = reason
   }
@@ -222,6 +234,8 @@ const humanNeededCreateContract = Object.freeze({
   inputSchema: projectCoordinatorHumanNeededCreateInputSchema,
   outputSchema: projectCoordinatorWorkspaceSchema
 })
+
+const humanDeferContract = Object.freeze({ actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededDefer, effect: 'external-write' as const, inputSchema: projectCoordinatorHumanNeededDeferInputSchema, outputSchema: projectCoordinatorWorkspaceSchema })
 
 const humanAnswerContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
@@ -370,7 +384,7 @@ const readProjectRevisions = async (
   const projectId = input && typeof input === 'object' && 'projectId' in input
     ? input.projectId : undefined
   const workspace: ProjectCoordinatorWorkspace = await invoker.invoke(
-    workspaceReadContract,
+    projectCoordinatorWorkspaceReadContract,
     typeof projectId === 'string' ? { projectId } : {},
     {
       ...(options?.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
@@ -459,6 +473,13 @@ const withTransientRecovery = (invoker: DomainRendererCapabilityInvoker): Domain
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
+  retryLeaderProposal(input: ProjectCoordinatorLeaderProposalRetryInput): Promise<ProjectCoordinatorWorkspace>
+  deferLeaderProposal(input: ProjectCoordinatorLeaderProposalDeferInput): Promise<ProjectCoordinatorWorkspace>
+  renameProject(input: ProjectCoordinatorProjectRenameInput): Promise<ProjectCoordinatorWorkspace>
+  setProjectExecutionMode(input: ProjectCoordinatorProjectExecutionModeSetInput): Promise<ProjectCoordinatorWorkspace>
+  authorizeProjectDispatch(input: ProjectCoordinatorProjectDispatchAuthorizeInput): Promise<ProjectCoordinatorWorkspace>
+  updateTaskContent(input: ProjectCoordinatorTaskContentUpdateInput): Promise<ProjectCoordinatorWorkspace>
+  decideTaskContent(input: ProjectCoordinatorTaskContentDecideInput): Promise<ProjectCoordinatorWorkspace>
   deleteProject(input: ProjectCoordinatorProjectDeleteInput): Promise<ProjectCoordinatorProjectDeleteResult>
   acknowledgeProjectActivation(input: ProjectCoordinatorActivationAcknowledgeInput): Promise<void>
   readSessionOwnership(): Promise<readonly Readonly<{ runtimeId: string; threadId: string }>[]>
@@ -475,6 +496,7 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   acceptInvitation(input: ProjectCoordinatorMembershipAcceptInput): Promise<ProjectCoordinatorWorkspace>
   removeMember(input: ProjectCoordinatorMembershipRemoveInput): Promise<ProjectCoordinatorWorkspace>
   createHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): Promise<ProjectCoordinatorWorkspace>
+  deferHumanNeeded(input: ProjectCoordinatorHumanNeededDeferInput): Promise<ProjectCoordinatorWorkspace>
   answerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): Promise<ProjectCoordinatorWorkspace>
   transferCoordinator(input: ProjectCoordinatorTransferInput): Promise<ProjectCoordinatorWorkspace>
   openDeliveryObject(input: DeliveryObjectInput): Promise<import('zod').infer<typeof deliveryObjectOpenOutputSchema>>
@@ -482,6 +504,7 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   readDeliveryObjectRange(resource: DomainCapabilityResourceHandle, input: DeliveryObjectReadRangeInput): Promise<import('zod').infer<typeof deliveryObjectReadRangeOutputSchema>>
   readDelivery(input: ProjectCoordinatorDeliveryReadInput): Promise<DeliveryReadView>
   listDrive(input: ProjectCoordinatorDriveListInput): Promise<DeliveryDriveView>
+  validateDelivery(input: DeliveryValidationSpec): Promise<DeliveryValidationRecord>
   decideAdoption(input: ProjectCoordinatorAdoptionInput): Promise<IntegrationReceipt>
   requestRevision(input: ProjectCoordinatorRevisionRequestInput): Promise<DeliveryRevisionRecord>
   publishResult(input: ProjectCoordinatorResultPublishInput): Promise<ProjectResult>
@@ -500,10 +523,38 @@ export function createProjectCoordinatorRendererClient(
     return result
   }
   return Object.freeze({
-    readWorkspace: (input = {}, options = {}) => invoker.invoke(workspaceReadContract, input, options),
+    readWorkspace: (input = {}, options = {}) => invoker.invoke(projectCoordinatorWorkspaceReadContract, input, options),
     createProject: async (input) => {
       return invokeMutation(() => invoker.invoke(projectCreateContract, input, confirmationApproval))
     },
+    retryLeaderProposal: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalRetry, effect: 'workspace-write',
+      inputSchema: projectCoordinatorLeaderProposalRetryInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input)),
+    deferLeaderProposal: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalDefer, effect: 'workspace-write',
+      inputSchema: projectCoordinatorLeaderProposalDeferInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input)),
+    renameProject: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectRename, effect: 'external-write',
+      inputSchema: projectCoordinatorProjectRenameInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input, confirmationApproval)),
+    setProjectExecutionMode: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectExecutionModeSet, effect: 'external-write',
+      inputSchema: projectCoordinatorProjectExecutionModeSetInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input, confirmationApproval)),
+    authorizeProjectDispatch: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectDispatchAuthorize, effect: 'external-write',
+      inputSchema: projectCoordinatorProjectDispatchAuthorizeInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input, confirmationApproval)),
+    updateTaskContent: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentUpdate, effect: 'external-write',
+      inputSchema: projectCoordinatorTaskContentUpdateInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input, confirmationApproval)),
+    decideTaskContent: (input) => invokeMutation(() => invoker.invoke({
+      actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentDecide, effect: 'external-write',
+      inputSchema: projectCoordinatorTaskContentDecideInputSchema, outputSchema: projectCoordinatorWorkspaceSchema
+    }, input, confirmationApproval)),
     deleteProject: async (input) => {
       const result = await invoker.invoke(projectDeleteContract, input, confirmationApproval)
       publishProjectCoordinatorWorkspaceInvalidation()
@@ -518,7 +569,7 @@ export function createProjectCoordinatorRendererClient(
     completeRequirements: async (input) => {
       const result = await invokeMutation(() => invoker.invoke(requirementsCompleteContract, input))
       if (result.status === 'failed') {
-        throw new ProjectCoordinatorRequirementsCompletionClientError(result.reason)
+        throw new ProjectCoordinatorRequirementsCompletionClientError(result.reason, result.invalidFields)
       }
       return result.document
     },
@@ -561,9 +612,9 @@ export function createProjectCoordinatorRendererClient(
     ),
     createHumanNeeded: (input) => invoker.invoke(
       humanNeededCreateContract,
-      input,
-      confirmationApproval
+      input
     ),
+    deferHumanNeeded: (input) => invoker.invoke(humanDeferContract, input, confirmationApproval),
     answerHumanNeeded: (input) => invoker.invoke(
       humanAnswerContract,
       input,
@@ -578,6 +629,8 @@ export function createProjectCoordinatorRendererClient(
       inputSchema: deliveryObjectOpenInputSchema, outputSchema: deliveryObjectOpenOutputSchema }, input),
     describeDeliveryObject: (resource) => invoker.invoke(deliveryObjectDescribeContract, {}, { resource }),
     readDeliveryObjectRange: (resource, input) => invoker.invoke(deliveryObjectReadRangeContract, input, { resource }),
+    validateDelivery: (input) => invoker.invoke({ actionId: DELIVERY_VALIDATION_ACTION, effect: 'workspace-write',
+      inputSchema: deliveryValidationSpecSchema, outputSchema: deliveryValidationRecordSchema }, input, confirmationApproval),
     readDelivery: (input) => invoker.invoke(deliveryReadContract, input),
     listDrive: (input) => invoker.invoke(driveListContract, input),
     decideAdoption: (input) => invokeMutation(() => invoker.invoke(adoptionDecideContract, input, confirmationApproval)),

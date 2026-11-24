@@ -52,7 +52,7 @@ Change Inspector 的唯一生产实现是本独立只读 DSH 插件。插件拥�
 
 ## 真实应用验收与验证边界（2026-11-03）
 
-当前正式插件版本为 **0.1.2**。本机验收使用 SciForge 标准构建、独立 profile 与正式安装制品，官方 DSH `0.2.1-rc.4` 经 SciForge Model Router 使用 `yunshu/gpt-6.1-sol`。历史 0.1.1 任务保留了 watermark 分页失败、外置 artifact hydration 遗漏及其修复、同 workspace 其他 session / `sessionDetail` handler 拒绝、停用/重启/目录恢复证据；这些历史结果不代替本轮精确保真复验。
+当前插件版本为 **0.1.3**，显式请求 `agentThreads` Host service 与 `agent-threads.read` 端口。以下为 **0.1.2** 的历史验收，不代表当前版本已完成同等真实应用复验。本机验收使用 SciForge 标准构建、独立 profile 与正式安装制品，官方 DSH `0.2.1-rc.4` 经 SciForge Model Router 使用 `yunshu/gpt-6.1-sol`。历史 0.1.1 任务保留了 watermark 分页失败、外置 artifact hydration 遗漏及其修复、同 workspace 其他 session / `sessionDetail` handler 拒绝、停用/重启/目录恢复证据；这些历史结果不代替本轮精确保真复验。
 
 本轮在同一真实应用、同一 Host session 完成两回合，证据范围为原始事件 **seq > 297**：
 

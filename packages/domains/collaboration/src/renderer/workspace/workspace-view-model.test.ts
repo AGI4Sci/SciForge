@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { canonicalTaskIdForRequirementsModule } from '@sciforge/collaboration-contracts'
 import { createWorkspaceViewModel } from './workspace-view-model.js'
+import { offerAvailabilityPresentation } from './offer-availability.js'
 import type { WorkerDeliveryView } from '../../worker-delivery.js'
 
 const projectId = 'prj_TestWorkspace001'
@@ -38,6 +39,23 @@ function snapshot(tasks = [task()], notifications: unknown[] = []) {
   return { revision: 1, connection: { state: 'ready' }, providerOptions: [], managedContainers: [], projections: [], projects: [], dashboards: [{ schemaVersion: 1, revision: 1, createdAt: at, updatedAt: at, type: 'cloud_project_dashboard', projectId, projectName: '实验项目', role: 'owner', view: 'board', tasks, activity: [], mentionableUsers: [], materialConflicts: [], activityCursor: null, stale: false, offline: false, revoked: false }], queue: [], notifications, diagnostics: [] } as never
 }
 
+test('only this user and exact current execution can label a task as waiting for followup', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const current = task()
+  const followup = { key: 'job-result', at, about: 'Read existing output.', state: 'waiting', reason: null }
+  const status = snapshot([current]) as any
+  const local = { taskId: current.taskId, executionId: current.executionId, workerUserId: workerId, followup }
+  status.projects = [{ projectId, tasks: [local] }]
+  const build = () => createWorkspaceViewModel({ workspace: source, snapshot: status, selectedProjectId: projectId })
+  assert.equal(build().cards[0]?.stateLabel, '等待到期复查')
+  local.executionId = 'exe_Predecessor0001'
+  assert.notEqual(build().cards[0]?.stateLabel, '等待到期复查')
+  local.executionId = current.executionId
+  local.workerUserId = userId
+  assert.notEqual(build().cards[0]?.stateLabel, '等待到期复查')
+})
+
 function localDelivery(overrides: Partial<WorkerDeliveryView> = {}): WorkerDeliveryView {
   return {
     projectId, taskId: 'tsk_TestTask0001', executionId: 'exe_TestExecution0001', state: 'waiting_confirmation',
@@ -47,12 +65,127 @@ function localDelivery(overrides: Partial<WorkerDeliveryView> = {}): WorkerDeliv
   }
 }
 
+test('Task times survive refreshes and advance only with persisted Task and Delivery changes', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const card = task({ plannedDueAt: null, delivery: 'returned' })
+  const view = {
+    task: { taskId: card.taskId, title: card.title, currentExecutionId: card.executionId, createdAt: at, updatedAt: at },
+    executions: [], delivery: null
+  } as any
+  source.projects[0].tasks = [view]
+  const status = snapshot([card]) as any
+  const build = () => createWorkspaceViewModel({ workspace: source, snapshot: status })
+  const assertTimes = (expected: string) => {
+    const model = build()
+    const label = new Date(expected).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+    assert.deepEqual([model.cards[0]?.dateTime, model.myWork[0]?.at, model.inbox[0]?.at], [expected, expected, expected])
+    assert.deepEqual([model.cards[0]?.date, model.myWork[0]?.time, model.inbox[0]?.time], [label, label, label])
+  }
+  assertTimes(at)
+
+  const refreshedAt = '2026-10-20T10:00:00.000Z'
+  card.observedAt = refreshedAt
+  source.observedAt = refreshedAt
+  source.projects[0].project.updatedAt = refreshedAt
+  status.dashboards[0].updatedAt = refreshedAt
+  assertTimes(at)
+
+  const changedAt = '2026-10-18T11:00:00.000Z'
+  view.task.updatedAt = changedAt
+  assertTimes(changedAt)
+  const sealedAt = '2026-10-18T12:00:00.000Z'
+  view.delivery = { manifest: { deliveryManifestId: 'dm_TestTime0001', sealedAt } }
+  assertTimes(sealedAt)
+  card.observedAt = '2026-10-21T10:00:00.000Z'
+  assertTimes(sealedAt)
+})
+
+test('Task times include canonical execution, offer and delivery lifecycle facts', () => {
+  const changedAt = '2026-10-18T12:00:00.000Z'
+  const cases = [
+    { name: 'execution update', executions: [{ updatedAt: changedAt }], delivery: null },
+    { name: 'execution start', executions: [{ startedAt: changedAt }], delivery: null },
+    { name: 'candidate update', executions: [], delivery: { candidate: { updatedAt: changedAt } } },
+    { name: 'revision request', executions: [], delivery: { revisionRequest: { requestedAt: changedAt } } },
+    { name: 'integration receipt', executions: [], delivery: { receipt: { createdAt: changedAt } } },
+    { name: 'published result', executions: [], delivery: { result: { adoptedAt: changedAt } } }
+  ]
+  for (const { name, executions, delivery } of cases) {
+    const source = workspace() as any
+    source.connection.userId = workerId
+    const card = task({ plannedDueAt: null })
+    source.projects[0].tasks = [{ task: { taskId: card.taskId, createdAt: at, updatedAt: at }, executions, delivery }]
+    source.projects[0].offers = [{ taskId: 'tsk_OtherTask0001', updatedAt: '2026-10-22T00:00:00.000Z' }]
+    const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([card]) })
+    assert.equal(model.cards[0]?.dateTime, changedAt, name)
+    assert.equal(model.myWork[0]?.at, changedAt, name)
+  }
+})
+
+test('deadline cards keep their due date while offer inbox rows show actual changes, never expiry', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const dueAt = '2026-10-25T10:00:00.000Z'
+  const card = task({ plannedDueAt: dueAt, primaryAction: 'accept_offer', workflowColumn: 'intake', executionId: null })
+  const offer = { taskId: card.taskId, taskOfferId: 'tof_TestAvailable0001', state: 'pending', offeredAt: at, expiresAt: '2026-10-24T10:00:00.000Z', updatedAt: at }
+  source.projects[0].offers = [offer]
+  const status = withAvailableOffer(snapshot([card]), card)
+  const build = () => createWorkspaceViewModel({ workspace: source, snapshot: status })
+  for (const expected of [at, '2026-10-18T12:00:00.000Z']) {
+    offer.updatedAt = expected
+    card.observedAt = '2026-10-22T10:00:00.000Z'
+    const model = build()
+    assert.equal(model.cards[0]?.dateTime, dueAt)
+    assert.equal(model.myWork[0]?.at, dueAt)
+    assert.equal(model.inbox[0]?.at, expected)
+    assert.equal(model.inbox[0]?.kind, 'offer')
+  }
+})
+
+test('ready delivery inbox time is stable when only the dashboard observation changes', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const card = task({ plannedDueAt: null, delivery: 'worker_review' })
+  source.projects[0].tasks = [{ task: { taskId: card.taskId, createdAt: at, updatedAt: at }, executions: [] }]
+  for (const observedAt of [at, '2026-10-22T10:00:00.000Z']) {
+    card.observedAt = observedAt
+    const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([card]) })
+    assert.equal(model.inbox[0]?.id, `delivery:${card.taskId}`)
+    assert.equal(model.inbox[0]?.at, at)
+  }
+})
+
+test('missing Task activity stays unknown across refreshes in cards, My Work and every synthesized inbox todo', () => {
+  for (const overrides of [
+    { primaryAction: 'accept_offer', workflowColumn: 'intake', executionId: null },
+    { delivery: 'worker_review' },
+    { delivery: 'returned' },
+    { primaryAction: 'adopt_delivery', delivery: 'sealed' }
+  ]) {
+    const source = workspace() as any
+    const card = task({ ...overrides, assigneeUserId: userId, plannedDueAt: null })
+    source.projects[0].tasks = [{ task: { taskId: 'tsk_OtherTask0001', createdAt: at, updatedAt: at }, executions: [] }]
+    source.projects[0].offers = card.primaryAction === 'accept_offer'
+      ? [{ taskId: card.taskId, taskOfferId: 'tof_TestAvailable0001', state: 'pending' }]
+      : []
+    for (const observedAt of [at, '2026-10-22T10:00:00.000Z']) {
+      card.observedAt = observedAt
+      const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([card]) })
+      assert.deepEqual([model.cards[0]?.dateTime, model.myWork[0]?.at, model.inbox[0]?.at], [undefined, undefined, undefined])
+      assert.deepEqual([model.cards[0]?.date, model.myWork[0]?.time, model.inbox[0]?.time], ['—', '—', '—'])
+    }
+  }
+})
+
 test('maps needs_human, awaiting review and completed states to board columns', () => {
   const cards = [task({ taskId: 'tsk_human', workflowColumn: 'needs_human', blocker: '请回答', lineage: { projectId, requirementsBaselineId: 'rqb_TestBaseline0001', workItemId: 'item_Test0001' }, primaryAction: 'view' }), task({ taskId: 'tsk_review', workflowColumn: 'waiting_result_confirm', delivery: 'sealed', primaryAction: 'adopt_delivery', lineage: { projectId, requirementsBaselineId: 'rqb_TestBaseline0001', workItemId: 'item_Test0002' } }), task({ taskId: 'tsk_done', workflowColumn: 'completed', adoption: 'adopted', lineage: { projectId, requirementsBaselineId: 'rqb_TestBaseline0001', workItemId: 'item_Test0003' } })]
   const model = createWorkspaceViewModel({ workspace: workspace(), snapshot: snapshot(cards), selectedProjectId: projectId })
   assert.deepEqual(model.cards.slice(0, 3).map((card) => card.status), ['in-progress', 'review', 'completed'])
   assert.equal(model.cards.find((card) => card.id === 'tsk_human')?.stateLabel, '等待回答')
   assert.equal(model.cards.find((card) => card.id === 'tsk_review')?.stateLabel, '待你采纳')
+  // A Dashboard card is backed by the Cloud Task whose id it carries.
+  assert.equal(model.cards.find((card) => card.id === 'tsk_human')?.cloudTaskId, 'tsk_human')
 })
 
 test('keeps the document version separate from the row concurrency revision', () => {
@@ -69,6 +202,8 @@ test('places unprojected requirement modules in intake with sequential card refe
   const model = createWorkspaceViewModel({ workspace: workspace(), snapshot: snapshot([]), selectedProjectId: projectId })
   assert.deepEqual(model.cards.map((card) => card.reference), ['#1', '#2'])
   assert.ok(model.cards.every((card) => card.status === 'intake'))
+  // An undispatched module has no Cloud Task, so it must not offer a Cloud id.
+  assert.ok(model.cards.every((card) => card.cloudTaskId === undefined))
 })
 
 test('aggregates My Work and Inbox across project names', () => {
@@ -142,7 +277,77 @@ test('missing local Offer proof never grants acceptance solely from the Cloud pr
   source.connection.userId = workerId
   const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([task({ workflowColumn: 'intake', primaryAction: 'accept_offer' })]), selectedProjectId: projectId })
   assert.equal(model.cards[0]?.stateLabel, '待核实')
+  assert.equal(model.cards[0]?.offerAvailability?.reason, 'reconciliation_required')
+  const detail = offerAvailabilityPresentation(model.cards[0]!.offerAvailability!).detail
+  assert.match(detail, /暂时无法确认/)
+  assert.doesNotMatch(detail, /缺少.*凭据/)
   assert.equal(model.inbox[0]?.action, '查看')
+})
+
+test('Cloud Offer projections ahead of the local journal stay pending sync and converge after acceptance', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const offerTask = task({ workflowColumn: 'intake', primaryAction: 'accept_offer', executionId: null })
+  const offer = { taskId: offerTask.taskId, taskOfferId: 'tof_TestSync0001', workerUserId: workerId, state: 'pending', executionId: null } as any
+  source.projects[0].offers = [offer]
+  const status = snapshot([offerTask]) as any
+  const build = (deliveries: Record<string, WorkerDeliveryView> = {}) => createWorkspaceViewModel({ workspace: source, snapshot: status, workerDeliveries: deliveries, selectedProjectId: projectId })
+  const assertSync = () => {
+    const model = build()
+    assert.deepEqual(model.cards[0]?.offerAvailability, { state: 'sync_pending', reason: 'synchronization_pending', canAccept: false, canReject: false, canDismiss: false })
+    assert.equal(model.cards[0]?.offerId, offer.taskOfferId)
+    assert.equal(model.cards[0]?.stateLabel, '待同步')
+    assert.equal(model.myWork[0]?.state, '待同步')
+    assert.equal(model.inbox[0]?.state, '待同步')
+    assert.equal(model.inbox[0]?.action, '查看')
+    const detail = offerAvailabilityPresentation(model.cards[0]!.offerAvailability!).detail
+    assert.match(detail, /无需重复接受或重新派发/)
+    assert.doesNotMatch(detail, /已保存在本机|缺少.*凭据/)
+  }
+  assertSync()
+  status.projects = [{ projectId, tasks: [{ taskId: offerTask.taskId, taskOfferId: offer.taskOfferId, workerUserId: workerId, offerAvailability: availableOffer }] }]
+  assert.equal(build().cards[0]?.offerAvailability?.canAccept, true, 'only the backend gate grants a manual decision')
+
+  // Cloud accepts first while this device still exposes the previous journal.
+  offer.state = 'accepted'
+  offer.executionId = 'exe_TestExecution0001'
+  offerTask.executionId = offer.executionId
+  source.projects[0].tasks = [{ task: { taskId: offerTask.taskId, currentExecutionId: offer.executionId }, executions: [] }]
+  status.projects[0].tasks = []
+  assertSync()
+  offerTask.primaryAction = 'view'
+  offerTask.contractExecution = 'accepted_awaiting_runtime'
+  assert.equal(build().cards[0]?.offerAvailability, undefined, 'an accepted execution without a stale accept action uses its normal execution UI')
+  status.projects[0].tasks = [{ taskId: offerTask.taskId, taskOfferId: offer.taskOfferId, workerUserId: workerId, offerAvailability: { state: 'sync_pending', reason: 'synchronization_pending', canAccept: false, canReject: false, canDismiss: false } }]
+  assertSync()
+  const settled = build({ exe_TestExecution0001: localDelivery() })
+  assert.equal(settled.cards[0]?.stateLabel, '待提交交付')
+  assert.equal(settled.myWork[0]?.state, '待提交交付')
+  assert.equal(settled.cards[0]?.offerAvailability?.canAccept, false)
+})
+
+test('accepted Cloud Offers preserve explicit local invalid and missing-evidence gates', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const accepted = task({ contractExecution: 'accepted_awaiting_runtime', primaryAction: 'view' })
+  source.projects[0].offers = [{ taskId: accepted.taskId, taskOfferId: 'tof_TestFailed0001', state: 'accepted', executionId: accepted.executionId }]
+  for (const [state, reason, label] of [
+    ['unverified', 'recovery_evidence_missing', '待核实'],
+    ['invalid', 'authority_changed', '已失效'],
+    ['invalid', 'contract_changed', '已失效'],
+    ['invalid', 'offer_expired', '已失效']
+  ] as const) {
+    const availability = { state, reason, canAccept: false, canReject: false, canDismiss: false }
+    const status = snapshot([accepted]) as any
+    status.projects = [{ projectId, tasks: [{ taskId: accepted.taskId, taskOfferId: 'tof_TestFailed0001', workerUserId: workerId, offerAvailability: availability }] }]
+    const model = createWorkspaceViewModel({ workspace: source, snapshot: status, selectedProjectId: projectId })
+    assert.deepEqual(model.cards[0]?.offerAvailability, availability)
+    assert.equal(model.cards[0]?.stateLabel, label)
+    assert.equal(model.myWork[0]?.state, label)
+    assert.equal(model.inbox[0]?.state, label)
+    assert.equal(model.inbox[0]?.action, '查看')
+    if (reason === 'recovery_evidence_missing') assert.match(offerAvailabilityPresentation(availability).detail, /缺少.*凭据/)
+  }
 })
 
 test('an older Offer or another account cannot supply operation availability for the current pending Offer', () => {
@@ -158,7 +363,7 @@ test('an older Offer or another account cannot supply operation availability for
     status.projects = [{ projectId, tasks: [{ ...local, taskId: offerTask.taskId, offerAvailability: availableOffer }] }]
     const model = createWorkspaceViewModel({ workspace: source, snapshot: status, selectedProjectId: projectId })
     assert.equal(model.cards[0]?.offerAvailability?.canAccept, false)
-    assert.equal(model.cards[0]?.stateLabel, '待核实')
+    assert.equal(model.cards[0]?.stateLabel, '待同步')
     assert.equal(model.inbox[0]?.action, '查看')
   }
 })
@@ -215,7 +420,7 @@ test('labels offer, human, adoption and revision actions', () => {
 })
 
 test('numbers projected tasks by their requirement module, describes them, and labels states in Chinese', () => {
-  const cards = [task({ taskId: 'tsk_second_module', workflowColumn: 'in_progress', assigneeUserId: userId, lineage: { projectId, requirementsBaselineId: 'rqb_TestBaseline0001', workItemId: 'item_Test0002' } })]
+  const cards = [task({ taskId: 'tsk_second_module', workflowColumn: 'in_progress', assigneeUserId: userId, lineage: { projectId, requirementsBaselineId: 'rqd_TestRequirements0001', workItemId: 'item_Test0002' } })]
   const model = createWorkspaceViewModel({ workspace: workspace(), snapshot: snapshot(cards), selectedProjectId: projectId })
   const card = model.cards.find((entry) => entry.id === 'tsk_second_module')
   assert.equal(card?.reference, '#2')
@@ -249,6 +454,39 @@ test('a signed-in Desktop without its own Collaboration connection is not report
   assert.equal(createWorkspaceViewModel({ workspace: workspace(), snapshot: status({ state: 'disconnected', configured: true }) }).connection.action, 'connect')
   const failed = createWorkspaceViewModel({ workspace: workspace(), snapshot: status({ state: 'error', configured: true, lastError: 'Inbox owner unavailable' }) }).connection
   assert.deepEqual([failed.label, failed.detail, failed.action], ['协作连接异常', 'Inbox owner unavailable', 'recover'])
+})
+
+test('an assignment this Desktop dismissed leaves the board and My Work for its Worker, while the Owner keeps it for dispatch', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const offerTask = task({ taskId: 'tsk_TestDismissed01', workflowColumn: 'intake', primaryAction: 'accept_offer', assigneeUserId: workerId })
+  source.projects[0].offers = [{ taskId: offerTask.taskId, taskOfferId: 'tof_TestAvailable0001', state: 'pending' }]
+  const notification = { notificationId: 'ntf_TestDismissed1', projectId, taskId: offerTask.taskId, recipientUserId: workerId, kind: 'offer', summary: '任务待接受：验证实验输入', actionRequired: true, expiresAt: null, readAt: null, sourceEventId: 'evt_TestDismissed1', revision: 1, createdAt: at, updatedAt: at }
+  const status = withAvailableOffer(snapshot([offerTask], [notification]), offerTask) as any
+  status.projects[0].tasks[0].state = 'dismissed'
+  status.projects[0].tasks[0].updatedAt = at
+  status.projects[0].tasks[0].offerAvailability = { state: 'invalid', reason: 'offer_closed', canAccept: false, canReject: false, canDismiss: false }
+  let model = createWorkspaceViewModel({ workspace: source, snapshot: status, selectedProjectId: projectId })
+  assert.deepEqual(model.cards.filter((card) => card.id === offerTask.taskId), [])
+  assert.equal(model.myWork.some((item) => item.taskId === offerTask.taskId), false)
+  assert.equal(model.inbox.some((item) => item.taskId === offerTask.taskId), false, 'the dismissed assignment is not an inbox todo either')
+
+  // A newer pending Offer for the same Task is a new assignment and returns.
+  status.projects[0].tasks[0] = { taskId: offerTask.taskId, taskOfferId: 'tof_TestAgain0000001', workerUserId: workerId, state: 'awaiting-manual', updatedAt: '2026-10-19T00:00:00.000Z', offerAvailability: availableOffer }
+  model = createWorkspaceViewModel({ workspace: source, snapshot: status, selectedProjectId: projectId })
+  assert.equal(model.cards.some((card) => card.id === offerTask.taskId), true)
+
+  // The Owner's board is the dispatch surface: dismissing their own Offer must
+  // not remove the Task they still have to hand to somebody.
+  const ownerSource = workspace() as any
+  const ownerTask = task({ taskId: 'tsk_TestOwnerDismiss01', workflowColumn: 'intake', primaryAction: 'accept_offer', assigneeUserId: userId })
+  ownerSource.projects[0].offers = [{ taskId: ownerTask.taskId, taskOfferId: 'tof_TestOwnerDismiss1', state: 'pending' }]
+  const ownerStatus = withAvailableOffer(snapshot([ownerTask], []), ownerTask) as any
+  ownerStatus.projects[0].tasks[0].state = 'dismissed'
+  ownerStatus.projects[0].tasks[0].updatedAt = at
+  ownerStatus.projects[0].tasks[0].offerAvailability = { state: 'invalid', reason: 'offer_closed', canAccept: false, canReject: false, canDismiss: false }
+  const ownerModel = createWorkspaceViewModel({ workspace: ownerSource, snapshot: ownerStatus, selectedProjectId: projectId })
+  assert.equal(ownerModel.cards.some((card) => card.id === ownerTask.taskId), true)
 })
 
 test('offers only Workers whose runtimes provide a module executable tags', () => {
@@ -399,6 +637,148 @@ test('lists eligible replacement Workers for a pending offer addressed to the Ow
   const card = model.cards.find((candidate) => candidate.id === pendingTaskId)
   assert.equal(card?.assignment?.kind, 'withdraw')
   assert.deepEqual(card?.assignableWorkerUserIds, [userId, workerId])
+  project.project.status = 'paused'
+  const paused = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([task({ taskId: pendingTaskId })]), selectedProjectId: projectId })
+  assert.equal(paused.cards[0]?.assignment, undefined, 'paused projects cannot withdraw and reassign pending offers')
+})
+
+test('failed tasks offer reassignment only with the Coordinator task state and retry budget', () => {
+  const source = workspace() as any
+  const project = source.projects[0]
+  const failed = task({ contractExecution: 'failed', workflowColumn: 'waiting_result_confirm' })
+  const canonical = {
+    taskId: failed.taskId, projectId, status: 'in_progress', revision: 5,
+    currentExecutionId: failed.executionId, currentExecutionState: 'failed',
+    executionCount: 1, maxRetries: 2, requiredCapabilityTags: []
+  }
+  project.tasks = [{ task: canonical, executions: [{
+    executionId: failed.executionId, projectId, taskId: failed.taskId, state: 'failed', fence: { status: 'fenced' }
+  }] }]
+  project.offers = [{ projectId, taskId: failed.taskId, taskOfferId: 'tof_TestFailedOffer01',
+    executionId: failed.executionId, state: 'accepted' }]
+  source.connection.userId = workerId
+  const model = () => createWorkspaceViewModel({ workspace: source, snapshot: snapshot([failed]), selectedProjectId: projectId })
+  const build = () => model().cards[0]!
+  assert.equal(model().myWork[0]?.state, '执行失败')
+  assert.equal(build().assignment, undefined, 'a fenced failure alone cannot be reassigned')
+  assert.equal(build().stateLabel, '执行失败')
+  canonical.status = 'revision_requested'
+  assert.equal(build().assignment, undefined, 'the Worker cannot dispatch a successor')
+  source.connection.userId = userId
+  assert.equal(build().assignment?.kind, 'reassign', 'the Owner can dispatch a formal successor')
+  source.connection.userId = workerId
+  assert.equal(build().stateLabel, '待重新派发')
+  assert.equal(model().myWork[0]?.state, '待重新派发', 'My Work agrees with the board for a formal retry')
+  canonical.executionCount = 3
+  assert.equal(build().assignment, undefined, 'exhausted retries cannot expose reassignment')
+  assert.equal(build().stateLabel, '执行失败')
+  canonical.executionCount = 1
+  project.project.status = 'paused'
+  assert.equal(build().assignment, undefined, 'paused projects cannot dispatch successors')
+})
+
+test('pending controls require the exact offered Task and unclaimed offer tuple', () => {
+  const source = workspace() as any
+  const project = source.projects[0]
+  const dashboard = task({ workflowColumn: 'intake', executionId: null, contractExecution: 'unassigned' })
+  const canonical = { taskId: dashboard.taskId, projectId, status: 'offered', currentExecutionId: null, currentExecutionState: null }
+  const offer = { taskOfferId: 'tof_ExactPending01', taskId: dashboard.taskId, projectId, state: 'pending', executionId: null, workerUserId: workerId, expiresAt: at }
+  const reset = () => {
+    source.connection = { state: 'ready', userId }
+    project.project.status = 'active'
+    project.tasks = [{ task: { ...canonical }, executions: [] }]
+    project.offers = [{ ...offer }]
+  }
+  const build = () => createWorkspaceViewModel({ workspace: source, snapshot: snapshot([dashboard]), selectedProjectId: projectId }).cards[0]!
+  reset()
+  assert.equal(build().assignment?.kind, 'withdraw')
+  for (const mutate of [
+    () => { project.tasks = [] },
+    () => { project.tasks[0].task.status = 'in_progress' },
+    () => { project.tasks[0].task.currentExecutionId = 'exe_OtherExecution01' },
+    () => { project.tasks[0].task.projectId = 'prj_OtherProject01' },
+    () => { project.offers[0].executionId = 'exe_OtherExecution01' },
+    () => { project.offers[0].projectId = 'prj_OtherProject01' },
+    () => { project.project.status = 'paused' },
+    () => { source.connection.userId = workerId },
+    () => { source.connection.state = 'recovering' }
+  ]) {
+    reset(); mutate()
+    assert.equal(build().assignment, undefined, 'invalid or unauthorized pending controls stay hidden')
+  }
+})
+
+test('terminal reassignment requires exact revision, resource history and fenced current execution', () => {
+  const source = workspace() as any
+  const project = source.projects[0]
+  const dashboard = task({ contractExecution: 'failed' })
+  const canonical = { taskId: dashboard.taskId, projectId, status: 'revision_requested', revision: 4,
+    currentExecutionId: null, currentExecutionState: null, executionCount: 1, maxRetries: 2 }
+  const terminal = { taskOfferId: 'tof_ExactTerminal01', taskId: dashboard.taskId, projectId, state: 'rejected', executionId: null, reassignmentTaskRevision: 4 }
+  const reset = () => {
+    project.tasks = [{ task: { ...canonical }, executions: [] }]
+    project.offers = [{ ...terminal }]
+  }
+  const build = () => createWorkspaceViewModel({ workspace: source, snapshot: snapshot([dashboard]), selectedProjectId: projectId }).cards[0]!
+  reset(); assert.equal(build().assignment?.kind, 'reassign')
+  for (const mutate of [
+    () => { project.tasks[0].task.currentExecutionState = 'failed' },
+    () => { project.offers[0].reassignmentTaskRevision = 3 },
+    () => { delete project.tasks[0].task.revision; delete project.offers[0].reassignmentTaskRevision },
+    () => { project.offers[0].projectId = 'prj_OtherProject01' },
+    () => { project.tasks[0].task.executionCount = 3 },
+    () => { project.tasks[0].task.status = 'completed' }
+  ]) {
+    reset(); mutate(); assert.equal(build().assignment, undefined)
+    assert.equal(build().stateLabel, '执行失败')
+  }
+  const resetExecution = () => {
+    reset()
+    Object.assign(project.tasks[0].task, { currentExecutionId: dashboard.executionId, currentExecutionState: 'failed' })
+    project.tasks[0].executions = [{ executionId: dashboard.executionId, taskId: dashboard.taskId, projectId, state: 'failed', fence: { status: 'fenced' } }]
+    Object.assign(project.offers[0], { state: 'accepted', executionId: dashboard.executionId })
+  }
+  resetExecution(); assert.equal(build().assignment?.kind, 'reassign')
+  for (const mutate of [
+    () => { project.tasks[0].executions = [] },
+    () => { project.tasks[0].executions[0].taskId = 'tsk_OtherTask01' },
+    () => { project.tasks[0].executions[0].projectId = 'prj_OtherProject01' },
+    () => { project.tasks[0].executions[0].fence.status = 'open' },
+    () => { project.tasks[0].task.currentExecutionState = 'running' },
+    () => { project.tasks[0].executions[0].state = 'result_submitted' },
+    () => { project.offers[0].state = 'withdrawn' }
+  ]) {
+    resetExecution(); mutate(); assert.equal(build().assignment, undefined)
+  }
+})
+
+test('first assignment requires an active owned confirmed module with no existing Task or offer', () => {
+  const source = workspace() as any
+  const project = source.projects[0]
+  project.confirmedRequirements = { ...project.requirementsDraft, state: 'confirmed' }
+  const document = project.confirmedRequirements
+  const canonicalId = canonicalTaskIdForRequirementsModule(document.requirementsDocumentId, 'item_Test0001')
+  const dashboard = task({ taskId: canonicalId, workflowColumn: 'intake', executionId: null, contractExecution: 'unassigned',
+    lineage: { projectId, requirementsBaselineId: document.requirementsDocumentId, workItemId: 'item_Test0001' } })
+  const build = (cards = [dashboard]) => createWorkspaceViewModel({ workspace: source, snapshot: snapshot(cards), selectedProjectId: projectId }).cards.find((card) => card.reference === '#1')!
+  assert.equal(build().assignment?.kind, 'first')
+  assert.equal(build([]).assignment?.kind, 'first', 'undispatched modules use the same gate')
+  for (const mutate of [
+    () => { project.project.status = 'paused' },
+    () => { source.connection.userId = workerId },
+    () => { source.connection.state = 'recovering' },
+    () => { project.tasks = [{ task: { taskId: canonicalId }, executions: [] }] },
+    () => { project.offers = [{ taskId: canonicalId, state: 'withdrawn' }] },
+    () => { document.state = 'draft' }
+  ]) {
+    project.project.status = 'active'; source.connection = { state: 'ready', userId }
+    project.tasks = []; project.offers = []; document.state = 'confirmed'
+    mutate()
+    assert.equal(build().assignment, undefined)
+    assert.equal(build([]).assignment, undefined)
+  }
+  project.tasks = []; project.offers = []; document.state = 'confirmed'
+  assert.equal(build([task({ ...dashboard, taskId: 'tsk_WrongCanonical01' })]).assignment, undefined)
 })
 
 test('private delivery readiness drives board, My Work and the one inbox projection before Cloud submission', () => {
@@ -459,6 +839,51 @@ test('local delivery cannot cross member, Project, Task or execution boundaries'
   }
 })
 
+test('a new requirements version keeps old Tasks separate and offers its own modules without inheriting adoption', () => {
+  const source = workspace() as any
+  const project = source.projects[0]
+  const previousDocumentId = project.requirementsDraft.requirementsDocumentId
+  const document = { ...project.requirementsDraft, requirementsDocumentId: 'rqd_TestRequirements0002', documentRevision: 2, state: 'confirmed' }
+  document.workModules[1].dependencyPlanItemIds = ['item_Test0001']
+  project.requirementsDraft = null
+  project.confirmedRequirements = document
+  const oldTaskId = canonicalTaskIdForRequirementsModule(previousDocumentId, 'item_Test0001')
+  const oldRunningId = canonicalTaskIdForRequirementsModule(previousDocumentId, 'item_Test0002')
+  project.tasks = [
+    { task: { taskId: oldTaskId, status: 'completed', objective: 'Original accepted scope' }, delivery: { receipt: { disposition: 'adopted' } } },
+    { task: { taskId: oldRunningId, status: 'running', objective: 'Original running scope' } }
+  ]
+  const previousCards = [
+    task({ taskId: oldTaskId, workflowColumn: 'completed', adoption: 'adopted', lineage: { projectId, requirementsBaselineId: previousDocumentId, workItemId: 'item_Test0001' } }),
+    task({ taskId: oldRunningId, lineage: { projectId, requirementsBaselineId: previousDocumentId, workItemId: 'item_Test0002' } })
+  ]
+  const build = (cards = previousCards) => createWorkspaceViewModel({ workspace: source, snapshot: snapshot(cards) })
+  const model = build()
+  assert.equal(model.completion.adopted, 0)
+  assert.equal(model.completion.total, 2)
+  assert.equal(model.cards.length, 4)
+  for (const taskId of [oldTaskId, oldRunningId]) {
+    const old = model.cards.find((card) => card.id === taskId)!
+    assert.equal(old.reference, '旧版需求任务')
+    assert.equal(old.blockedByLabel, undefined)
+    assert.equal(old.assignment, undefined)
+    assert.equal(old.cloudTaskId, taskId)
+  }
+  assert.equal(model.cards.find((card) => card.id === oldTaskId)?.status, 'completed')
+  const assignment = model.cards.find((card) => card.reference === '#1')?.assignment
+  assert.equal(assignment?.kind, 'first')
+  assert.equal(assignment?.kind === 'first' ? assignment.taskId : undefined,
+    canonicalTaskIdForRequirementsModule(document.requirementsDocumentId, 'item_Test0001'))
+  assert.equal(model.cards.find((card) => card.reference === '#2')?.blockedByLabel, '等待 #1 采纳')
+  assert.ok(model.myWork.every((item) => item.reference === '旧版需求任务'))
+  const currentTaskId = canonicalTaskIdForRequirementsModule(document.requirementsDocumentId, 'item_Test0001')
+  const currentCard = task({ taskId: currentTaskId, lineage: { projectId, requirementsBaselineId: document.requirementsDocumentId, workItemId: 'item_Test0001' } })
+  const projected = build([...previousCards, currentCard])
+  assert.equal(projected.cards.length, 4)
+  assert.equal(projected.cards.find((card) => card.reference === '#1')?.cloudTaskId, currentTaskId)
+  assert.equal(projected.cards.some((card) => card.id === 'module:item_Test0001'), false)
+})
+
 test('requirements name dependencies and both projected and unprojected cards wait for actual adoption', () => {
   const source = workspace() as any
   const project = source.projects[0]
@@ -467,7 +892,7 @@ test('requirements name dependencies and both projected and unprojected cards wa
   project.confirmedRequirements = document
   const taskId = canonicalTaskIdForRequirementsModule(document.requirementsDocumentId, 'item_Test0001')
   project.tasks = [{ task: { taskId, status: 'completed' }, delivery: { receipt: { disposition: 'pending' } } }]
-  const build = (projected = false) => createWorkspaceViewModel({ workspace: source, snapshot: snapshot(projected ? [task({ taskId: 'tsk_third', lineage: { workItemId: 'item_Test0003' } })] : []) })
+  const build = (projected = false) => createWorkspaceViewModel({ workspace: source, snapshot: snapshot(projected ? [task({ taskId: 'tsk_third', lineage: { projectId, requirementsBaselineId: document.requirementsDocumentId, workItemId: 'item_Test0003' } })] : []) })
   assert.equal(build().requirements?.workModules[0]?.dependencyLabel, '可立即开始')
   assert.equal(build().requirements?.workModules[2]?.dependencyLabel, '依赖：#1 第一模块、#2 第二模块')
   assert.equal(build().cards.find((card) => card.reference === '#3')?.blockedByLabel, '等待 #1、#2 采纳')
@@ -509,6 +934,87 @@ test('drops the merged Delivery todo once the Owner handled the task', () => {
     selectedProjectId: projectId
   })
   assert.deepEqual(model.inbox.filter((item) => item.taskId === 'tsk_TestAdopted0001'), [])
+})
+
+test('settled delivery facts suppress current Chinese and unknown historical actionable summaries', () => {
+  for (const currentUserId of [userId, workerId]) {
+    const source = workspace() as any
+    source.connection.userId = currentUserId
+    const taskId = 'tsk_TestSettledChinese01'
+    source.projects[0].tasks = [{ task: { taskId, title: '已完成交付', status: 'completed', currentExecutionId: null }, delivery: { receipt: { disposition: 'adopted' } }, executions: [] }]
+    for (const cards of [[], [task({ taskId, adoption: 'adopted', workflowColumn: 'completed' })]]) {
+      const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot(cards, ['第 1 版已提交', '已采纳', 'Delivery pipeline paused for manual inspection.'].map((summary, index) => deliveryNotification(`ntf_settled${index}`, taskId, summary, at))) })
+      assert.equal(model.inbox.length, 0)
+    }
+  }
+})
+
+test('superseded delivery with a current revision remains rework only for its assignee with or without a dashboard', () => {
+  const source = workspace() as any
+  const taskId = 'tsk_TestChineseRework01'
+  source.projects[0].tasks = [{ task: { taskId, title: '补充对照', status: 'in_progress', currentExecutionId: 'exe_current' }, delivery: { receipt: { disposition: 'superseded' }, manifest: { deliveryManifestId: 'dm_current' }, revisionRequest: { deliveryManifestId: 'dm_current', executionId: 'exe_current' } }, executions: [{ executionId: 'exe_current', assigneeUserId: workerId }] }]
+  for (const cards of [[], [task({ taskId, title: '补充对照', executionId: 'exe_current', delivery: 'returned' })]]) {
+    for (const currentUserId of [workerId, userId, 'usr_Observer0001']) {
+      source.connection.userId = currentUserId
+      const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot(cards, [deliveryNotification('ntf_currentrework', taskId, '负责人要求返修', at, { recipientUserId: currentUserId })]) })
+      assert.equal(model.inbox.length, 1)
+      assert.deepEqual({ title: model.inbox[0]?.title, state: model.inbox[0]?.state, action: model.inbox[0]?.action }, currentUserId === workerId
+        ? { title: '返修要求：补充对照', state: '待返修', action: '打开任务' }
+        : { title: '返修中：补充对照', state: '返修中', action: '查看' })
+    }
+  }
+})
+
+test('superseded receipt alone does not settle an unresolved Chinese delivery notification', () => {
+  const source = workspace() as any
+  source.connection.userId = workerId
+  const taskId = 'tsk_TestSupersededUnresolved01'
+  source.projects[0].tasks = [{ task: { taskId, title: '补充对照', status: 'in_progress', currentExecutionId: 'exe_current' }, delivery: { receipt: { disposition: 'superseded' } }, executions: [{ executionId: 'exe_current', assigneeUserId: workerId }] }]
+  const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([], [deliveryNotification('ntf_supersededunresolved', taskId, '负责人要求返修', at, { recipientUserId: workerId })]) })
+  assert.deepEqual({ title: model.inbox[0]?.title, state: model.inbox[0]?.state, action: model.inbox[0]?.action }, { title: '需要你处理：补充对照', state: '交付待处理', action: '查看交付' })
+})
+
+test('old revision manifests and executions never grant a current rework action', () => {
+  for (const revisionRequest of [
+    { deliveryManifestId: 'dm_old', executionId: 'exe_current' },
+    { deliveryManifestId: 'dm_current', executionId: 'exe_old' }
+  ]) {
+    const source = workspace() as any
+    source.connection.userId = workerId
+    const taskId = 'tsk_TestHistoricalRework01'
+    source.projects[0].tasks = [{ task: { taskId, title: '补充对照', status: 'in_progress', currentExecutionId: 'exe_current' }, delivery: { receipt: { disposition: 'superseded' }, manifest: { deliveryManifestId: 'dm_current' }, revisionRequest }, executions: [{ executionId: 'exe_current', assigneeUserId: workerId }, { executionId: 'exe_old', assigneeUserId: workerId }] }]
+    for (const cards of [[], [task({ taskId, executionId: 'exe_current' })]]) {
+      const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot(cards, [deliveryNotification('ntf_oldrework', taskId, '负责人要求返修', at, { recipientUserId: workerId })]) })
+      assert.equal(model.inbox.length, 1)
+      assert.notEqual(model.inbox[0]?.state, '待返修')
+      assert.notEqual(model.inbox[0]?.action, '打开任务')
+      assert.doesNotMatch(model.inbox[0]?.title ?? '', /^返修要求/u)
+    }
+  }
+})
+
+test('adopted and unadopted receipts and completed or cancelled tasks stay settled despite revision facts', () => {
+  for (const [disposition, status] of [['adopted', 'in_progress'], ['unadopted', 'in_progress'], ['superseded', 'completed'], ['superseded', 'cancelled']]) {
+    for (const currentUserId of [workerId, userId, 'usr_Observer0001']) {
+      const source = workspace() as any
+      source.connection.userId = currentUserId
+      const taskId = 'tsk_TestFinalRework01'
+      source.projects[0].tasks = [{ task: { taskId, title: '补充对照', status, currentExecutionId: 'exe_current' }, delivery: { receipt: { disposition }, manifest: { deliveryManifestId: 'dm_current' }, revisionRequest: { deliveryManifestId: 'dm_current', executionId: 'exe_current' } }, executions: [{ executionId: 'exe_current', assigneeUserId: workerId }] }]
+      for (const cards of [[], [task({ taskId, executionId: 'exe_current', adoption: disposition === 'superseded' ? 'pending' : disposition, workflowColumn: ['completed', 'cancelled'].includes(status!) ? 'completed' : 'in_progress' })]]) {
+        const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot(cards, [deliveryNotification('ntf_finalrework', taskId, '负责人要求返修', at, { recipientUserId: currentUserId })]) })
+        assert.deepEqual(model.inbox, [], `${disposition}/${status}/${currentUserId}`)
+      }
+    }
+  }
+})
+
+test('an unknown unresolved delivery event cannot grant action to an unrelated member', () => {
+  const source = workspace() as any
+  source.connection.userId = 'usr_Observer0001'
+  const model = createWorkspaceViewModel({ workspace: source, snapshot: snapshot([task()], [deliveryNotification('ntf_foreignrole', 'tsk_TestTask0001', '交付处理暂时阻塞', at)]) })
+  assert.equal(model.inbox.length, 1)
+  assert.doesNotMatch(model.inbox[0]?.title ?? '', /需要你处理/u)
+  assert.equal(model.inbox[0]?.action, '查看')
 })
 
 test('turns a Cloud revision request into a Chinese rework todo for the member', () => {
@@ -691,4 +1197,30 @@ test('temporary Device uncertainty is a pending reconnect while rejected authori
       assert.equal(model.connection.detail, 'Device access was rejected')
     }
   }
+})
+
+test('latest ready chat draft clears historical failure consistently across board, drawer card and My Work', () => {
+  const ws = workspace() as any
+  ws.connection.userId = workerId
+  const cloudTask = task()
+  const status = snapshot([cloudTask], []) as any
+  const oldRun = { taskId: cloudTask.taskId, projectId, executionId: cloudTask.executionId, workerUserId: workerId,
+    reexecutionInputId: 'old-failed-session', failure: { code: 'upstream_unavailable', retryable: true } }
+  status.projects = [{ projectId, tasks: [oldRun] }]
+  const latest = localDelivery({ state: 'waiting_confirmation', error: null })
+  const build = () => createWorkspaceViewModel({ workspace: ws, snapshot: status, workerDeliveries: { [latest.executionId]: latest } })
+  const ready = build()
+  assert.equal(ready.cards[0]?.stateLabel, '待提交交付')
+  assert.equal(ready.cards[0]?.executionFailure, undefined)
+  assert.equal(ready.selectedCard.stateLabel, '待提交交付')
+  assert.equal(ready.myWork[0]?.state, '待提交交付')
+  assert.equal(oldRun.failure.code, 'upstream_unavailable', 'historical failure is retained in its source')
+  latest.state = 'sealed'
+  assert.equal(build().cards[0]?.stateLabel, '待负责人采纳')
+  assert.equal(build().myWork[0]?.state, '待负责人采纳')
+  latest.state = 'executing'
+  const executing = build()
+  assert.equal(executing.cards[0]?.stateLabel, '执行失败')
+  assert.equal(executing.cards[0]?.executionFailure?.reexecutionInputId, 'old-failed-session')
+  assert.equal(executing.myWork[0]?.state, '执行失败')
 })

@@ -571,7 +571,7 @@ function WorkspacePreviewIntegrityStatus({
   return (
     <div
       className={compactClassName(
-        'pointer-events-none absolute left-3 top-3 z-10 max-w-[min(28rem,calc(100%-6rem))] rounded-md border px-3 py-2 text-xs font-medium shadow-sm',
+        'pointer-events-none absolute left-3 top-3 z-10 max-w-[min(28rem,calc(100%-6rem))] rounded-md border px-3 py-2 text-ds-sm font-medium shadow-sm',
         mismatch
           ? 'border-red-300 bg-red-50/95 text-red-800'
           : 'border-emerald-300 bg-emerald-50/95 text-emerald-800'
@@ -592,7 +592,7 @@ function WorkspacePreviewEditSummaryStatus({
 }): ReactElement {
   return (
     <div
-      className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(22rem,calc(100%-1.5rem))] rounded-md border border-ds-border bg-ds-panel/95 px-3 py-2 text-xs shadow-lg"
+      className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(22rem,calc(100%-1.5rem))] rounded-md border border-ds-border bg-ds-panel/95 px-3 py-2 text-ds-sm shadow-lg"
       role="status"
       aria-live="polite"
       data-workspace-preview-edit-summary

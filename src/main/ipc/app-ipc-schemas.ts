@@ -1280,11 +1280,11 @@ const settingsPatchObjectSchema = z.object({
     // clears a user selection and falls back to the runtime default, so these
     // fields accept it instead of requiring a non-empty value.
     dsh: z.object({
-      command: trimmedString(MAX_PATH_LENGTH).optional(),
-      executablePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
+      command: z.string().trim().max(MAX_PATH_LENGTH).optional(),
       selectedModel: z.string().trim().max(128).optional(),
       reasoningEffort: z.string().trim().max(128).optional(),
       /** Reviewed opt-in: enables the DSH shell tools under Host approval. */
+      sandboxMode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
       commandExecution: z.boolean().optional()
     }).strict().optional(),
     pi: z.object({

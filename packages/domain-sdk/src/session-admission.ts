@@ -103,3 +103,11 @@ export const sessionInputRecoverySchema = z.object({
   })).max(10000)
 }).strict()
 export type SessionInputRecovery = z.infer<typeof sessionInputRecoverySchema>
+
+/** Emitted only after native user input is durably accepted. Receipts may replay; consumers deduplicate by Session/directive/revision. */
+export type SessionAcceptedInputEvent = SessionAdmissionRef & Readonly<{
+  text: string
+  receipt: SessionInputReceipt
+  principalContext: PrincipalContextSnapshot
+  principal?: PrincipalSnapshot
+}>

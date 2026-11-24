@@ -58,6 +58,22 @@ export type AttachmentReference = {
   absolutePath?: string
 }
 
+/**
+ * A workspace file the user attached to a sent message, kept on the user block
+ * so the transcript can show what was actually delivered. This is the
+ * serializable display record; the runtime receives the stricter
+ * `AgentRuntimeFileReference` projection separately.
+ */
+export type UserMessageFileReference = {
+  path: string
+  relativePath?: string
+  name?: string
+  /** Workspace reference kind (`file`, `directory`, `image`, `pdf`, `text`). */
+  kind?: string
+  /** Byte size when the composer knew it. */
+  size?: number
+}
+
 export type GeneratedFileReference = {
   id?: string
   name?: string
@@ -127,6 +143,8 @@ export type RuntimeDisclosureMetadata = {
   sourceLabel?: string
   attachmentIds?: string[]
   attachments?: AttachmentReference[]
+  /** Workspace files the composer sent with this user message. */
+  fileReferences?: readonly UserMessageFileReference[]
   generatedFiles?: GeneratedFileReference[]
   activeSkillIds?: string[]
   injectedMemoryIds?: string[]
@@ -716,6 +734,7 @@ export interface AgentProvider {
   readChildTranscript?(input: AgentRuntimeReadChildTranscriptInput): Promise<AgentRuntimeReadChildTranscriptResponse>
   createMemory?(input: {
     content: string
+    research?: AgentRuntimeMemoryRecord['research']
     scope?: AgentRuntimeMemoryRecord['scope']
     workspace?: string
     project?: string
@@ -738,7 +757,7 @@ export interface AgentProvider {
   }): Promise<LocalRuntimeMemoryRecordJson[]>
   updateMemory?(
     memoryId: string,
-    patch: { content?: string; tags?: string[]; confidence?: number; disabled?: boolean }
+    patch: { content?: string; research?: AgentRuntimeMemoryRecord['research']; tags?: string[]; confidence?: number; disabled?: boolean }
   ): Promise<LocalRuntimeMemoryRecordJson>
   deleteMemory?(memoryId: string): Promise<LocalRuntimeMemoryRecordJson>
   listWorkspaceReferences?(input: {

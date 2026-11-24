@@ -101,6 +101,29 @@ export function createDomainAgentExecutionHost(input: Readonly<{
     return { runtimeId, thread }
   }
   return Object.freeze({
+    inspectSession: async (session) => {
+      try {
+        const status = await input.runtime.readThreadStatus({
+          runtimeId: requireSupportedRuntimeId(session.runtimeId), threadId: session.threadId
+        })
+        if (status.runtimeId !== session.runtimeId || status.id !== session.threadId) return { state: 'unknown' as const }
+        const active = ['running', 'inProgress', 'in_progress', 'active', 'starting', 'waiting']
+        if (active.includes(status.status ?? '') || active.includes(status.latestTurnStatus ?? '')) return { state: 'active' as const }
+        const terminal = ['completed', 'failed', 'cancelled', 'aborted', 'idle']
+        if (status.status && !terminal.includes(status.status) || status.latestTurnStatus && !terminal.includes(status.latestTurnStatus)) return { state: 'unknown' as const }
+        if (terminal.includes(status.latestTurnStatus ?? status.status ?? '')) return { state: 'quiescent' as const }
+        return { state: 'unknown' as const }
+      } catch (error) {
+        // Exact native-owner tombstone only. A missing catalogue entry, timeout,
+        // authentication error or arbitrary text is not proof of absence.
+        const nativeMissing = error instanceof Error && (
+          error.message === 'runtime_thread_not_found' ||
+          ('code' in error && error.code === 'runtime_thread_not_found')
+        )
+        return { state: nativeMissing
+          ? 'missing' as const : 'unknown' as const }
+      }
+    },
     readAdmission: (session) => input.runtime.readAdmission(session),
     acquireSubmission: (request) => input.runtime.acquireSubmission(request),
     releaseSubmission: (request) => input.runtime.releaseSubmission(request),
@@ -199,6 +222,9 @@ export function createDomainAgentExecutionHost(input: Readonly<{
         const starting = input.runtime.startTurn({
           runtimeId,
           ...(request.contextProfile ? { contextProfile: request.contextProfile } : {}),
+          // The validated minimal contract is a bounded, tool-free response.
+          // Completion is the provider terminal response, not a work-delivery audit.
+          ...(request.contextProfile === 'minimal' ? { executionIntent: { mode: 'answer' as const } } : {}),
           threadId: thread.id,
           text: request.prompt,
           ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
@@ -368,7 +394,7 @@ async function withExecutionAbort<T>(promise: Promise<T>, signal?: AbortSignal):
 }
 
 function requireSupportedRuntimeId(value: string): AgentRuntimeId {
-  if (value !== 'codex' && value !== 'claude') {
+  if (value !== 'codex' && value !== 'claude' && value !== 'dsh' && value !== 'pi') {
     throw new Error(`Unsupported agent runtime: ${value}`)
   }
   return value

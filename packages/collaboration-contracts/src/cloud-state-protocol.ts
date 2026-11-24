@@ -39,6 +39,7 @@ import {
   agentConnectionStatusSchema,
   agentLifecycleStatusSchema,
   projectBudgetSchema,
+  projectDescriptionSchema,
   projectStatusSchema
 } from './entities.js'
 import { deviceStatusSchema } from './identity.js'
@@ -105,7 +106,7 @@ export const projectCreateCommandSchema = z.object({
   type: z.literal('project.create'),
   createIntentId: projectCreateIntentIdSchema,
   displayName: displayNameSchema,
-  goal: nonEmptyTextSchema,
+  goal: projectDescriptionSchema,
   budget: projectBudgetSchema
 }).strict()
 export type ProjectCreateCommand = z.infer<typeof projectCreateCommandSchema>
@@ -498,6 +499,7 @@ export const taskExecutionPreflightReasonSchema = z.enum([
   'execution_not_current',
   'execution_fenced',
   'task_revision_mismatch',
+  'task_change_pending',
   'execution_revision_mismatch',
   'content_identity_missing',
   'content_not_ready',

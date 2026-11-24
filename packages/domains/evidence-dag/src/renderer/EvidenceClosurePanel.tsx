@@ -1,3 +1,4 @@
+import { AuditReviewHistory } from './AuditReviewHistory'
 import { RecordLongText } from './RecordLongText'
 import { createResearchRecordPresentation } from './research-record-presentation'
 import React, { useEffect, useState, type ReactElement } from 'react'
@@ -31,18 +32,18 @@ export function EvidenceClosurePanel({ invoker, workspaceRoot, closureDigest, ac
       .finally(() => { if (current) setBusy(false) })
     return () => { current = false }
   }, [invoker, workspaceRoot, closureDigest, active, refresh])
-  return <section className="flex h-full min-h-0 flex-col bg-ds-main text-ds-ink" aria-label="精确证据闭包">
-    <header className="flex shrink-0 items-center gap-2 border-b border-ds-border p-3 text-sm"><strong>精确证据闭包</strong><button className="ml-auto" onClick={onClose}>收起</button></header>
-    <div className="min-h-0 flex-1 space-y-3 overflow-auto p-4 text-sm [overflow-wrap:anywhere]">
-      <p className="font-mono text-xs">{closureDigest}</p><p className="text-ds-muted">以下记录来自正式 Evidence owner。阅读不代表已审阅、已批准执行或科学验证通过。</p>
-      <button className="rounded border border-ds-border px-2 py-1" disabled={busy || !active} onClick={() => setRefresh(value => value + 1)}>{busy ? '正在读取…' : '重新读取该闭包'}</button>
+  return <section className="flex h-full min-h-0 flex-col bg-ds-main text-ds-ink" aria-label="本次审阅依据">
+    <header className="flex shrink-0 items-center gap-2 border-b border-ds-border p-3 text-ds-lg"><strong>本次审阅依据</strong><button className="ml-auto" onClick={onClose}>收起</button></header>
+    <div className="min-h-0 flex-1 space-y-3 overflow-auto p-4 text-ds-lg [overflow-wrap:anywhere]">
+      <p className="text-ds-muted">查看这次审阅所引用的材料与记录。</p><details className="text-ds-sm"><summary className="cursor-pointer">技术引用</summary><p className="font-mono">{closureDigest}</p></details>
+      <button className="rounded border border-ds-border px-2 py-1" disabled={busy || !active} onClick={() => setRefresh(value => value + 1)}>{busy ? '正在读取…' : '重新读取'}</button>
       {error && <p role="alert">{error}</p>}
-      {result && <><p>新鲜度：{result.freshness} · 查询覆盖：{result.completeness.complete ? '此查询已完整返回' : '存在缺口'}</p>
-        {!!result.completeness.gapCodes.length && <p className="record-check-text">{result.completeness.gapCodes.join(' · ')}</p>}
-        {!result.records.length && <p>该范围没有可读取的正式审阅记录；不据此认定已通过。</p>}
+      {result && <><AuditReviewHistory decisions={result.reviewDecisions} /><p className="text-ds-muted">{result.freshness === 'fresh' ? '已读取所选范围的依据。' : '依据尚未确认与当前材料同步。'}{!result.completeness.complete ? ' 部分依据未能读取。' : ''}</p>
+        {!!result.completeness.gapCodes.length && <details><summary className="cursor-pointer text-ds-sm">读取详情</summary><p>{result.completeness.gapCodes.join(' · ')}</p></details>}
+        {!result.records.length && <p>此范围没有可读取的关联材料记录。</p>}
         <ol className="space-y-3">{result.records.slice(offset, offset + 20).map(record => <li key={record.recordDigest} className="rounded-lg border border-ds-border p-3">
-          <p>{record.recordType} · {record.createdAt}</p><p>审阅人：{record.reviewerIdentity ?? '未记录'}</p>
-          <p className="font-mono text-xs">{record.recordId}</p><RecordLongText id={record.recordDigest} label="完整记录与精确标识" text={JSON.stringify(record, null, 2)} presentation={presentation} />
+          <p>关联记录 · {new Date(record.createdAt).toLocaleString('zh-CN')}</p>
+          <details><summary className="cursor-pointer text-ds-sm">完整记录与技术引用</summary><RecordLongText id={record.recordDigest} label="完整记录与精确标识" text={JSON.stringify(record, null, 2)} presentation={presentation} /></details>
         </li>)}</ol>
         {result.records.length > 20 && <div className="flex gap-3"><button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 20))}>上一组</button><span>{offset + 1}–{Math.min(offset + 20, result.records.length)} / {result.records.length}</span><button disabled={offset + 20 >= result.records.length} onClick={() => setOffset(offset + 20)}>下一组</button></div>}
       </>}

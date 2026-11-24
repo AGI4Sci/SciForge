@@ -1,0 +1,20 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "composition": "development-only",
+  "packageName": "@sciforge/domain-review-control",
+  "publisher": { "id": "sciforge", "displayName": "SciForge" },
+  "module": {
+    "id": "sciforge.review-control",
+    "displayName": "Review Control",
+    "version": "0.0.0",
+    "hostApi": { "minimum": "1.0.0", "maximumExclusive": "2.0.0" },
+    "priority": 120
+  },
+  "contributionContracts": {},
+  "entrypoints": [{
+    "process": "main",
+    "export": "./main",
+    "contributions": [{ "kind": "main.capability-factory", "id": "review-control.capabilities" }]
+  }]
+}

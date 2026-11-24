@@ -1,6 +1,7 @@
+import { createTaskChatClient } from './task-chat-client.js'
 import React, { lazy, Suspense, useMemo, type ReactElement } from 'react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
-import type { DomainRendererChatMessageValue, DomainRendererWorkbenchMainAreaValue, DomainRendererWorkbenchSurfaceActivation } from '@sciforge/domain-sdk/renderer-contributions'
+import type { DomainRendererChatMessageValue, DomainRendererWorkbenchMainAreaValue, DomainRendererWorkbenchSurfaceActivation } from '@sciforge/domain-sdk/renderer'
 import {
   defineTrustedRendererDomainPackageEntry,
   type DomainRendererComposerContextProvider,
@@ -40,11 +41,13 @@ function CollaborationMainAreaPage({
   host,
   active,
   activation,
+  ownerDocument,
   className
 }: Readonly<{
   host: DomainRendererHost
   active: boolean
   activation?: DomainRendererWorkbenchSurfaceActivation
+  ownerDocument?: Document
   className: string
 }>): ReactElement {
   const coordinatorClient = useMemo(() => createProjectCoordinatorRendererClient(host.capabilityInvoker), [host])
@@ -60,6 +63,7 @@ function CollaborationMainAreaPage({
         workbench={host.workbench}
         active={active}
         activation={activation}
+        ownerDocument={ownerDocument}
         className={className}
       />
     </Suspense>
@@ -70,11 +74,12 @@ export function createCollaborationMainAreaContribution(
   host: DomainRendererHost
 ): CollaborationMainAreaContribution {
   return Object.freeze({
-    render: ({ active, className, activation }) => (
+    render: ({ active, className, activation, ownerDocument }) => (
       <CollaborationMainAreaPage
         host={host}
         active={active}
         activation={activation}
+        ownerDocument={ownerDocument}
         className={className}
       />
     )
@@ -107,7 +112,8 @@ export function createDomainRendererEntry(
         ...COLLABORATION_COMPOSER_CONTEXT_CONTRIBUTION,
         contract: COLLABORATION_COMPOSER_CONTEXT_CONTRACT,
         value: createProjectCoordinatorComposerContextProvider(
-          createProjectCoordinatorRendererClient(host.capabilityInvoker)
+          createProjectCoordinatorRendererClient(host.capabilityInvoker),
+          createTaskChatClient(host.capabilityInvoker)
         )
       }
     ]

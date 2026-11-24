@@ -11,6 +11,7 @@ import {
   domainRendererNavigationHost,
   sendDomainWorkbenchMessage,
   resolveDomainWorkbenchSession,
+  hydrateDomainWorkbenchSession,
   selectDomainWorkbenchSession,
   openDomainWorkbenchSideConversation,
   setDomainWorkbenchSideConversationOpener,
@@ -244,6 +245,21 @@ it('opens a scoped side conversation on its exact parent and reuses its discussi
   expect(await domainRendererNavigationHost.workbench.openSideConversation!(input)).toBeNull()
 })
 
+it('keeps an old side discussion pinned and creates a new draft when the previewed context changes', async () => {
+  const context = { id: 'same-material', title: '核查', text: '旧观察', sourceRefs: [{ label: '旧来源', itemId: 'old' }] }
+  const input = { runtimeId: 'codex', parentThreadId: 'parent', workspaceRoot: '/research', context }
+  const state = { threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/research' }] as ChatState['threads'],
+    sideConversations: { old: { threadId: 'old', runtimeId: 'codex', parentThreadId: 'parent', context } } as unknown as ChatState['sideConversations'],
+    spawnSideConversation: vi.fn(async () => 'new'), selectSideConversation: vi.fn(), sendSideMessage: vi.fn(async () => true) }
+  for (const next of [{ ...context, text: '新反例' }, { ...context, sourceRefs: [{ label: '新来源', itemId: 'new' }] }]) {
+    expect(await openDomainWorkbenchSideConversation({ ...input, context: next }, state)).toBe('new')
+    expect(state.spawnSideConversation).toHaveBeenLastCalledWith(undefined, expect.objectContaining({ context: next }))
+  }
+  expect(state.selectSideConversation).not.toHaveBeenCalled()
+  expect(state.sendSideMessage).not.toHaveBeenCalled()
+  expect(state.sideConversations.old.context?.text).toBe('旧观察')
+})
+
 
 describe('source session selection', () => {
   it('routes cross-runtime coordinates through read-only selection without sending', async () => {
@@ -264,5 +280,52 @@ describe('source session selection', () => {
     expect(await selectDomainWorkbenchSession({ runtimeId: 'codex', threadId: 'source' }, () => state as unknown as ChatState)).toBe(false)
     state.selectThread.mockImplementation(async () => { state.error = null; state.activeThreadId = 'another' })
     expect(await selectDomainWorkbenchSession({ runtimeId: 'codex', threadId: 'source' }, () => state as unknown as ChatState)).toBe(false)
+  })
+})
+
+it('reopens only a saved discussion with the same complete context and never resends its old question', async () => {
+  const context = { id: 'v1', title: '原材料', text: '保留反例', sourceRefs: [{ label: '版本', uri: '{"version":1}' }] }
+  const state = { threads: [{ id: 'parent', runtimeId: 'codex', workspace: '/study' }] as ChatState['threads'], sideConversations: {},
+    discussionCheckpoints: { saved: { threadId: 'saved', runtimeId: 'codex' as const, parentThreadId: 'parent', title: '原材料', context, input: '', createdAt: '2026-11-08' } },
+    spawnSideConversation: vi.fn(async () => 'new'), selectSideConversation: vi.fn(), sendSideMessage: vi.fn(async () => true), attachSideConversation: vi.fn(async () => 'saved') }
+  const request = { runtimeId: 'codex', parentThreadId: 'parent', workspaceRoot: '/study', context }
+  expect(await openDomainWorkbenchSideConversation(request, state)).toBe('saved')
+  expect(state.attachSideConversation).toHaveBeenCalledOnce()
+  expect(state.sendSideMessage).not.toHaveBeenCalled()
+  expect(state.spawnSideConversation).not.toHaveBeenCalled()
+  expect(await openDomainWorkbenchSideConversation({ ...request, context: { ...context, text: '新反例' } }, state)).toBe('new')
+  expect(state.attachSideConversation).toHaveBeenCalledOnce()
+})
+
+
+
+describe('main-created Session navigation', () => {
+  it('hydrates exact authority metadata before selecting a new uncached Session', async () => {
+    const state = { threads: [] as ChatState['threads'], activeThreadId: 'old', error: null,
+      selectThread: vi.fn(async (id: string) => { state.activeThreadId = id }) }
+    const read = vi.fn(async () => ({ id: 'new-worker', runtimeId: 'codex' as const, latestSeq: 0, workspace: '/worker/task', archived: false }))
+    const request = { runtimeId: 'codex', threadId: 'new-worker' }
+    expect(await hydrateDomainWorkbenchSession(request, () => state, read, thread => state.threads.push(thread))).toEqual({ threadId: 'new-worker', runtimeId: 'codex' })
+    expect(state.threads[0]?.workspace).toBe('/worker/task')
+    expect(await selectDomainWorkbenchSession(request, () => state)).toBe(true)
+    expect(state.selectThread).toHaveBeenCalledWith('new-worker', { readOnly: false })
+    await hydrateDomainWorkbenchSession(request, () => state, read, thread => state.threads.push(thread))
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+  it('does not publish mismatched runtime, path, ID, denied metadata or ambiguous catalog entries', async () => {
+    const request = { runtimeId: 'codex', threadId: 'new', workspaceRoot: '/worker' }
+    const state = { threads: [] as ChatState['threads'] }
+    const publish = vi.fn()
+    for (const status of [{ id: 'other', runtimeId: 'codex' as const, workspace: '/worker', latestSeq: 0 },
+      { id: 'new', runtimeId: 'claude' as const, workspace: '/worker', latestSeq: 0 },
+      { id: 'new', runtimeId: 'codex' as const, workspace: '/other', latestSeq: 0 }]) {
+      expect(await hydrateDomainWorkbenchSession(request, () => state, async () => status, publish)).toBe(null)
+    }
+    await expect(hydrateDomainWorkbenchSession(request, () => state, async () => { throw new Error('permission denied') }, publish)).rejects.toThrow('permission denied')
+    state.threads.push({ id: 'new', runtimeId: 'claude', title: 'wrong runtime', updatedAt: '', model: '', mode: '' })
+    const read = vi.fn()
+    expect(await hydrateDomainWorkbenchSession(request, () => state, read, publish)).toBe(null)
+    expect(read).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
   })
 })

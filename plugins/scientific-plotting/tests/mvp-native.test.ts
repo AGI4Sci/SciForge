@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { apply } from '../src/native-dsh/index.js'
+import { createNativeExecutionClients } from '@sciforge/plugin-sdk/native-execution'
 
 type Tool = { execute(args: unknown, exec: unknown): Promise<unknown> }
 type Request = { action: string; input: Record<string, unknown>; workspaceRoot: string; approvalGranted?: boolean; confirmationId?: string; preflight?: unknown; execution?: any }
 
-function harness(options: { approval?: 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'; afterApproval?: () => void; alreadyCompleted?: unknown; workerResponse?: (request: Request) => unknown } = {}) {
+function harness(options: { approval?: 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'; afterApproval?: () => void; approvalError?: Error; alreadyCompleted?: unknown; workerResponse?: (request: Request) => unknown } = {}) {
   let tool!: Tool
   let command!: { handler(args: unknown): Promise<unknown> }
   let currentDirectory = '/test/current'
@@ -14,7 +15,8 @@ function harness(options: { approval?: 'allowed-once' | 'rejected' | 'cancelled'
   let asks = 0
   const requests: Request[] = []
   const agent = { session: { id: 'test', header: { cwd: '/test/original' } } }
-  const signal = new AbortController().signal
+  const controller = new AbortController()
+  const signal = controller.signal
   const preflight = () => ({ documentRevision: revision, candidateHash: 'candidate-hash', baselineHash: 'baseline-hash' })
   const ctx = {
     tools: { register(value: Tool) { tool = value; return () => {} } },
@@ -23,7 +25,7 @@ function harness(options: { approval?: 'allowed-once' | 'rejected' | 'cancelled'
     workingDirectory: { ensure: async () => currentDirectory },
     sandboxPolicy: { resolve: ({ session }: { session: unknown }) => { assert.equal(session, agent.session); return { mode: 'workspace-write', workspaceRoot: '/test/original' } } },
     sandbox: { confine: async (argv: string[], policy: unknown) => { assert.deepEqual(policy, { mode: 'workspace-write', workspaceRoot: '/test/original' }); return { argv: ['sandbox-runner', ...argv], enforcement: 'full' } } },
-    approval: { request: async (request: { agent: unknown; callId: string; signal: AbortSignal }) => { asks++; assert.equal(request.agent, agent); assert.equal(request.signal, signal); assert.equal(request.callId, 'call:1'); options.afterApproval?.(); return options.approval ?? 'rejected' } },
+    approval: { request: async (request: { agent: unknown; callId: string; signal: AbortSignal }) => { asks++; assert.equal(request.agent, agent); assert.equal(request.signal, signal); assert.equal(request.callId, 'call:1'); options.afterApproval?.(); if (options.approvalError) throw options.approvalError; return options.approval ?? 'rejected' } },
     subprocess: { spawn: (spec: { argv: string[]; cwd: string; stdio: { stdin: { data: string } } }) => {
       assert.equal(spec.argv[0], 'sandbox-runner')
       assert.equal(spec.argv.at(-1), '--stdio')
@@ -44,7 +46,7 @@ function harness(options: { approval?: 'allowed-once' | 'rejected' | 'cancelled'
   }
   apply(ctx as never)
   const exec = { agent, callId: 'call:1', signal }
-  return { run: (action: string, input: unknown = {}) => tool.execute({ action, input }, exec), command: (rawInput: string) => command.handler({ agent, signal, rawInput }), requests, state: () => ({ changed, asks }), changeRevision: () => { revision++ }, changeDirectory: () => { currentDirectory = '/test/elsewhere' } }
+  return { run: (action: string, input: unknown = {}) => tool.execute({ action, input }, exec), command: (rawInput: string) => command.handler({ agent, signal, rawInput }), requests, state: () => ({ changed, asks }), expire: () => controller.abort(new Error('Approval expired')), changeRevision: () => { revision++ }, changeDirectory: () => { currentDirectory = '/test/elsewhere' } }
 }
 
 test('native DSH refuses caller workspace/approval authority before spawning', async () => {
@@ -59,6 +61,31 @@ test('native acceptance denied by formal approval does not publish', async () =>
   assert.deepEqual(await h.run('acceptCandidate'), { ok: false, status: 'cancelled', approval: 'rejected', changed: false })
   assert.deepEqual(h.requests.map(r => r.action), ['preflightAccept'])
   assert.deepEqual(h.state(), { changed: 0, asks: 1 })
+})
+
+for (const approval of ['cancelled', 'unavailable'] as const) {
+  test(`native ${approval} approval never publishes`, async () => {
+    const h = harness({ approval })
+    assert.deepEqual(await h.run('acceptCandidate'), { ok: false, status: 'cancelled', approval, changed: false })
+    assert.deepEqual(h.requests.map(r => r.action), ['preflightAccept'])
+    assert.deepEqual(h.state(), { changed: 0, asks: 1 })
+  })
+}
+
+test('expired active call rejects a delayed allowed-once outcome before publication', async () => {
+  const h = harness({ approval: 'allowed-once', afterApproval: () => h.expire() })
+  await assert.rejects(h.run('acceptCandidate'), /Approval expired/)
+  assert.deepEqual(h.requests.map(r => r.action), ['preflightAccept'])
+  assert.equal(h.state().changed, 0)
+})
+
+test('formal approval timeout rejects without spawning acceptance or caching an allowed decision', async () => {
+  const h = harness({ approvalError: new Error('Approval request timed out') })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(h.run('acceptCandidate'), /Approval request timed out/)
+  }
+  assert.deepEqual(h.requests.map(request => request.action), ['preflightAccept', 'preflightAccept'])
+  assert.deepEqual(h.state(), { changed: 0, asks: 2 })
 })
 
 test('allowed-once forwards host preflight and trusted authorization', async () => {
@@ -132,7 +159,7 @@ test('Python is the directly managed root with narrower confinement even in full
   // process receives the narrower per-run staging root. Verify all three calls.
   assert.deepEqual(h.policies, [
     { mode: 'workspace-write', workspaceRoot: '/test/current' },
-    { mode: 'workspace-write', workspaceRoot: h.prepared.stageRoot, sessionId: undefined },
+    { mode: 'workspace-write', workspaceRoot: h.prepared.stageRoot },
     { mode: 'workspace-write', workspaceRoot: '/test/current' },
   ])
   assert.deepEqual(h.events.slice(0, 3), ['python-spawn', 'terminate', 'wait'])
@@ -221,6 +248,49 @@ test('failed process quiescence retains logs, exit facts and explicit no-cleanup
   assert.equal(outcome.stdout, 'script log')
   assert.match(outcome.error, /range did not stop/)
 })
+
+for (const sessionId of [undefined, 'host-session']) {
+  test(`native render crosses public execution client with lossless policy JSON (sessionId ${sessionId ?? 'omitted'})`, async () => {
+    let tool!: Tool
+    const policies: unknown[] = []
+    const workerActions: string[] = []
+    const results = new Map<string, unknown>()
+    const prepared = { stageRoot: '/test/current/.scientific-figures/.runs-temp/python-abc', cwd: '/test/current/.scientific-figures/.runs-temp/python-abc/snapshot', argv: ['python3', '-I', 'main.py'], env: {}, timeoutMs: 1000 }
+    const clients = createNativeExecutionClients({
+      invocationId: 'live-render', invocationToken: {},
+      request(serviceId: string, operation: string, input: unknown) {
+        assert.equal(serviceId, 'nativeExecution')
+        // The production runner rejects undefined-valued properties instead of silently dropping them.
+        assert.deepEqual(JSON.parse(JSON.stringify(input)), input, `${operation} must be lossless JSON`)
+        const body = input as any
+        let result: unknown
+        if (operation === 'context.resolve') result = { workspaceRoot: '/test/current', policy: { mode: 'workspace-write', workspaceRoot: '/test/current', ...(sessionId === undefined ? {} : { sessionId }) } }
+        else if (operation === 'process.confine') { policies.push(body.policy); result = { argv: body.argv, enforcement: 'full' } }
+        else if (operation === 'process.spawn') {
+          const processId = String(results.size)
+          let output: unknown = {}
+          if (body.stdio.stdin.data) {
+            const request = JSON.parse(body.stdio.stdin.data)
+            workerActions.push(request.action)
+            if (request.action === 'preparePython') output = { prepared }
+            if (request.action === 'finalizePython') output = { runId: 'template-run', status: 'completed', outputs: [{ path: 'runs/template-run/outputs/figure.png' }] }
+            if (request.action === 'publishRun') output = { status: 'created', revisionId: 'published' }
+          }
+          results.set(processId, { exitCode: 0, signal: null, stdout: { text: JSON.stringify(output), lossy: false }, stderr: { text: '', lossy: false } })
+          result = { processId }
+        } else if (operation === 'process.wait' || operation === 'process.stop') result = results.get(body.processId)
+        else throw Error(`Unexpected operation ${operation}`)
+        return { result: Promise.resolve(result), cancel: async () => ({ quiescent: true }) }
+      }
+    } as never)
+    apply({ ...clients, tools: { register(value: Tool) { tool = value; return () => {} } }, effect() {} } as never)
+    const signal = new AbortController().signal
+    assert.deepEqual(await tool.execute({ action: 'render', input: { documentId: 'figure', operationId: 'op', expectedDocumentRevision: 0, request: {} } }, { agent: { session: { id: 'agent-session' } }, callId: 'render-call', signal }), { status: 'created', revisionId: 'published' })
+    assert.deepEqual(workerActions, ['prepareTemplate', 'preparePython', 'finalizePython', 'publishRun'])
+    assert.ok(policies.some(value => (value as any).workspaceRoot === prepared.stageRoot))
+    for (const policy of policies) assert.equal(Object.hasOwn(policy as object, 'sessionId'), sessionId !== undefined)
+  })
+}
 
 test('read-only sessions refuse Python before preparation; partial confinement finalizes failed', async () => {
   const readonly = executionHarness('read-only')

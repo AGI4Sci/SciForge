@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile, stat, truncate } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -54,6 +54,32 @@ describe('WorkspacePreviewWorkerClient', () => {
     await mkdir(workspaceRoot)
   })
 
+  it('does not trust stale advertised zero size to read an oversized count file', async () => {
+    const filePath = join(workspaceRoot, 'sparse.csv')
+    await writeFile(filePath, 'name,count\na,1\nb,2\n'.repeat(50))
+    await truncate(filePath, 32 * 1024 * 1024 + 8)
+    const info = await stat(filePath)
+    const manifest = manifestById('tabular')
+    const file = {workspaceRoot,path:filePath,relativePath:'sparse.csv',mimeType:'text/csv',size:0,mtimeMs:info.mtimeMs}
+    const client = WorkspacePreviewWorkerClient.compose({maxTextBytes:180}).workerClient
+    const result = await client.observe({manifest,file,session:createSession(manifest,file)})
+    expect(result).toMatchObject({ok:true,truncated:true,bytesRead:180})
+    if (result.ok) expect(result.observation.tables?.[0]?.rowCountIsEstimate).toBe(true)
+  })
+
+  it('does not call an incomplete CSV or malformed JSONL count exact', async () => {
+    for (const [name,text] of [['broken.csv', 'name,n\na,1\nb,"unterminated'],['broken.jsonl','{"a":1}\n{"broken":']]) {
+      const filePath = join(workspaceRoot,name)
+      await writeFile(filePath,text)
+      const info = await stat(filePath), manifest = manifestById('tabular')
+      const file = {workspaceRoot,path:filePath,relativePath:name,mimeType:name.endsWith('csv')?'text/csv':'application/x-ndjson',size:info.size,mtimeMs:info.mtimeMs}
+      const client = WorkspacePreviewWorkerClient.compose({maxTextBytes:10}).workerClient
+      const result = await client.observe({manifest,file,session:createSession(manifest,file)})
+      expect(result).toMatchObject({ok:true,truncated:true,bytesRead:info.size})
+      if (result.ok) expect(result.observation.tables?.[0]?.rowCountIsEstimate).toBe(true)
+    }
+  })
+
   it('maps tabular worker summaries to the shared observation schema', async () => {
     const filePath = join(workspaceRoot, 'samples.jsonl')
     const text = '{"sample":"s1","count":2}\n{"sample":"s2","count":3}\n'
@@ -93,6 +119,67 @@ describe('WorkspacePreviewWorkerClient', () => {
       ]) {
         expect(result.observation.actions).not.toContain(actionId)
       }
+    }
+  })
+
+  it('reports the exact CSV data-row count when the preview text prefix is truncated', async () => {
+    const dataRows = Array.from({ length: 120 }, (_, index) => `c${index},GENE${index},${index}.0`)
+    const text = ['cell_id,gene,yhat', ...dataRows].join('\n') + '\n'
+    const filePath = join(workspaceRoot, '02_intervals.csv')
+    await writeFile(filePath, text, 'utf8')
+
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => '',
+      defineCapability: () => undefined
+    })
+    const client = WorkspacePreviewWorkerClient.compose({
+      maxTextBytes: 180,
+      domainPlugins: entry.contributions
+        .filter((contribution) => contribution.kind === 'main.workspace-preview-plugin')
+        .map((contribution) => {
+          const { value } = contribution as {
+            value: MainWorkspacePreviewPluginSlotContribution<WorkspacePreviewProvider>
+          }
+          return {
+            ownerId: entry.definition.module.id,
+            manifest: value.manifest,
+            provider: value.provider
+          }
+        })
+    }).workerClient
+
+    const file = {
+      workspaceRoot,
+      path: filePath,
+      relativePath: '02_intervals.csv',
+      mimeType: 'text/csv',
+      size: Buffer.byteLength(text),
+      mtimeMs: (await stat(filePath)).mtimeMs
+    } as const
+    const result = await client.observe({
+      manifest: manifestById('tabular'),
+      file,
+      session: createSession(manifestById('tabular'), file)
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      truncated: true,
+      observation: {
+        tables: [{
+          id: 'table-1',
+          rowCount: 120,
+          rowCountIsEstimate: false,
+          columnCount: 3
+        }],
+        tabular: {
+          truncatedRows: true
+        }
+      }
+    })
+    if (result.ok) {
+      expect(result.observation.visibleText).toContain('Tabular preview: 120 data rows')
+      expect(result.observation.visibleText).not.toContain('approximately')
     }
   })
 
@@ -627,7 +714,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       relativePath: 'refs.fasta',
       mimeType: 'text/x-fasta',
       size: Buffer.byteLength(text),
-      mtimeMs: 1
+      mtimeMs: (await stat(filePath)).mtimeMs
     }
     const client = createWorkerClient()
 
@@ -825,7 +912,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       relativePath: 'samples.csv',
       mimeType: 'text/csv',
       size: Buffer.byteLength(text),
-      mtimeMs: 1
+      mtimeMs: (await stat(filePath)).mtimeMs
     }
     const client = createWorkerClient()
 
@@ -1003,7 +1090,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       relativePath: 'samples.jsonl',
       mimeType: 'application/x-ndjson',
       size: Buffer.byteLength(text),
-      mtimeMs: 1
+      mtimeMs: (await stat(filePath)).mtimeMs
     }
     const client = createWorkerClient()
 
@@ -1170,7 +1257,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       relativePath: 'refs.fasta',
       mimeType: 'text/x-fasta',
       size: Buffer.byteLength(text),
-      mtimeMs: 1
+      mtimeMs: (await stat(filePath)).mtimeMs
     }
     const client = createWorkerClient()
 
@@ -1201,7 +1288,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       path: filePath,
       relativePath: 'run.mgf',
       size: Buffer.byteLength(text),
-      mtimeMs: 1
+      mtimeMs: (await stat(filePath)).mtimeMs
     }
     const client = createWorkerClient()
 
@@ -1296,7 +1383,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       relativePath: 'protein.pdb',
       mimeType: 'chemical/x-pdb',
       size: Buffer.byteLength(text),
-      mtimeMs: 1
+      mtimeMs: (await stat(filePath)).mtimeMs
     }
     const client = createWorkerClient()
 

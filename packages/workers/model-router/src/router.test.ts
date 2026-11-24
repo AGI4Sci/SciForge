@@ -1163,12 +1163,13 @@ test('structured output containing provider-private values fails closed instead 
   }
 });
 
-test('json_object text reasoners return schema-valid output and reject invalid output as structured_output_invalid', async () => {
+for (const wire of ['responses', 'chat-completions'] as const) {
+test(`json_object ${wire} reasoners return schema-valid output and reject invalid output as structured_output_invalid`, async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-json-object-'));
   const config = testConfig();
   config.profiles.default.textReasoner.compatibility = {
-    preferredProtocol: 'chat-completions',
-    allowedProtocols: ['chat-completions'],
+    preferredProtocol: wire,
+    allowedProtocols: [wire],
     chatStructuredOutputMode: 'json_object',
   };
   const outputSchema = {
@@ -1186,8 +1187,12 @@ test('json_object text reasoners return schema-valid output and reject invalid o
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
-      chatCompletion('text-json-object-valid', validText),
-      chatCompletion('text-json-object-invalid', invalidText),
+      ...(wire === 'chat-completions'
+        ? [chatCompletion('text-json-object-valid', validText), chatCompletion('text-json-object-invalid', invalidText)]
+        : [validText, invalidText].map((text) => Response.json({
+          id: 'resp_json_object', object: 'response', status: 'completed', output_text: text,
+          output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }],
+        }))),
     ]),
   });
   const send = () => fetch(`${server.url}/v1/responses`, {
@@ -1208,13 +1213,16 @@ test('json_object text reasoners return schema-valid output and reject invalid o
     assert.doesNotMatch(invalidBody, /not-in-schema/u);
 
     for (const call of calls) {
-      assert.deepEqual(call.body.response_format, { type: 'json_object' });
+      if (wire === 'chat-completions') assert.deepEqual(call.body.response_format, { type: 'json_object' });
+      else assert.deepEqual(call.body.text, { format: { type: 'json_object' } });
       assert.doesNotMatch(JSON.stringify(call.body), /json_schema/u);
     }
   } finally {
     await server.close();
   }
 });
+
+}
 
 test('structured output rebuilds public items from the checked output text', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-items-'));
@@ -2760,6 +2768,8 @@ test('healthz reports recent provider errors after non-auth upstream HTTP failur
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch([], [
+      Response.json({ error: { message: 'temporary upstream failure with sk-should-not-leak' } }, { status: 500 }),
+      Response.json({ error: { message: 'temporary upstream failure with sk-should-not-leak' } }, { status: 500 }),
       Response.json({ error: { message: 'temporary upstream failure with sk-should-not-leak' } }, { status: 500 }),
     ]),
   });
@@ -4574,6 +4584,71 @@ test('responses tool transcript removes bridge items between tool calls and outp
     const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
     assert.deepEqual(providerInput.map((item) => item.type ?? item.role), ['user', 'function_call', 'function_call_output']);
     assert.doesNotMatch(JSON.stringify(providerInput), /GUI-only bridge|approval_bridge/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses tool transcript keeps the tool pair when a built-in web search call is interleaved', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-web-search-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-tool-web-search-final', 'Tool transcript survived the interleaved search.'),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: 'Search the web, then run pwd.' }],
+          },
+          {
+            type: 'function_call',
+            call_id: 'call_pwd_web_search',
+            name: 'exec_command',
+            arguments: '{"cmd":"pwd"}',
+          },
+          {
+            type: 'web_search_call',
+            id: 'ws_between_call_and_output',
+            status: 'completed',
+            action: { type: 'search', query: 'vicarious body maps' },
+          },
+          {
+            type: 'function_call_output',
+            call_id: 'call_pwd_web_search',
+            output: '/tmp/workspace\n',
+          },
+        ],
+        tools: [{
+          type: 'function',
+          name: 'exec_command',
+          description: 'Run a local shell command.',
+          parameters: { type: 'object', properties: {} },
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(
+      providerInput.map((item) => item.type ?? item.role),
+      ['user', 'function_call', 'function_call_output'],
+    );
+    assert.equal(providerInput[1]?.call_id, 'call_pwd_web_search');
+    assert.equal(providerInput[2]?.call_id, 'call_pwd_web_search');
+    assert.doesNotMatch(JSON.stringify(providerInput), /ws_between_call_and_output/);
   } finally {
     await server.close();
   }
@@ -6916,6 +6991,18 @@ test('text reasoner HTTP failures preserve safe provider diagnostics', async () 
           request: { model: 'text-model', secret: 'text-secret' },
         },
       }, { status: 503 }),
+      Response.json({
+        error: {
+          message: 'provider failed with text-secret and raw prompt payload',
+          request: { model: 'text-model', secret: 'text-secret' },
+        },
+      }, { status: 503 }),
+      Response.json({
+        error: {
+          message: 'provider failed with text-secret and raw prompt payload',
+          request: { model: 'text-model', secret: 'text-secret' },
+        },
+      }, { status: 503 }),
     ]),
   });
 
@@ -6943,7 +7030,8 @@ test('text reasoner HTTP failures preserve safe provider diagnostics', async () 
     assert.equal(responseBody.error?.code, 'upstream_http_503');
     assert.match(responseBody.error?.message ?? '', /Upstream returned HTTP 503/);
     assert.doesNotMatch(responseBody.error?.message ?? '', /text-secret|text-model/i);
-    assert.equal(calls.length, 7);
+    // Six vision-inspection calls, then three retried text-reasoner attempts.
+    assert.equal(calls.length, 9);
     const visionPrompt = calls.filter((call) => call.url.includes('vision.example')).map((call) => JSON.stringify(call.body)).join('\n');
     assert.match(visionPrompt, /artifact:workspace\/plots\/figure-1\.png/);
     assert.match(visionPrompt, /sha256:[a-f0-9]{64}/);
@@ -6984,7 +7072,9 @@ test('text reasoner exceptions return a network failure', async () => {
     });
 
     assert.equal(response.status, 502);
-    assert.equal(calls.length, 1);
+    // The transient network failure is retried with the same body before the
+    // router gives up and reports the typed network failure.
+    assert.equal(calls.length, 3);
 
   } finally {
     await server.close();
@@ -7080,6 +7170,8 @@ test('vision translator failures force an explicit image unavailable final answe
     fetchImpl: captureFetch(calls, [
       modalityInspectionRequest('image_1'),
       Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
+      Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
+      Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
       chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'Based on the text prompt, there is not enough information.' })),
     ]),
   });
@@ -7099,9 +7191,12 @@ test('vision translator failures force an explicit image unavailable final answe
     const body = await response.json() as Record<string, unknown>;
     assert.match(String(body.output_text), /could not inspect the image/i);
     assert.doesNotMatch(String(body.output_text), /sk-should-not-leak|data:image|base64/i);
-    assert.equal(calls.length, 3);
+    // One inspection, three retried vision 504 attempts, then the text reasoner.
+    assert.equal(calls.length, 5);
     assert.equal(calls[1]?.url, 'https://vision.example/v1/responses');
-    assert.equal(calls[2]?.url, 'https://text.example/v1/responses');
+    assert.equal(calls[2]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[3]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[4]?.url, 'https://text.example/v1/responses');
   } finally {
     await server.close();
   }
@@ -7154,6 +7249,8 @@ test('strict evidence policy fails closed when vision translation fails without 
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
       Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
+      Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
+      Response.json({ error: { message: 'translator timeout with sk-should-not-leak' } }, { status: 504 }),
     ]),
   });
 
@@ -7194,8 +7291,11 @@ test('strict evidence policy fails closed when vision translation fails without 
       message: 'Strict visual evidence is unavailable because vision translation failed.',
     });
     assert.doesNotMatch(JSON.stringify(body), /sk-should-not-leak|data:image|base64/i);
-    assert.equal(calls.length, 1);
+    // The strict path retries the same vision request before failing closed.
+    assert.equal(calls.length, 3);
     assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[1]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[2]?.url, 'https://vision.example/v1/responses');
   } finally {
     await server.close();
   }
@@ -7340,6 +7440,8 @@ test('strict evidence policy returns a typed synthesis failure when the primary 
     fetchImpl: captureFetch(calls, [
       chatCompletion('vision-initial', 'Observation: the plot contains three blue bars.'),
       Response.json({ error: { message: 'text provider unavailable with sk-should-not-leak' } }, { status: 503 }),
+      Response.json({ error: { message: 'text provider unavailable with sk-should-not-leak' } }, { status: 503 }),
+      Response.json({ error: { message: 'text provider unavailable with sk-should-not-leak' } }, { status: 503 }),
     ]),
   });
 
@@ -7380,9 +7482,12 @@ test('strict evidence policy returns a typed synthesis failure when the primary 
       message: 'Strict visual evidence synthesis is unavailable because text reasoning failed.',
     });
     assert.doesNotMatch(JSON.stringify(body), /sk-should-not-leak|data:image|base64/i);
-    assert.equal(calls.length, 2);
+    // One vision call, then three retried text-reasoner attempts.
+    assert.equal(calls.length, 4);
     assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
+    assert.equal(calls[2]?.url, 'https://text.example/v1/responses');
+    assert.equal(calls[3]?.url, 'https://text.example/v1/responses');
   } finally {
     await server.close();
   }
@@ -8366,3 +8471,47 @@ test('vision admission uses its own request budget, independent of long agent hi
     assert.match(JSON.stringify(calls[1]?.body), /Read the chart label/);
   } finally { await server.close(); }
 });
+
+
+for (const location of ['unknown-key', 'empty-key', 'preferred-protocol'] as const) {
+  test(`invalid compatibility ${location} never leaks config into HTTP, logs or Full Trace`, async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-compatibility-diagnostic-'));
+    const canary = 'COMPAT_PRIVATE_SENTINEL https://fixture-user:fixture-password@compat.example.invalid/?token=private-compat-token\nCONTROL';
+    const config = testConfig();
+    config.profiles.default.textReasoner.compatibility = (location === 'unknown-key'
+      ? { [canary]: true }
+      : location === 'empty-key' ? { '': canary }
+      : { preferredProtocol: canary }) as never;
+    const events: TraceEventInput[] = [];
+    const logs: string[] = [];
+    const recorder = new ModelRouterFullTraceRecorder({ sink: { async appendMany(batch) { events.push(...batch); } } });
+    let upstreamCalls = 0;
+    const server = await startModelRouterServer({ port: 0, config, env: testEnv(), workspaceRoot,
+      fullTraceRecorder: recorder, log: message => logs.push(message),
+      fetchImpl: async () => { upstreamCalls++; throw new Error('Invalid configuration must not call an upstream.'); } });
+    const outputs: unknown[] = [];
+    try {
+      for (const path of ['/v1/responses', '/v1/chat/completions', '/v1/messages']) {
+        const body = path === '/v1/responses'
+          ? { model: 'sciforge-router', input: 'hello' }
+          : { model: 'sciforge-router', messages: [{ role: 'user', content: 'hello' }], max_tokens: 16 };
+        const response = await fetch(server.url + path, { method: 'POST',
+          headers: runtimeHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body) });
+        assert.equal(response.status, 400);
+        const output = await response.json() as { error: { code: string; message: string } };
+        assert.deepEqual(Object.keys(output.error).sort(), ['code', 'message']);
+        assert.equal(output.error.code, 'invalid_provider_config');
+        assert.equal(output.error.message, `Model Router profile role "textReasoner" has invalid compatibility settings: ${location === 'preferred-protocol' ? 'preferredProtocol is invalid' : 'unknown compatibility setting'}.`);
+        outputs.push(output);
+      }
+    } finally { await server.close(); await recorder.flush(); await rm(workspaceRoot, { recursive: true, force: true }); }
+    assert.equal(upstreamCalls, 0);
+    assert.ok(logs.some(message => message.includes('invalid_provider_config')));
+    assert.ok(events.some(event => event.kind === 'error'));
+    for (const serialized of [JSON.stringify(outputs), JSON.stringify(logs), JSON.stringify(events)]) {
+      for (const marker of ['COMPAT_PRIVATE_SENTINEL', 'fixture-password', 'private-compat-token', 'CONTROL']) {
+        assert.equal(serialized.includes(marker), false, 'private compatibility input is data, never a diagnostic');
+      }
+    }
+  });
+}

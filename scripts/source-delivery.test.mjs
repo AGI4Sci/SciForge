@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, rm, symlink } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { loadMigrationFixtureLicenseSnapshot, verifyMigrationFixtureLicenseSnapshot } from './migration-fixture-licenses.mjs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -39,4 +41,68 @@ test('retained DSH runtime keeps its original test and typecheck entrypoints', a
   assert.equal(scripts['dsh-runtime:test'], 'npm --workspace @sciforge/dsh-runtime run test')
   assert.equal(scripts['dsh-runtime:typecheck'], 'npm --workspace @sciforge/dsh-runtime run typecheck')
   assert.match(scripts.pretest, /npm run domain-packages:test/)
+})
+
+
+let licensedFixtureSnapshot
+async function retainedFixtureSnapshot() {
+  licensedFixtureSnapshot ??= await loadMigrationFixtureLicenseSnapshot(fileURLToPath(root))
+  return new Map(licensedFixtureSnapshot)
+}
+const fixtureScope = 'test-fixtures/migration-plugins/'
+const provenance = fixtureScope + 'THIRD_PARTY.provenance.json'
+
+test('retained nine immutable fixtures have a complete scoped offline third-party license closure', async () => {
+  assert.deepEqual(verifyMigrationFixtureLicenseSnapshot(await retainedFixtureSnapshot()), {
+    fixtures: 9, inlinePackages: 8, helperAttributions: 1, moduleOccurrences: 316
+  })
+})
+
+test('unreviewed inlined packages fail instead of inheriting the root project license', async () => {
+  const snapshot = await retainedFixtureSnapshot()
+  const path = fixtureScope + 'p3-mcp-bridge/dist/main.js'
+  snapshot.set(path, Buffer.concat([snapshot.get(path), Buffer.from('\n// node_modules/unreviewed-package/index.js\nexport const unknown = true;\n')]))
+  assert.throws(() => verifyMigrationFixtureLicenseSnapshot(snapshot), /Unreviewed inlined package/)
+})
+
+test('an extra dist input fails even if it is ignored by ordinary Git defaults', async () => {
+  const snapshot = await retainedFixtureSnapshot()
+  snapshot.set(fixtureScope + 'extra/dist/main.js', Buffer.from('export const unknown = true'))
+  assert.throws(() => verifyMigrationFixtureLicenseSnapshot(snapshot), /Exactly nine reviewed dist inputs/)
+})
+
+for (const mutation of ['missing', 'changed']) test(`a ${mutation} full license text fails the delivery gate`, async () => {
+  const snapshot = await retainedFixtureSnapshot()
+  const metadata = JSON.parse(snapshot.get(provenance))
+  const license = metadata.components[0].licensePath
+  if (mutation === 'missing') snapshot.delete(license)
+  else snapshot.set(license, Buffer.concat([snapshot.get(license), Buffer.from('modified')]))
+  assert.throws(() => verifyMigrationFixtureLicenseSnapshot(snapshot), /license/i)
+})
+
+test('license paths cannot escape the reviewed sidecar scope', async () => {
+  const snapshot = await retainedFixtureSnapshot()
+  const metadata = JSON.parse(snapshot.get(provenance))
+  metadata.components[0].licensePath = '../../LICENSE'
+  snapshot.set(provenance, Buffer.from(JSON.stringify(metadata)))
+  assert.throws(() => verifyMigrationFixtureLicenseSnapshot(snapshot), /License path must stay/)
+})
+
+test('recorded modules must match every emitted occurrence, not merely package dependency declarations', async () => {
+  const snapshot = await retainedFixtureSnapshot()
+  const metadata = JSON.parse(snapshot.get(provenance))
+  metadata.components.find(component => component.role === 'inlined-third-party-code').embeddedModuleOccurrences.pop()
+  snapshot.set(provenance, Buffer.from(JSON.stringify(metadata)))
+  assert.throws(() => verifyMigrationFixtureLicenseSnapshot(snapshot), /Emitted module occurrence inventory differs/)
+})
+
+test('the actual license loader rejects symbolic links without following them', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'fixture-license-links-'))
+  t.after(() => rm(directory, {recursive: true, force: true}))
+  const licenses = join(directory, fixtureScope, 'licenses')
+  await mkdir(licenses, {recursive: true})
+  const original = join(directory, 'owned-synthetic-license.txt')
+  await writeFile(original, 'Synthetic license text for a link refusal test')
+  await symlink(original, join(licenses, 'linked.LICENSE.txt'))
+  await assert.rejects(loadMigrationFixtureLicenseSnapshot(directory), /Symbolic links/)
 })

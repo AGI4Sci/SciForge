@@ -353,12 +353,12 @@ export function GenericApiMemberFields({
 }): ReactElement {
   const [secretVisible, setSecretVisible] = useState(false)
   const fieldClass = compact
-    ? 'w-full rounded-xl border border-slate-300/75 bg-white/88 px-4 py-3 text-[15px] text-slate-800 outline-none transition focus:border-[#1388ff]/70 focus:ring-2 focus:ring-[#1388ff]/15 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100 dark:focus:border-[#3aa0ff]/70 dark:focus:ring-[#3aa0ff]/15 dark:placeholder:text-slate-500'
-    : 'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    ? 'w-full rounded-xl border border-slate-300/75 bg-white/88 px-4 py-3 text-ds-xl text-slate-800 outline-none transition focus:border-[#1388ff]/70 focus:ring-2 focus:ring-[#1388ff]/15 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100 dark:focus:border-[#3aa0ff]/70 dark:focus:ring-[#3aa0ff]/15 dark:placeholder:text-slate-500'
+    : 'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
 
   return (
     <div className="grid gap-3" data-generic-api-member={testId ?? true}>
-      <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+      <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
         <span>{t('modelRouterRoleBaseUrl')}</span>
         <input
           className={fieldClass}
@@ -369,7 +369,7 @@ export function GenericApiMemberFields({
         />
       </label>
       {showProtocol ? (
-        <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+        <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
           <span>{t('modelRouterRoleProtocol')}</span>
           <select
             className={fieldClass}
@@ -386,8 +386,8 @@ export function GenericApiMemberFields({
           </select>
         </label>
       ) : null}
-      {showStructuredOutput && ['auto', 'chat-completions'].includes(member.protocol ?? 'auto') ? (
-        <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+      {showStructuredOutput && ['auto', 'responses', 'chat-completions'].includes(member.protocol ?? 'auto') ? (
+        <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
           <span>{t('modelRouterRoleStructuredOutput')}</span>
           <select
             className={fieldClass}
@@ -405,7 +405,7 @@ export function GenericApiMemberFields({
           <span className="leading-5 opacity-70">{t('modelRouterRoleStructuredOutputHint')}</span>
         </label>
       ) : null}
-      <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+      <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
         <span>{t('modelRouterRoleApiKey')}</span>
         <span className="relative block">
           <input
@@ -427,7 +427,7 @@ export function GenericApiMemberFields({
           </button>
         </span>
       </label>
-      <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+      <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
         <span>{t('modelRouterRoleModel')}</span>
         <input
           className={`${fieldClass} font-mono`}
@@ -438,7 +438,7 @@ export function GenericApiMemberFields({
         />
       </label>
       {showContextWindow ? (
-        <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+        <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
           <span>{t('modelRouterRoleContextWindow')}</span>
           <input
             className={`${fieldClass} font-mono`}
@@ -458,7 +458,7 @@ export function GenericApiMemberFields({
         </label>
       ) : null}
       {showReasoningEfforts ? (
-        <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+        <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
           <span>{t('modelRouterRoleReasoningEfforts')}</span>
           <input
             className={`${fieldClass} font-mono`}
@@ -729,8 +729,8 @@ export function ModelAccessSettings({
   }
 
   const selectClass = compact
-    ? 'w-full rounded-xl border border-slate-300/75 bg-white/88 px-4 py-3 text-[15px] text-slate-800 outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100'
-    : 'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    ? 'w-full rounded-xl border border-slate-300/75 bg-white/88 px-4 py-3 text-ds-xl text-slate-800 outline-none dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100'
+    : 'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
   const choiceClass = (active: boolean): string => [
     'rounded-xl border px-3 py-3 text-left transition',
     active
@@ -754,16 +754,16 @@ export function ModelAccessSettings({
     <div className="grid gap-4" data-model-access data-access-mode={accessMode}>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label={t('modelAccessMode')}>
         <button type="button" className={choiceClass(accessMode === 'api')} onClick={() => setMode('api')}>
-          <span className="block text-sm font-semibold">{t('modelAccessApi')}</span>
-          <span className="mt-1 block text-[12px] leading-5 opacity-80">{t('modelAccessApiDesc')}</span>
+          <span className="block text-ds-lg font-semibold">{t('modelAccessApi')}</span>
+          <span className="mt-1 block text-ds-sm leading-5 opacity-80">{t('modelAccessApiDesc')}</span>
         </button>
         <button
           type="button"
           className={choiceClass(accessMode === 'coding-plan')}
           onClick={() => setMode('coding-plan')}
         >
-          <span className="block text-sm font-semibold">{t('modelAccessCodingPlan')}</span>
-          <span className="mt-1 block text-[12px] leading-5 opacity-80">{t('modelAccessCodingPlanDesc')}</span>
+          <span className="block text-ds-lg font-semibold">{t('modelAccessCodingPlan')}</span>
+          <span className="mt-1 block text-ds-sm leading-5 opacity-80">{t('modelAccessCodingPlanDesc')}</span>
         </button>
       </div>
 
@@ -784,7 +784,7 @@ export function ModelAccessSettings({
             type="button"
             onClick={() => void checkApi()}
             disabled={status.tone === 'busy'}
-            className="inline-flex w-fit items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
+            className="inline-flex w-fit items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
           >
             <CheckCircle2 className="h-4 w-4" />
             {t('modelAccessCheck')}
@@ -792,7 +792,7 @@ export function ModelAccessSettings({
         </div>
       ) : accessMode === 'coding-plan' ? (
         <div className="grid gap-3" data-coding-plan-access>
-          <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+          <label className="grid gap-1.5 text-ds-sm font-medium text-ds-muted">
             <span>{t('modelAccessPlan')}</span>
             <select
               className={selectClass}
@@ -816,12 +816,12 @@ export function ModelAccessSettings({
             </select>
           </label>
           {selectedAdapter ? (
-            <p className="text-[12px] leading-5 text-ds-muted">{t(selectedAdapter.descriptionKey)}</p>
+            <p className="text-ds-sm leading-5 text-ds-muted">{t(selectedAdapter.descriptionKey)}</p>
           ) : null}
 
           {account?.authenticated ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[13px] text-ds-ink">
+              <span className="text-ds-md text-ds-ink">
                 {t('modelAccessPlanSignedIn', {
                   account: account.email ?? t('modelAccessPlanAccount'),
                   plan: account.planType ?? t('modelAccessPlanUnknownTier')
@@ -831,7 +831,7 @@ export function ModelAccessSettings({
                 type="button"
                 onClick={() => void logout()}
                 disabled={!selectedAdapter || status.tone === 'busy'}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50"
               >
                 <LogOut className="h-4 w-4" />
                 {t('modelAccessPlanLogout')}
@@ -843,7 +843,7 @@ export function ModelAccessSettings({
                 type="button"
                 onClick={() => void startLogin('browser')}
                 disabled={!selectedAdapter || status.tone === 'busy'}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-ds-md font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
               >
                 <LogIn className="h-4 w-4" />
                 {t('modelAccessPlanLoginBrowser')}
@@ -852,7 +852,7 @@ export function ModelAccessSettings({
                 type="button"
                 onClick={() => void startLogin('device')}
                 disabled={!selectedAdapter || status.tone === 'busy'}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50"
               >
                 {t('modelAccessPlanLoginDevice')}
               </button>
@@ -860,7 +860,7 @@ export function ModelAccessSettings({
           )}
 
           {deviceLogin ? (
-            <div className="rounded-xl border border-ds-border bg-ds-main/60 px-3 py-2 text-[12px] leading-5 text-ds-muted">
+            <div className="rounded-xl border border-ds-border bg-ds-main/60 px-3 py-2 text-ds-sm leading-5 text-ds-muted">
               {deviceLogin.userCode ? (
                 <p>{t('modelAccessPlanDeviceCode')} <code className="font-mono text-ds-ink">{deviceLogin.userCode}</code></p>
               ) : null}
@@ -880,14 +880,14 @@ export function ModelAccessSettings({
             type="button"
             onClick={() => void Promise.all([refreshAccount(), refreshServiceStatus(true)])}
             disabled={!selectedAdapter || status.tone === 'busy'}
-            className="inline-flex w-fit items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
+            className="inline-flex w-fit items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${status.tone === 'busy' ? 'animate-spin' : ''}`} />
             {t('modelAccessRefreshStatus')}
           </button>
         </div>
       ) : (
-        <p className="rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2 text-[12px] leading-5 text-amber-800 dark:text-amber-200">
+        <p className="rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2 text-ds-sm leading-5 text-amber-800 dark:text-amber-200">
           {t('modelAccessChooseMode')}
         </p>
       )}
@@ -895,7 +895,7 @@ export function ModelAccessSettings({
       {accessMode ? (
         <div className="grid gap-2" data-model-access-status>
           <div
-            className={`rounded-xl border px-3 py-2 text-[12px] leading-5 ${serviceStatus ? serviceStatusClass : accountStatusClass}`}
+            className={`rounded-xl border px-3 py-2 text-ds-sm leading-5 ${serviceStatus ? serviceStatusClass : accountStatusClass}`}
             data-unified-model-access-status
           >
             <span className="font-semibold">{t('modelAccessUnifiedStatus')}</span>
@@ -934,7 +934,7 @@ export function ModelAccessSettings({
           </div>
         </div>
       ) : (
-        <div className={`rounded-xl border px-3 py-2 text-[12px] leading-5 ${accountStatusClass}`} data-model-access-status>
+        <div className={`rounded-xl border px-3 py-2 text-ds-sm leading-5 ${accountStatusClass}`} data-model-access-status>
           {t('modelAccessStatusUnconfigured')}
         </div>
       )}

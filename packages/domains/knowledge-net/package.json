@@ -1,0 +1,34 @@
+{
+  "name": "@sciforge/domain-knowledge-net",
+  "version": "0.4.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Literature knowledge net with sealed notes, data resources and derived retrieval and exports.",
+  "exports": {
+    "./definition": "./src/definition.ts",
+    "./contract": "./src/contract.ts",
+    "./main": "./src/main.ts"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@sciforge/domain-artifact-versions": "^1.4.0",
+    "@sciforge/domain-sdk": "^0.2.24",
+    "@sciforge/zotero-connector": "^0.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

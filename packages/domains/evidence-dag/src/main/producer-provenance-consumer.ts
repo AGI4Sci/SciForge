@@ -150,6 +150,7 @@ const DEFAULT_POLL_INTERVAL_MS = 15_000
  */
 export class EvidenceProducerProvenanceConsumer {
   private enabled = false
+  private generation = 0
   private closed = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private draining: Promise<EvidenceProducerPollReport> | undefined
@@ -178,6 +179,7 @@ export class EvidenceProducerProvenanceConsumer {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) this.generation++
     this.enabled = enabled
     if (!enabled && this.timer) {
       clearTimeout(this.timer)
@@ -211,6 +213,7 @@ export class EvidenceProducerProvenanceConsumer {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.generation++
     this.enabled = false
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
@@ -218,6 +221,12 @@ export class EvidenceProducerProvenanceConsumer {
   }
 
   private async drain(force: boolean, scope?: EvidenceProducerPollScope): Promise<EvidenceProducerPollReport> {
+    const generation = this.generation
+    const assertCurrent = () => {
+      if (this.closed || generation !== this.generation || (!this.enabled && !force)) {
+        throw new Error('Evidence provenance delivery interrupted; original receipt remains pending.')
+      }
+    }
     const report = { delivered: 0, idempotent: 0, skipped: 0, pending: [] as Array<{ producer: string; fileName: string; message: string }> }
     let workspaces: readonly string[]
     try {
@@ -257,7 +266,7 @@ export class EvidenceProducerProvenanceConsumer {
             continue
           }
           try {
-            report[await this.deliver(workspaceRoot, producer, source, scope)]++
+            report[await this.deliver(workspaceRoot, producer, source, assertCurrent, scope)]++
           } catch (error) {
             this.warn(`Evidence DAG kept ${producer} provenance ${source.fileName} pending.`, error)
             report.pending.push({ producer, fileName: source.fileName, message: error instanceof Error ? error.message : String(error) })
@@ -272,6 +281,7 @@ export class EvidenceProducerProvenanceConsumer {
     workspaceRoot: string,
     producer: string,
     source: ValidProducerReceiptFile,
+    assertCurrent: () => void,
     scope?: EvidenceProducerPollScope
   ): Promise<'delivered' | 'idempotent' | 'skipped'> {
     const adapter = this.options.adapters?.get(producer)
@@ -306,6 +316,7 @@ export class EvidenceProducerProvenanceConsumer {
       throw new Error('Evidence delivery receipt has an unsupported format.')
     }
     const prepared = await this.options.prepare(workspaceRoot, receipt)
+    assertCurrent()
     assertPreparedTarget(prepared, workspaceRoot, receipt)
     const appended = await this.options.append({
       idempotencyKey: `${producer}/provenance-delivery:${resolve(workspaceRoot)}:${receipt.operationId}`,
@@ -318,6 +329,7 @@ export class EvidenceProducerProvenanceConsumer {
       trace: prepared.trace,
       workspaceRoot: prepared.workspaceRoot
     })
+    assertCurrent()
     await this.options.afterAppend?.(prepared, receipt)
     await writeWorkspaceJsonAtomic(
       workspaceRoot,

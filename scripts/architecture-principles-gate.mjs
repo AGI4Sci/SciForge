@@ -2,6 +2,7 @@
 
 import { execFile as execFileCallback, spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
+import { isLicenseOnlyArchiveEntries } from './domain-license-archive.cjs'
 import {
   access,
   lstat,
@@ -254,6 +255,7 @@ export async function auditRepositoryArchitecture(repositoryRoot = REPOSITORY_RO
   for (const directory of await readdir(domainsRoot, { withFileTypes: true })) {
     if (!directory.isDirectory()) continue
     const packageRoot = join(domainsRoot, directory.name)
+    if (isLicenseOnlyArchiveEntries(await readdir(packageRoot, { withFileTypes: true }))) continue
     const packagePath = `packages/domains/${directory.name}`
     const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
     const manifest = JSON.parse(await readFile(join(packageRoot, 'sciforge.domain.json'), 'utf8'))

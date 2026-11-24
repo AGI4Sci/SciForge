@@ -366,8 +366,8 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
       capability(
         CREATE_LOOP_CAPABILITY_IDS.testNode,
         'Test workflow node',
-        'Executes one node against bounded mock JSON without adding run history.',
-        'compute',
+        'Executes one real node against bounded mock JSON without adding run history; side effects require confirmation.',
+        'external-write',
         createLoopTestNodeInputSchema,
         createLoopNodeTestResultSchema,
         async (input, context) => {

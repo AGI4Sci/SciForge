@@ -173,7 +173,7 @@ export function FiguresPanel({ client, initialDocumentId, initialRequest, classN
   }
 
   return <section className={`figures-panel${className ? ` ${className}` : ''}`} aria-label="科研图件">
-    <header className="figures-panel-heading"><h1>科研图件</h1><button type="button" disabled={busy} onClick={() => void run(async () => { await refresh(selectedId) })}>刷新</button></header>
+    <header className="figures-panel-heading"><h1>科研图件</h1><button type="button" disabled={busy} onClick={() => void run(async () => { await refresh(selectedId); setQueuedAcceptance('') })}>刷新</button></header>
     {error && <div className="figures-panel-error" role="alert">{error}</div>}
     {notice && <div role="status" className="figures-panel-notice">{notice}</div>}
     {busy && <div role="status">正在处理……</div>}

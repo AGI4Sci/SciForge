@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm, realpath, readFile, symlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { copyCanvasRuntime, selectCanvasBinding } from './canvas-runtime.mjs'
 
 async function fixture(t, variant = 'win32-x64-msvc') {
-  const root = await realpath(await mkdtemp(join(dirname(fileURLToPath(import.meta.url)), 'canvas fixture ')))
+  const root = await realpath(await mkdtemp(join(process.env.TMPDIR || tmpdir(), 'canvas fixture ')))
   t.after(() => rm(root, { recursive: true, force: true }))
   const [platform, arch] = variant.split('-')
   const nativeName = `@napi-rs/canvas-${variant}`

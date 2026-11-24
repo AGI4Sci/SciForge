@@ -266,6 +266,8 @@ class HumanReview:
     review_packet_id: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[str] = None
+    review_rationale: Optional[str] = None
+    reviewed_snapshot_digest: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.score <= 1.0:
@@ -298,6 +300,10 @@ class HumanReview:
             result["reviewedBy"] = self.reviewed_by
         if self.reviewed_at:
             result["reviewedAt"] = self.reviewed_at
+        if self.review_rationale:
+            result["reviewRationale"] = self.review_rationale
+        if self.reviewed_snapshot_digest:
+            result["reviewedSnapshotDigest"] = self.reviewed_snapshot_digest
         return result
 
     @classmethod
@@ -318,10 +324,65 @@ class HumanReview:
             computed_at=str(_field(value, "computedAt", "computed_at", "unknown")),
             reviewed_by=_field(value, "reviewedBy", "reviewed_by"),
             reviewed_at=_field(value, "reviewedAt", "reviewed_at"),
+            review_rationale=value.get("reviewRationale"),
+            reviewed_snapshot_digest=value.get("reviewedSnapshotDigest"),
             checker=HumanReviewChecker.from_dict(value.get("checker") or {
                 "actorType": "rule", "actor": "legacy-human-review-checker",
                 "method": "legacy-import", "authority": "advisory",
             }),
+        )
+
+
+SELECTION_MECHANISMS = ("random_audit",)
+SELECTION_FRAMES = ("all_eligible",)
+ERROR_ORIGINS = ("source", "inherited", "undetermined")
+
+
+@dataclass(frozen=True)
+class ReviewSelection:
+    """How the targets of a review packet came to be selected, recorded at selection time.
+
+    A random audit is drawn from the full eligible set before any ranking and records the probability with which
+    each eligible node was included; later estimation from review logs relies on it. Further mechanisms (for example
+    a risk-ranked selection with its selection-time score) are added together with the code that produces them.
+    """
+
+    mechanism: str
+    inclusion_probability: Optional[float] = None
+    frame: Optional[str] = None
+    audit_round: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.mechanism not in SELECTION_MECHANISMS:
+            raise ValueError(f"review selection mechanism must be one of {SELECTION_MECHANISMS}")
+        if self.inclusion_probability is not None and not 0.0 < self.inclusion_probability <= 1.0:
+            raise ValueError("review selection inclusion probability must be in (0,1]")
+        if self.frame is not None and self.frame not in SELECTION_FRAMES:
+            raise ValueError(f"review selection frame must be one of {SELECTION_FRAMES}")
+        if self.mechanism == "random_audit" and (
+            self.inclusion_probability is None or self.frame != "all_eligible"
+        ):
+            raise ValueError("a random audit must record its inclusion probability and the all_eligible frame")
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"mechanism": self.mechanism}
+        for key, value in (
+            ("inclusionProbability", self.inclusion_probability), ("frame", self.frame),
+            ("auditRound", self.audit_round),
+        ):
+            if value is not None:
+                result[key] = value
+        return result
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ReviewSelection":
+        if not isinstance(value, dict):
+            raise ValueError("review selection must be an object")
+        return cls(
+            mechanism=str(value.get("mechanism", "")),
+            inclusion_probability=_field(value, "inclusionProbability", "inclusion_probability"),
+            frame=value.get("frame"),
+            audit_round=_field(value, "auditRound", "audit_round"),
         )
 
 
@@ -346,6 +407,9 @@ class ReviewPacket:
     options: tuple[dict[str, Any], ...] = ()
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[str] = None
+    review_rationale: Optional[str] = None
+    reviewed_snapshot_digest: Optional[str] = None
+    selection: Optional[ReviewSelection] = None
 
     def __post_init__(self) -> None:
         if not self.review_packet_id.strip() or not 0.0 <= self.score <= 1.0:
@@ -376,6 +440,9 @@ class ReviewPacket:
             ("options", list(self.options) if self.options else None),
             ("reviewedBy", self.reviewed_by),
             ("reviewedAt", self.reviewed_at),
+            ("reviewRationale", self.review_rationale),
+            ("reviewedSnapshotDigest", self.reviewed_snapshot_digest),
+            ("selection", self.selection.to_dict() if self.selection is not None else None),
         ):
             if value is not None:
                 result[key] = value
@@ -409,6 +476,10 @@ class ReviewPacket:
             options=tuple(value.get("options") or ()),
             reviewed_by=_field(value, "reviewedBy", "reviewed_by"),
             reviewed_at=_field(value, "reviewedAt", "reviewed_at"),
+            review_rationale=value.get("reviewRationale"),
+            reviewed_snapshot_digest=value.get("reviewedSnapshotDigest"),
+            selection=(ReviewSelection.from_dict(value["selection"])
+                       if value.get("selection") is not None else None),
         )
 
 

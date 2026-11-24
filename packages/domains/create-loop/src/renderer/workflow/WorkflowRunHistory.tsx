@@ -118,7 +118,7 @@ export function WorkflowRunHistory({
         <header className="flex h-12 shrink-0 items-center justify-between border-b border-ds-border px-5">
           <div className="flex items-center gap-2">
             <Clock3 className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
-            <h2 className="text-[14px] font-semibold text-ds-ink">{t('workflowRunHistory')}</h2>
+            <h2 className="text-ds-lg font-semibold text-ds-ink">{t('workflowRunHistory')}</h2>
           </div>
           <button
             type="button"
@@ -130,7 +130,7 @@ export function WorkflowRunHistory({
         </header>
 
         {newestFirst.length === 0 ? (
-          <p className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-ds-faint">
+          <p className="flex flex-1 items-center justify-center px-6 text-center text-ds-md text-ds-faint">
             {t('workflowRunHistoryEmpty')}
           </p>
         ) : (
@@ -147,11 +147,11 @@ export function WorkflowRunHistory({
                 >
                   <span className="flex items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${marker(run.status)}`} />
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ds-ink">
+                    <span className="min-w-0 flex-1 truncate text-ds-sm font-medium text-ds-ink">
                       {timestamp(run.startedAt)}
                     </span>
                   </span>
-                  <span className="pl-4 text-[11px] text-ds-faint">
+                  <span className="pl-4 text-ds-xs text-ds-faint">
                     {run.trigger} · {elapsed(run.startedAt, run.finishedAt) || t(`workflowRunStatus_${run.status}`)}
                   </span>
                 </button>
@@ -162,7 +162,7 @@ export function WorkflowRunHistory({
               {selected ? (
                 <div className="flex flex-col gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2 text-[12px] text-ds-muted">
+                    <div className="flex flex-wrap items-center gap-2 text-ds-sm text-ds-muted">
                       <span className={`h-2 w-2 rounded-full ${marker(selected.status)}`} />
                       <span className="font-medium text-ds-ink">{t(`workflowRunStatus_${selected.status}`)}</span>
                       <span className="text-ds-faint">·</span>
@@ -180,7 +180,7 @@ export function WorkflowRunHistory({
                         onClick={() => { void exportSelected() }}
                         disabled={exporting || rerunning}
                         title={`${t('workflowExportRerun')} · ${workspaceRoot}`}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border px-2.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
                       >
                         <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
                         {exporting ? t('workflowExportingRerun') : t('workflowExportRerun')}
@@ -190,7 +190,7 @@ export function WorkflowRunHistory({
                         onClick={() => { void rerunSelected() }}
                         disabled={exporting || rerunning}
                         title={`${t('workflowRerunFromSpec')} · ${workspaceRoot}`}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-ds-userbubble px-2.5 text-[11.5px] font-semibold text-ds-userbubbleFg transition hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-ds-userbubble px-2.5 text-ds-xs font-semibold text-ds-userbubbleFg transition hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
                       >
                         <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.9} />
                         {rerunning ? t('workflowRerunningFromSpec') : t('workflowRerunFromSpec')}
@@ -199,7 +199,7 @@ export function WorkflowRunHistory({
                   </div>
 
                   {exportedSpec ? (
-                    <div className="rounded-lg border border-ds-border bg-ds-subtle px-3 py-2 text-[11.5px] leading-5 text-ds-muted">
+                    <div className="rounded-lg border border-ds-border bg-ds-subtle px-3 py-2 text-ds-xs leading-5 text-ds-muted">
                       <div className="flex flex-wrap gap-x-3 gap-y-1">
                         <span className="font-medium text-ds-ink">
                           {exportedSpec.executionReady
@@ -210,7 +210,7 @@ export function WorkflowRunHistory({
                         <span>{t('workflowReproBreakpoints', { count: exportedSpec.breakpoints.length })}</span>
                       </div>
                       {exportedSpec.breakpoints.length > 0 ? (
-                        <p className="mt-1 break-words font-mono text-[10.5px] text-ds-faint">
+                        <p className="mt-1 break-words font-mono text-ds-2xs text-ds-faint">
                           {exportedSpec.breakpoints.map((point) => point.code).join(', ')}
                         </p>
                       ) : null}
@@ -218,7 +218,7 @@ export function WorkflowRunHistory({
                   ) : null}
 
                   {selected.manifest?.comparison ? (
-                    <div className="rounded-lg border border-ds-border px-3 py-2 text-[11.5px] text-ds-muted">
+                    <div className="rounded-lg border border-ds-border px-3 py-2 text-ds-xs text-ds-muted">
                       <p>
                         {t('workflowReproComparison', {
                           status: selected.manifest.comparison.replicationStatus,
@@ -229,7 +229,7 @@ export function WorkflowRunHistory({
                         {selected.manifest.comparison.reasonCodes.map((reason) => (
                           <span
                             key={reason}
-                            className="rounded bg-ds-subtle px-1.5 py-0.5 font-mono text-[10px] text-ds-faint"
+                            className="rounded bg-ds-subtle px-1.5 py-0.5 font-mono text-ds-2xs text-ds-faint"
                           >
                             {reason}
                           </span>
@@ -240,7 +240,7 @@ export function WorkflowRunHistory({
                           {selected.manifest.comparison.differences.map((difference, index) => (
                             <div
                               key={`${difference.component}:${difference.nodeId ?? ''}:${difference.reasonCode}:${index}`}
-                              className="grid grid-cols-[minmax(90px,0.4fr)_minmax(0,1fr)] gap-x-2 py-1.5 font-mono text-[10px]"
+                              className="grid grid-cols-[minmax(90px,0.4fr)_minmax(0,1fr)] gap-x-2 py-1.5 font-mono text-ds-2xs"
                             >
                               <span className="text-ds-muted">
                                 {difference.component}{difference.nodeId ? ` · ${difference.nodeId}` : ''}
@@ -259,27 +259,27 @@ export function WorkflowRunHistory({
                   ) : null}
 
                   {exportError ? (
-                    <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[11.5px] text-red-600">
+                    <p className="rounded-lg bg-red-500/10 px-3 py-2 text-ds-xs text-red-600">
                       {t('workflowExportRerunError', { message: exportError })}
                     </p>
                   ) : null}
 
                   {rerunError ? (
-                    <p className="rounded-lg bg-red-500/10 px-3 py-2 text-[11.5px] text-red-600">
+                    <p className="rounded-lg bg-red-500/10 px-3 py-2 text-ds-xs text-red-600">
                       {t('workflowRerunFromSpecError', { message: rerunError })}
                     </p>
                   ) : null}
 
                   {selected.message ? (
-                    <p className="rounded-lg bg-ds-subtle px-3 py-2 text-[12px] leading-5 text-ds-muted">
+                    <p className="rounded-lg bg-ds-subtle px-3 py-2 text-ds-sm leading-5 text-ds-muted">
                       {selected.message}
                     </p>
                   ) : null}
 
                   {selected.reportPath ? (
                     <div className="rounded-lg border border-ds-border bg-ds-subtle px-3 py-2">
-                      <p className="text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">{t('workflowRunReport')}</p>
-                      <p className="mt-1 break-all font-mono text-[11px] text-ds-muted">{selected.reportPath}</p>
+                      <p className="text-ds-2xs font-semibold uppercase tracking-wide text-ds-faint">{t('workflowRunReport')}</p>
+                      <p className="mt-1 break-all font-mono text-ds-xs text-ds-muted">{selected.reportPath}</p>
                     </div>
                   ) : null}
 
@@ -347,13 +347,13 @@ function HistoryResult({ result, name }: { result: WorkflowNodeRunResultV1; name
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
       >
         <span className={`h-2 w-2 shrink-0 rounded-full ${marker(result.status)}`} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ds-ink">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-ds-md font-medium text-ds-ink">{name}</span>
         {retries > 0 ? (
-          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10.5px] font-medium text-amber-700">
+          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-ds-2xs font-medium text-amber-700">
             {t('workflowRetriesBadge', { n: retries })}
           </span>
         ) : null}
-        {took ? <span className="shrink-0 text-[11px] text-ds-faint">{took}</span> : null}
+        {took ? <span className="shrink-0 text-ds-xs text-ds-faint">{took}</span> : null}
       </button>
 
       {open ? (
@@ -382,9 +382,9 @@ function Block({
 }): ReactElement {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[10px] font-medium uppercase text-ds-faint">{label}</span>
+      <span className="text-ds-2xs font-medium uppercase text-ds-faint">{label}</span>
       <pre
-        className={`max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md px-2.5 py-1.5 text-[11px] leading-5 ${
+        className={`max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md px-2.5 py-1.5 text-ds-xs leading-5 ${
           error ? 'bg-red-500/10 text-red-600' : 'bg-ds-subtle text-ds-muted'
         } ${mono ? 'font-mono' : ''}`}
       >

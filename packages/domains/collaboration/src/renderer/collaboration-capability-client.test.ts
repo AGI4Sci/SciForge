@@ -62,6 +62,11 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       if (contract.actionId === COLLABORATION_CAPABILITY_IDS.taskOfferDecide) {
         return { accepted: true } as TOutput
       }
+      if (contract.actionId === COLLABORATION_CAPABILITY_IDS.taskSessionContinue) {
+        assert.deepEqual(options, { approval: { mode: 'confirmation' } })
+        return { opened: true, sessionId: 'session-2', runtimeId: 'codex', threadId: 'thread-2',
+          context: 'Continue the task.', clientDirectiveId: 'directive-2' } as TOutput
+      }
       throw new Error(`Unexpected capability ${contract.actionId}`)
     }
   }
@@ -80,6 +85,12 @@ test('renderer client invokes only typed public collaboration capabilities', asy
     taskOfferId: 'offer-task-1',
     decision: 'reject'
   })
+  const continuationInput = {
+    projectId: 'project-1', taskId: 'task-1', executionId: 'execution-1',
+    predecessorRuntimeId: 'codex', predecessorThreadId: 'thread-1', reason: 'Continue after interruption.'
+  }
+  const continuation = await client.continueTaskSession(continuationInput)
+  assert.equal(continuation.threadId, 'thread-2')
 
   assert.deepEqual(calls.map((call) => call.actionId === COLLABORATION_CAPABILITY_IDS.endpointChallengePoll
     ? { ...call, input: Object.keys(call.input as object) }
@@ -119,6 +130,12 @@ test('renderer client invokes only typed public collaboration capabilities', asy
         taskOfferId: 'offer-task-1',
         decision: 'reject'
       },
+      options: { approval: { mode: 'confirmation' } }
+    },
+    {
+      actionId: COLLABORATION_CAPABILITY_IDS.taskSessionContinue,
+      effect: 'workspace-write',
+      input: continuationInput,
       options: { approval: { mode: 'confirmation' } }
     }
   ])

@@ -4,11 +4,16 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
 import {
+  BarChart3,
   Check,
   ChevronDown,
   ChevronRight,
   Copy,
+  File,
   FileEdit,
+  FileText,
+  Globe,
+  Image as ImageIcon,
   Loader2,
   Maximize2,
   Minimize2,
@@ -17,10 +22,20 @@ import {
   Wrench,
   X
 } from 'lucide-react'
-import type { ChatBlock, RuntimeDisclosureMetadata, ToolBlock } from '../../agent/types'
+import type {
+  ChatBlock,
+  RuntimeDisclosureMetadata,
+  ToolBlock,
+  UserMessageFileReference
+} from '../../agent/types'
 import type { AgentRuntimeOutputStatus } from '@shared/agent-runtime-contract'
+import {
+  workspaceAttachmentDisplayName,
+  workspaceAttachmentKind
+} from '@sciforge/domain-sdk/attachment-policy'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { openSafeExternalUrl } from '../../lib/open-external'
+import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { useChatStore } from '../../store/chat-store'
 import { getProvider } from '../../agent/registry'
 import {
@@ -37,6 +52,7 @@ import {
   type TimelineImageReference
 } from './message-timeline-media'
 import { ModelMetaTag } from './message-timeline-cards'
+import { formatComposerAttachmentSize } from './ComposerAttachmentTray'
 import { readNumber, formatDuration, formatToolTitle } from './message-timeline-tools'
 import { remoteToolMetadataChips } from './remote-tool-metadata'
 import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
@@ -78,9 +94,11 @@ export function toolOutputStatus(block: ToolBlock): AgentRuntimeOutputStatus | u
 /** Edit a historical question and continue in the same public session. */
 function UserMessageBubble({
   block,
+  threadId,
   presentationScope
 }: {
   block: Extract<ChatBlock, { kind: 'user' }>
+  threadId?: string
   presentationScope?: ChatMessagePresentationScope
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
@@ -160,15 +178,15 @@ function UserMessageBubble({
               }
             }}
             rows={2}
-            className="block w-full min-w-0 resize-none break-words bg-transparent text-[15px] font-medium leading-[1.58] text-ds-ink outline-none [overflow-wrap:anywhere]"
+            className="block w-full min-w-0 resize-none break-words bg-transparent text-ds-xl font-medium leading-[1.58] text-ds-ink outline-none [overflow-wrap:anywhere]"
           />
           <div className="mt-2 flex items-center justify-between gap-3">
-            <span className="text-[12px] text-ds-faint">{t('rewindHint')}</span>
+            <span className="text-ds-sm text-ds-faint">{t('rewindHint')}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={cancelEdit}
-                className="rounded-md px-3 py-1 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                className="rounded-md px-3 py-1 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
               >
                 {t('rewindCancel')}
               </button>
@@ -176,13 +194,14 @@ function UserMessageBubble({
                 type="button"
                 onClick={() => void submit()}
                 disabled={!draft.trim() || busy}
-                className="rounded-md bg-accent px-3 py-1 text-[13px] font-medium text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md bg-accent px-3 py-1 text-ds-md font-medium text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {t('rewindResend')}
               </button>
             </div>
           </div>
         </div>
+        <UserFileReferenceChips meta={block.meta} threadId={threadId} />
         <div className="mt-2 flex min-w-0 items-center justify-end">
           <ModelMetaTag label={block.modelLabel} />
         </div>
@@ -207,10 +226,11 @@ function UserMessageBubble({
         </ChatMessageBody>
         <RuntimeMetaChips meta={block.meta} align="right" hideAttachments />
       </div>
+      <UserFileReferenceChips meta={block.meta} threadId={threadId} />
       <div className="mt-2 flex min-w-0 items-center justify-between gap-3 text-ds-faint opacity-90 transition group-hover:opacity-100">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <ModelMetaTag label={block.modelLabel} className="justify-start text-left" />
-          {block.createdAt ? <span className="truncate text-[11px]">{formatMessageDateTime(block.createdAt, i18n.language)}</span> : null}
+          {block.createdAt ? <span className="truncate text-ds-xs">{formatMessageDateTime(block.createdAt, i18n.language)}</span> : null}
         </div>
         <div className="flex items-center justify-end gap-3">
           <CopyFeedbackButton text={displayText} iconOnly />
@@ -324,7 +344,7 @@ function MessageSourceTag({
   return (
     <div className={`${inline ? '' : 'mt-2'} flex min-w-0 ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
       <span
-        className="inline-flex max-w-full items-center rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-[11px] font-semibold text-ds-faint"
+        className="inline-flex max-w-full items-center rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-ds-xs font-semibold text-ds-faint"
         title={label}
       >
         <span className="truncate">{label}</span>
@@ -357,6 +377,139 @@ function UserAttachmentPreviews({
     <div className="mb-2 flex min-w-0 justify-end">
       <TimelineImagesFromMeta meta={meta} variant="user" />
     </div>
+  )
+}
+
+const MAX_USER_FILE_REFERENCES = 50
+const MAX_FILE_REFERENCE_PATH_CHARS = 4_096
+const MAX_FILE_REFERENCE_NAME_CHARS = 512
+const MAX_FILE_REFERENCE_KIND_CHARS = 32
+
+function referenceText(value: unknown, maxChars: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, maxChars) : undefined
+}
+
+/**
+ * Defensive reader for the serializable file records carried by a user block.
+ * Persisted threads simply omit the field; a runtime echo is not trusted to
+ * match the renderer's shape.
+ */
+export function userMessageFileReferences(
+  meta: RuntimeDisclosureMetadata | undefined
+): UserMessageFileReference[] {
+  const raw = (meta as Record<string, unknown> | undefined)?.fileReferences
+  if (!Array.isArray(raw)) return []
+  const references: UserMessageFileReference[] = []
+  for (const entry of raw) {
+    if (references.length >= MAX_USER_FILE_REFERENCES) break
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const record = entry as Record<string, unknown>
+    const relativePath = referenceText(record.relativePath, MAX_FILE_REFERENCE_PATH_CHARS)
+    const path = relativePath ?? referenceText(record.path, MAX_FILE_REFERENCE_PATH_CHARS)
+    if (!path) continue
+    const name = referenceText(record.name, MAX_FILE_REFERENCE_NAME_CHARS)
+    const kind = referenceText(record.kind, MAX_FILE_REFERENCE_KIND_CHARS)
+    const size = typeof record.size === 'number' && Number.isFinite(record.size) && record.size >= 0
+      ? record.size
+      : undefined
+    references.push({
+      path,
+      ...(relativePath ? { relativePath } : {}),
+      ...(name ? { name } : {}),
+      ...(kind ? { kind } : {}),
+      ...(size !== undefined ? { size } : {})
+    })
+  }
+  return references
+}
+
+type UserFileReferenceKind = 'pdf' | 'image' | 'scientific' | 'web-document' | 'file'
+
+function userFileReferenceKind(reference: UserMessageFileReference): UserFileReferenceKind {
+  const kind = workspaceAttachmentKind({
+    name: reference.name || reference.relativePath || reference.path
+  })
+  return kind === 'unsupported' ? 'file' : kind
+}
+
+function UserFileReferenceGlyph({ kind }: { kind: UserFileReferenceKind }): ReactElement {
+  const className = 'h-3 w-3 shrink-0 text-ds-faint'
+  if (kind === 'image') return <ImageIcon className={className} strokeWidth={1.9} />
+  if (kind === 'scientific') return <BarChart3 className={className} strokeWidth={1.9} />
+  if (kind === 'web-document') return <Globe className={className} strokeWidth={1.9} />
+  if (kind === 'pdf') return <FileText className={className} strokeWidth={1.9} />
+  return <File className={className} strokeWidth={1.9} />
+}
+
+/**
+ * The files a sent message carried, hanging under the user bubble. Sent files
+ * cannot be removed, so the chips only classify, name, size, and preview them.
+ */
+function UserFileReferenceChips({
+  meta,
+  threadId
+}: {
+  meta?: RuntimeDisclosureMetadata
+  threadId?: string
+}): ReactElement | null {
+  const { t } = useTranslation('common')
+  const references = useMemo(() => userMessageFileReferences(meta), [meta])
+  if (references.length === 0) return null
+  const title = t('composerSentFilesTitle', { count: references.length })
+
+  return (
+    <ul
+      className="mt-2 flex min-w-0 flex-wrap justify-end gap-1.5"
+      aria-label={title}
+      title={title}
+      data-user-file-references
+    >
+      {references.map((reference, index) => {
+        const path = reference.relativePath || reference.path
+        const displayName =
+          workspaceAttachmentDisplayName(path) || reference.name || path
+        const kind = userFileReferenceKind(reference)
+        const size = formatComposerAttachmentSize(reference.size)
+        const previewLabel = t('composerSentFilePreview', { name: displayName })
+        const kindLabel =
+          kind === 'pdf'
+            ? t('composerAttachmentKindPdf')
+            : kind === 'image'
+              ? t('composerAttachmentKindImage')
+              : kind === 'scientific'
+                ? t('composerAttachmentKindScientific')
+                : kind === 'web-document'
+                  ? t('composerAttachmentKindWeb')
+                  : t('composerAttachmentKindFile')
+        return (
+          <li key={`${path}-${index}`} className="min-w-0">
+            <button
+              type="button"
+              onClick={() => {
+                if (!path) return
+                previewWorkspaceFile({
+                  path,
+                  kind: reference.kind === 'directory' ? 'directory' : 'file',
+                  ...(threadId ? { sessionId: threadId } : {})
+                })
+              }}
+              title={`${previewLabel} — ${kindLabel} · ${path}`}
+              aria-label={previewLabel}
+              data-user-file-reference
+              className="inline-flex max-w-[18rem] min-w-0 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-card/80 px-1.5 py-0.5 text-ds-xs text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            >
+              <UserFileReferenceGlyph kind={kind} />
+              <span className="min-w-0 truncate font-medium text-ds-ink">{displayName}</span>
+              {size ? (
+                <span className="shrink-0 tabular-nums text-ds-2xs text-ds-faint">{size}</span>
+              ) : null}
+            </button>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
@@ -406,7 +559,7 @@ function RuntimeMetaChips({
   ) {
     return null
   }
-  const chipClass = 'inline-flex max-w-full items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-[11px] font-medium text-ds-faint'
+  const chipClass = 'inline-flex max-w-full items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-ds-xs font-medium text-ds-faint'
   return (
     <div className={`mt-2 flex min-w-0 flex-wrap gap-1.5 ${align === 'right' ? 'justify-end' : ''}`}>
       {!hideAttachments && attachmentIds.length > 0 ? (
@@ -529,13 +682,14 @@ function CopyFeedbackButton({
   )
 }
 
-function UserInputBubble({ block, nested = false }: {
+function UserInputBubble({ block, nested = false, threadId }: {
   block: Extract<ChatBlock, { kind: 'user_input' }>
   nested?: boolean
+  threadId?: string
 }): ReactElement {
   const resolveUserInput = useChatStore((state) => state.resolveUserInput)
-  const firstPendingId = useChatStore((state) => state.blocks.find((item) => item.kind === 'user_input' && item.status === 'pending')?.id)
-  const active = useChatStore((state) => state.blocks.some((item) => item.id === block.id))
+  const firstPendingId = useChatStore((state) => (state.sideConversations[threadId ?? '']?.blocks ?? state.blocks).find((item) => item.kind === 'user_input' && item.status === 'pending')?.id)
+  const active = useChatStore((state) => (state.sideConversations[threadId ?? '']?.blocks ?? state.blocks).some((item) => item.id === block.id))
   const presenter = installedRendererContributions.userInput
   if (!presenter) return <p role="alert">User input presentation is unavailable.</p>
   return presenter.render({
@@ -543,8 +697,8 @@ function UserInputBubble({ block, nested = false }: {
     answers: block.answers, status: block.status, errorMessage: block.errorMessage,
     autoOpen: !nested && firstPendingId === block.id,
     active: nested || active,
-    onSubmit: (answers) => resolveUserInput(block.id, { kind: 'submit', answers }),
-    onCancel: () => resolveUserInput(block.id, { kind: 'cancel' })
+    onSubmit: (answers) => resolveUserInput(block.id, { kind: 'submit', answers }, threadId),
+    onCancel: () => resolveUserInput(block.id, { kind: 'cancel' }, threadId)
   })
 }
 
@@ -701,30 +855,30 @@ function ApprovalBubble({
       <div
         role={block.status === 'pending' ? 'alert' : undefined}
         aria-live={block.status === 'pending' ? 'assertive' : undefined}
-        className={`rounded-[22px] border px-4 py-4 text-[13px] leading-6 ${approvalToneClass}`}
+        className={`rounded-[22px] border px-4 py-4 text-ds-md leading-6 ${approvalToneClass}`}
       >
         <div className="font-semibold text-accent">{t('approvalTitle')}</div>
         {block.toolName ? (
-          <div className="mt-1 text-[12px] text-ds-muted">
+          <div className="mt-1 text-ds-sm text-ds-muted">
             {t('approvalTool', { name: block.toolName })}
           </div>
         ) : null}
         {detailEntries.length > 0 ? (
           <button
             type="button"
-            className="mt-2 block w-full rounded-lg text-left text-[14px] text-ds-ink transition hover:bg-black/[0.04] dark:hover:bg-white/[0.04]"
+            className="mt-2 block w-full rounded-lg text-left text-ds-lg text-ds-ink transition hover:bg-black/[0.04] dark:hover:bg-white/[0.04]"
             title={t('approvalViewDetails')}
             onClick={() => setDetailsOpen(true)}
           >
             <span className="whitespace-pre-wrap">{block.summary}</span>
           </button>
         ) : (
-          <p className="mt-2 whitespace-pre-wrap text-[14px] text-ds-ink">{block.summary}</p>
+          <p className="mt-2 whitespace-pre-wrap text-ds-lg text-ds-ink">{block.summary}</p>
         )}
         {detailEntries.length > 0 ? (
           <button
             type="button"
-            className="mt-2 inline-flex items-center rounded-lg border border-ds-border bg-ds-card/70 px-2.5 py-1 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="mt-2 inline-flex items-center rounded-lg border border-ds-border bg-ds-card/70 px-2.5 py-1 text-ds-sm font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
             aria-expanded={detailsOpen}
             onClick={() => setDetailsOpen(true)}
           >
@@ -732,27 +886,27 @@ function ApprovalBubble({
           </button>
         ) : null}
         {block.errorMessage ? (
-          <p className="mt-2 text-[12px] text-red-700 dark:text-red-300">{block.errorMessage}</p>
+          <p className="mt-2 text-ds-sm text-red-700 dark:text-red-300">{block.errorMessage}</p>
         ) : null}
         {!done ? (
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-emerald-700"
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-ds-md font-medium text-white hover:bg-emerald-700"
               onClick={() => void resolveApproval(block.id, 'allow', threadId)}
             >
               {t('approvalAllow')}
             </button>
             <button
               type="button"
-              className="rounded-lg border border-ds-border bg-ds-card px-3 py-1.5 text-[13px] font-medium text-ds-ink hover:bg-ds-hover"
+              className="rounded-lg border border-ds-border bg-ds-card px-3 py-1.5 text-ds-md font-medium text-ds-ink hover:bg-ds-hover"
               onClick={() => void resolveApproval(block.id, 'deny', threadId)}
             >
               {t('approvalDeny')}
             </button>
           </div>
         ) : (
-          <p className="mt-2 text-[12px] font-medium text-ds-muted">{statusLabel}</p>
+          <p className="mt-2 text-ds-sm font-medium text-ds-muted">{statusLabel}</p>
         )}
       </div>
       {detailsOpen ? (
@@ -764,7 +918,7 @@ function ApprovalBubble({
           }}
         >
           <div
-            role="dialog"
+            data-native-view-occluder="true" role="dialog"
             aria-modal="true"
             aria-labelledby={`approval-details-title-${block.id}`}
             className={`flex max-h-[min(86vh,760px)] w-full flex-col overflow-hidden rounded-2xl border border-ds-border bg-ds-card text-ds-ink shadow-2xl transition-[max-width] ${expanded ? 'max-w-[min(96vw,1120px)]' : 'max-w-2xl'}`}
@@ -772,10 +926,10 @@ function ApprovalBubble({
           >
             <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-5 py-3">
               <div className="min-w-0">
-                <h2 id={`approval-details-title-${block.id}`} className="truncate text-[15px] font-semibold">
+                <h2 id={`approval-details-title-${block.id}`} className="truncate text-ds-xl font-semibold">
                   {t('approvalDetailsTitle')}
                 </h2>
-                <p className="mt-0.5 truncate text-[12px] text-ds-muted">{block.summary}</p>
+                <p className="mt-0.5 truncate text-ds-sm text-ds-muted">{block.summary}</p>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <button
@@ -803,8 +957,8 @@ function ApprovalBubble({
               <dl className="space-y-4">
                 {detailEntries.map((entry, index) => (
                   <div key={`${entry.label}-${index}`}>
-                    <dt className="mb-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-ds-muted">{t(entry.label)}</dt>
-                    <dd className="whitespace-pre-wrap break-words rounded-xl border border-ds-border-muted/70 bg-ds-subtle px-3 py-2 font-mono text-[12px] leading-5 text-ds-ink">
+                    <dt className="mb-1 text-ds-xs font-semibold uppercase tracking-[0.1em] text-ds-muted">{t(entry.label)}</dt>
+                    <dd className="whitespace-pre-wrap break-words rounded-xl border border-ds-border-muted/70 bg-ds-subtle px-3 py-2 font-mono text-ds-sm leading-5 text-ds-ink">
                       {entry.value}
                     </dd>
                   </div>
@@ -835,7 +989,13 @@ function MessageBubbleComponent({
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   if (block.kind === 'user') {
-    return <UserMessageBubble block={block} presentationScope={presentationScope} />
+    return (
+      <UserMessageBubble
+        block={block}
+        threadId={threadId}
+        presentationScope={presentationScope}
+      />
+    )
   }
   if (block.kind === 'assistant') {
     const streaming = block.id === 'live-assistant'
@@ -856,7 +1016,7 @@ function MessageBubbleComponent({
         </div>
         <TimelineImagesFromMeta meta={block.meta} variant="assistant" onOpenVisualReview={onOpenImageArtifactInVisualReview} />
         {!streaming ? (
-          <div className="mt-1 flex min-h-5 min-w-0 flex-wrap items-center justify-between gap-2 text-[11.5px] text-ds-faint opacity-0 transition duration-150 group-hover/message:opacity-100">
+          <div className="mt-1 flex min-h-5 min-w-0 flex-wrap items-center justify-between gap-2 text-ds-xs text-ds-faint opacity-0 transition duration-150 group-hover/message:opacity-100">
             <span className="min-w-0 truncate">{[createdAtLabel, blockModelLabel(block)].filter(Boolean).join(' · ')}</span>
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
               <CopyFeedbackButton text={block.text} />
@@ -868,7 +1028,7 @@ function MessageBubbleComponent({
   }
   if (block.kind === 'reasoning') {
     return (
-      <div className="ds-card-soft rounded-[20px] px-4 py-3 text-[13.5px] leading-6 text-ds-muted" title={blockMetaTitle(block, i18n.language)}>
+      <div className="ds-card-soft rounded-[20px] px-4 py-3 text-ds-md leading-6 text-ds-muted" title={blockMetaTitle(block, i18n.language)}>
         <div className="ds-markdown">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
         </div>
@@ -879,27 +1039,28 @@ function MessageBubbleComponent({
     return (
       <div title={blockMetaTitle(block, i18n.language)}><ToolEntry
         block={block}
+        threadId={threadId}
         nested={nested}
         onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
       /></div>
     )
   }
   if (block.kind === 'user_input') {
-    return <UserInputBubble block={block} nested={nested} />
+    return <UserInputBubble block={block} nested={nested} threadId={threadId} />
   }
   if (block.kind === 'approval') {
     return <ApprovalBubble block={block} threadId={threadId} />
   }
   if (block.kind === 'compaction') {
     return (
-      <div className="ds-card-soft rounded-[18px] px-3 py-2 text-[13.5px] text-ds-muted">
+      <div className="ds-card-soft rounded-[18px] px-3 py-2 text-ds-md text-ds-muted">
         {block.detail || block.summary}
       </div>
     )
   }
   if (block.kind === 'review') {
     return (
-      <div className="ds-card-soft rounded-[18px] px-3 py-2 text-[13.5px] text-ds-muted">
+      <div className="ds-card-soft rounded-[18px] px-3 py-2 text-ds-md text-ds-muted">
         {block.reviewText || block.title}
       </div>
     )
@@ -909,7 +1070,7 @@ function MessageBubbleComponent({
     const warningTone = block.severity === 'warning'
     return (
       <div
-        className={`rounded-[18px] border px-3 py-2 text-[13.5px] leading-6 ${
+        className={`rounded-[18px] border px-3 py-2 text-ds-md leading-6 ${
           errorTone
             ? 'border-red-300/80 bg-red-500/10 text-red-800 dark:border-red-800/60 dark:bg-red-950/35 dark:text-red-200'
             : warningTone
@@ -919,7 +1080,7 @@ function MessageBubbleComponent({
       >
         <p className="whitespace-pre-wrap break-words">{block.text}</p>
         {block.code ? (
-          <p className="mt-1 font-mono text-[11px] opacity-70">{block.code}</p>
+          <p className="mt-1 font-mono text-ds-xs opacity-70">{block.code}</p>
         ) : null}
       </div>
     )
@@ -929,10 +1090,12 @@ function MessageBubbleComponent({
 
 function ToolEntry({
   block,
+  threadId,
   nested = false,
   onOpenImageArtifactInVisualReview
 }: {
   block: ToolBlock
+  threadId?: string
   nested?: boolean
   onOpenImageArtifactInVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement {
@@ -1056,24 +1219,24 @@ function ToolEntry({
           setOpen(nextOpen)
           if (nextOpen && artifactKey) setArtifactLoadKey(artifactKey)
         }}
-        className={`flex w-full items-start gap-2 px-4 py-3 text-left text-[13.5px] leading-6 ${
+        className={`flex w-full items-start gap-2 px-4 py-3 text-left text-ds-md leading-6 ${
           canExpand && block.status !== 'running' ? 'cursor-pointer' : 'cursor-default'
         }`}
       >
         <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-80" strokeWidth={1.75} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-semibold uppercase tracking-[0.12em] text-[11px] opacity-75">
+            <span className="font-semibold uppercase tracking-[0.12em] text-ds-xs opacity-75">
               {kindLabel}
             </span>
             {block.status === 'running' ? (
-              <span className="rounded-full bg-amber-200/40 px-2 py-0.5 text-[11px] font-medium text-amber-900 dark:bg-amber-700/30 dark:text-amber-100">
+              <span className="rounded-full bg-amber-200/40 px-2 py-0.5 text-ds-xs font-medium text-amber-900 dark:bg-amber-700/30 dark:text-amber-100">
                 {t('inspectorStatusRunning')}
               </span>
             ) : null}
             {typeof exitCode === 'number' ? (
               <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-mono ${
+                className={`rounded-full px-2 py-0.5 text-ds-xs font-mono ${
                   exitCode === 0
                     ? 'bg-ds-success-soft text-ds-success'
                     : 'bg-ds-danger-soft text-ds-danger'
@@ -1083,18 +1246,18 @@ function ToolEntry({
               </span>
             ) : null}
             {sessionId ? (
-              <span className="rounded-full bg-ds-card px-2 py-0.5 text-[11px] font-mono text-ds-muted" title={sessionId}>
+              <span className="rounded-full bg-ds-card px-2 py-0.5 text-ds-xs font-mono text-ds-muted" title={sessionId}>
                 {sessionStatus === 'running' ? t('inspectorStatusRunning') : sessionStatus || 'session'} {sessionId.slice(0, 12)}
               </span>
             ) : null}
             {typeof durationMs === 'number' ? (
-              <span className="rounded-full bg-ds-card px-2 py-0.5 text-[11px] font-mono text-ds-muted">
+              <span className="rounded-full bg-ds-card px-2 py-0.5 text-ds-xs font-mono text-ds-muted">
                 {formatDuration(durationMs)}
               </span>
             ) : null}
             {outputStatusLabel ? (
               <span
-                className="rounded-full bg-ds-card px-2 py-0.5 text-[11px] font-medium text-ds-muted"
+                className="rounded-full bg-ds-card px-2 py-0.5 text-ds-xs font-medium text-ds-muted"
                 title={outputStatusLabel}
               >
                 {outputStatusLabel}
@@ -1103,7 +1266,7 @@ function ToolEntry({
           </div>
           <div className="mt-0.5 break-words">
             {block.filePath ? (
-              <span className="font-mono text-[12px] opacity-90">{block.filePath} — </span>
+              <span className="font-mono text-ds-sm opacity-90">{block.filePath} — </span>
             ) : null}
             <span>{block.summary}</span>
           </div>
@@ -1125,19 +1288,19 @@ function ToolEntry({
       {effectiveOpen && (hasDetail || hasArtifact) ? (
         <div className="ds-panel-strip min-w-0 border-t border-ds-border-muted/60 px-4 py-3">
           {artifactLoading ? (
-            <div className="flex items-center gap-2 text-[12px] text-ds-muted">
+            <div className="flex items-center gap-2 text-ds-sm text-ds-muted">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               {t('loading')}
             </div>
           ) : (
             <>
               {artifactError ? (
-                <p className="mb-2 text-[12px] text-ds-danger">{artifactError}</p>
+                <p className="mb-2 text-ds-sm text-ds-danger">{artifactError}</p>
               ) : null}
               {patchText !== undefined ? (
-                <DiffView patch={patchText} filePath={block.filePath} />
+                <DiffView patch={patchText} filePath={block.filePath} sessionId={threadId ?? artifactThreadId} />
               ) : hasDetail ? (
-                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-ds-ink">
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-ds-sm leading-6 text-ds-ink">
                   {displayedDetail}
                 </pre>
               ) : null}
@@ -1145,7 +1308,7 @@ function ToolEntry({
                 <button
                   type="button"
                   onClick={() => setArtifactLoadKey(artifactKey)}
-                  className="mt-2 rounded-lg border border-ds-border px-2.5 py-1 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                  className="mt-2 rounded-lg border border-ds-border px-2.5 py-1 text-ds-sm font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                 >
                   {t('toolLoadFullDetail')}
                 </button>

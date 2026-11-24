@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -182,4 +182,17 @@ describe('CodexThreadStore bulk upsert', () => {
       latestTurnId: 'turn-child-2'
     })
   })
+})
+
+it('merges transitive GUI/native aliases while retaining unrelated history', async () => {
+  const rootDir = await tempRoot()
+  const threads = Array.from({ length: 3000 }, (_, i) => ({ guiThreadId: `gui-${i}`, codexThreadId: `native-${i}`, title: `Thread ${i}` }))
+  threads.push({ guiThreadId: 'gui-0', codexThreadId: 'native-1', title: 'Bridge' })
+  threads.push({ guiThreadId: 'gui-1', codexThreadId: 'native-2', title: 'Second bridge' })
+  await writeFile(join(rootDir, 'threads.json'), JSON.stringify({ version: 1, threads }))
+  const store = new CodexThreadStore({ rootDir })
+  const records = await store.list()
+  expect(records).toHaveLength(2998)
+  expect(records.filter(record => ['native-0', 'native-1', 'native-2'].includes(record.codexThreadId))).toHaveLength(1)
+  expect(records.find(record => record.codexThreadId === 'native-2999')?.title).toBe('Thread 2999')
 })

@@ -1,3 +1,9 @@
+// Scripts are delivered as inert UTF-8 text, never as execution requests.
+const SCRIPT_ATTACHMENT_EXTENSIONS = ['.py', '.r', '.jl', '.sh', '.bash', '.zsh', '.ps1'] as const
+const SCRIPT_ATTACHMENT_EXTENSION_TYPES: Readonly<Record<string, string>> = Object.fromEntries(
+  SCRIPT_ATTACHMENT_EXTENSIONS.map(extension => [extension, 'text/plain'])
+)
+
 const IMAGE_ATTACHMENT_MIME_TYPES = [
   'image/png',
   'image/jpeg',
@@ -9,12 +15,14 @@ const IMAGE_ATTACHMENT_EXTENSION_TYPES: Readonly<Record<string, string>> = {
 }
 
 const SCIENTIFIC_ATTACHMENT_EXTENSION_TYPES: Readonly<Record<string, string>> = {
+  ...SCRIPT_ATTACHMENT_EXTENSION_TYPES,
   '.csv': 'text/csv', '.tsv': 'text/tab-separated-values', '.json': 'application/json',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.parquet': 'application/vnd.apache.parquet', '.md': 'text/markdown', '.markdown': 'text/markdown'
 }
 
 const SCIENTIFIC_ATTACHMENT_EXTENSION_VALUES = [
+  ...SCRIPT_ATTACHMENT_EXTENSIONS,
   '.csv',
   '.tsv',
   '.json',
@@ -111,6 +119,7 @@ export function workspaceAttachmentKind(
   file: Readonly<{ name: string; type?: string }>
 ): WorkspaceAttachmentKind {
   const extension = fileExtension(file.name)
+  if (SCRIPT_ATTACHMENT_EXTENSION_TYPES[extension]) return 'scientific'
   if (file.type?.trim().toLowerCase() === 'application/pdf' || extension === '.pdf') return 'pdf'
   if (SCIENTIFIC_ATTACHMENT_EXTENSIONS.has(extension)) return 'scientific'
   if (IMAGE_ATTACHMENT_EXTENSION_TYPES[extension] || file.type?.trim().toLowerCase().startsWith('image/')) return 'image'
@@ -153,4 +162,20 @@ export function workspaceAttachmentSessionDirectory(threadId: string | null): st
     .replace(/^_+|_+$/gu, '').slice(0, 80) || 'draft'
   if (owner === '.' || owner === '..') throw new Error('Attachment Session identifier does not resolve to a safe directory.')
   return `.sciforge/uploads/${owner}`
+}
+
+/** Validate newly supported scripts as text data without changing or executing bytes.
+ * Existing scientific binary formats retain their own content contracts.
+ */
+export function validateWorkspaceAttachmentBytes(file: Readonly<{ name: string }>, bytes: Uint8Array): void {
+  if (!SCRIPT_ATTACHMENT_EXTENSION_TYPES[fileExtension(file.name)]) return
+  let text: string
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
+  catch { throw new Error('Script attachments must contain UTF-8 text.') }
+  for (const character of text) {
+    const code = character.charCodeAt(0)
+    if (code < 32 && code !== 9 && code !== 10 && code !== 12 && code !== 13 || code === 127) {
+      throw new Error('Script attachments must contain text, not binary control bytes.')
+    }
+  }
 }

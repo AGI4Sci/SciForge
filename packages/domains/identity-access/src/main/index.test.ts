@@ -19,8 +19,11 @@ import {
 } from '../agent-cloud-runtime.js'
 import {
   IDENTITY_CAPABILITY_IDS,
-  IDENTITY_RESET_CONFIRMATION
+  IDENTITY_RESET_CONFIRMATION,
+  type IdentityCloudConfiguration
 } from '../contract.js'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
+import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 import {
   createDomainMainEntry,
   createIdentityCapabilityFactory,
@@ -50,6 +53,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       internalServices: {
         register: register as never,
         acquire: vi.fn() as never
@@ -60,7 +64,7 @@ describe('Identity main contributions', () => {
     expect(register).toHaveBeenCalledWith(expect.objectContaining({
       serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
       contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
-      allowedConsumerModuleIds: ['sciforge.collaboration']
+      allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.siyuan-content-space-provider']
     }))
     expect(entry.contributions[3]).toMatchObject({
       id: 'identity-access.authenticated-cloud-transport',
@@ -69,7 +73,7 @@ describe('Identity main contributions', () => {
         location: 'main.internal-service-descriptor',
         serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
         contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
-        allowedConsumerModuleIds: ['sciforge.collaboration']
+        allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.siyuan-content-space-provider']
       }
     })
     expect(register).toHaveBeenCalledWith(expect.objectContaining({
@@ -147,11 +151,34 @@ describe('Identity main contributions', () => {
     })
   })
 
+  it('commits linked display names to Cloud before local acknowledgement and preserves local state on failure', async () => {
+    const account = { userId: 'local-user', username: 'Old', cloudIdentity: { cloudUserId: 'usr_CloudUser000001' } }
+    const renameProfile = vi.fn(async () => undefined)
+    const renameAccount = vi.fn(() => ({ status: 'available' }))
+    const definitions = createIdentityCapabilityFactory({
+      defineCapability: (definition) => definition,
+      getService: () => ({ listAccounts: () => ({ accounts: [account] }), renameAccount }) as never,
+      getCloudRuntime: () => ({ renameProfile }) as never,
+      ...cloudConfigurationOptions()
+    }).createDefinitions() as IdentityCapabilityOptions[]
+    const rename = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.renameAccount)!
+    const context = { caller: { audience: 'ui' as const }, assertPrincipalCurrent: vi.fn() }
+    renameProfile.mockRejectedValueOnce(new Error('Cloud offline'))
+    await expect(rename.handler({ userId: account.userId, username: 'New' }, context)).rejects.toThrow('Cloud offline')
+    expect(renameAccount).not.toHaveBeenCalled()
+    await rename.handler({ userId: account.userId, username: ' New ' }, context)
+    expect(renameProfile).toHaveBeenLastCalledWith('usr_CloudUser000001', 'New')
+    expect(renameAccount).toHaveBeenCalledWith(account.userId, 'New')
+    expect(context.assertPrincipalCurrent).toHaveBeenCalledOnce()
+    expect(renameProfile.mock.invocationCallOrder.at(-1)!).toBeLessThan(renameAccount.mock.invocationCallOrder[0]!)
+  })
+
   it('declares one UI-only global capability set with governed mutation policies', () => {
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
       getService: () => ({}) as never,
-      getCloudRuntime: () => ({}) as never
+      getCloudRuntime: () => ({}) as never,
+      ...cloudConfigurationOptions()
     }).createDefinitions() as IdentityCapabilityOptions[]
     expect(definitions.map((definition) => definition.id)).toEqual(Object.values(IDENTITY_CAPABILITY_IDS))
     for (const definition of definitions) {
@@ -168,6 +195,7 @@ describe('Identity main contributions', () => {
     )).map(({ id }) => id)).toEqual([
       IDENTITY_CAPABILITY_IDS.createAccount,
       IDENTITY_CAPABILITY_IDS.selectAccount,
+      IDENTITY_CAPABILITY_IDS.deleteAccount,
       IDENTITY_CAPABILITY_IDS.exitAccount,
       IDENTITY_CAPABILITY_IDS.backupAndReset,
       IDENTITY_CAPABILITY_IDS.cloudLogin,
@@ -186,6 +214,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -219,6 +248,61 @@ describe('Identity main contributions', () => {
     entry.contributions[1]!.onDispose?.()
   })
 
+  it('deletes Local Accounts through one governed capability and rejects unknown ids', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-delete-'))
+    roots.push(root)
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
+      internalServices: memoryInternalServices(),
+      defineCapability: (definition) => definition
+    })
+    const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
+    const provider = entry.contributions[1]!.value as { current(): unknown }
+    const definitions = factory.createDefinitions() as unknown as IdentityCapabilityOptions[]
+    const definition = (id: string): IdentityCapabilityOptions =>
+      definitions.find((candidate) => candidate.id === id)!
+    const create = definition(IDENTITY_CAPABILITY_IDS.createAccount)
+    const deleteAccount = definition(IDENTITY_CAPABILITY_IDS.deleteAccount)
+    const context = { caller: { audience: 'ui' as const }, assertPrincipalCurrent: vi.fn() }
+
+    const aliceResult = await create.handler({ username: 'Alice' }, context)
+    const alice = (aliceResult.output as { currentAccount: { userId: string } }).currentAccount
+    const bobResult = await create.handler({ username: 'Bob' }, context)
+    const bob = (bobResult.output as { currentAccount: { userId: string } }).currentAccount
+
+    // Local capability handlers are synchronous, so an unknown id throws (rather
+    // than rejecting) with the typed validation code.
+    expect(() => deleteAccount.handler(
+      { accountId: '00000000-0000-4000-8000-000000000000' },
+      context
+    )).toThrow(expect.objectContaining({ code: 'account-not-found' }))
+
+    const deletedBob = await deleteAccount.handler(
+      { accountId: bob.userId },
+      {
+        caller: { audience: 'ui' },
+        assertPrincipalCurrent: vi.fn(() => {
+          throw codedError('principal_changed')
+        })
+      }
+    )
+    expect(deletedBob.output).toMatchObject({
+      status: 'available',
+      accountCount: 1,
+      currentAccount: { userId: alice.userId }
+    })
+
+    const deletedLast = await deleteAccount.handler({ accountId: alice.userId }, context)
+    expect(deletedLast.output).toMatchObject({ accountCount: 0, currentAccount: null })
+    expect(provider.current()).toBeUndefined()
+
+    entry.contributions[0]!.onDispose?.()
+    entry.contributions[1]!.onDispose?.()
+  })
+
   it('acknowledges only committed Host Principal transitions and keeps no-op repeats valid', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-transition-'))
     roots.push(root)
@@ -226,6 +310,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -306,7 +391,8 @@ describe('Identity main contributions', () => {
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
       getService: () => ({ createAccount: operation }) as never,
-      getCloudRuntime: () => ({}) as never
+      getCloudRuntime: () => ({}) as never,
+      ...cloudConfigurationOptions()
     }).createDefinitions() as IdentityCapabilityOptions[]
     const create = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.createAccount)!
     const failure = codedError('principal_provider_failed')
@@ -332,7 +418,8 @@ describe('Identity main contributions', () => {
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
       getService: () => ({ backupAndReset: reset }) as never,
-      getCloudRuntime: () => ({}) as never
+      getCloudRuntime: () => ({}) as never,
+      ...cloudConfigurationOptions()
     }).createDefinitions() as IdentityCapabilityOptions[]
     const capability = definitions.find(
       ({ id }) => id === IDENTITY_CAPABILITY_IDS.backupAndReset
@@ -384,7 +471,8 @@ describe('Identity main contributions', () => {
     const definitions = createIdentityCapabilityFactory({
       defineCapability: (definition) => definition,
       getService: () => ({}) as never,
-      getCloudRuntime: () => runtime as never
+      getCloudRuntime: () => runtime as never,
+      ...cloudConfigurationOptions()
     }).createDefinitions() as IdentityCapabilityOptions[]
     const inspect = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudInspect)!
     const login = definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudLogin)!
@@ -428,6 +516,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -451,6 +540,7 @@ describe('Identity main contributions', () => {
       expect(() => createDomainMainEntry({
         getUserDataDir: () => '/private/tmp/sciforge-identity-missing-device',
         ...(getDeviceId ? { getDeviceId } : {}),
+        packageSettings: memoryPackageSettings(),
         internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
       })).toThrow()
@@ -466,6 +556,7 @@ describe('Identity main contributions', () => {
         expect(() => createDomainMainEntry({
           getUserDataDir: () => '/private/tmp/sciforge-identity-missing-secrets',
           getDeviceId: () => 'device-1',
+          packageSettings: memoryPackageSettings(),
           internalServices: memoryInternalServices(),
           defineCapability: (definition) => definition
         })).toThrow('Identity requires the Host package-scoped secret store')
@@ -483,6 +574,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
     })
@@ -507,6 +599,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       getAppVersion,
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -525,6 +618,112 @@ describe('Identity main contributions', () => {
     expect(runtime.close).toHaveBeenCalledOnce()
   })
 
+  it('loads saved Cloud settings at activation and reconfigures the active runtime on save', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-cloud-settings-'))
+    roots.push(root)
+    const settings = memoryPackageSettings()
+    await settings.write({
+      schemaVersion: 1,
+      oidcIssuer: 'https://identity.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://cloud.example.test'
+    }, 0)
+    const snapshot = {
+      identity: { state: 'signed-out' as const },
+      device: { state: 'signed-out' as const },
+      devices: [],
+      revision: 'cloud-1'
+    }
+    const reconfigure = vi.fn(async (next: {
+      schemaVersion: number
+      oidcIssuer?: string
+      cloudBaseUrl?: string
+    }) => {
+      boundSettings = next
+      return snapshot
+    })
+    let boundSettings: {
+      schemaVersion: number
+      oidcIssuer?: string
+      cloudBaseUrl?: string
+    } = {
+      schemaVersion: 1,
+      oidcIssuer: 'https://identity.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://cloud.example.test'
+    }
+    const runtime = runtimeDouble(Promise.resolve(snapshot), snapshot)
+    const runtimeValue = runtime.value as CloudIdentityRuntime & {
+      reconfigure: typeof reconfigure
+      configuredSettings: () => typeof boundSettings
+    }
+    runtimeValue.reconfigure = reconfigure
+    runtimeValue.configuredSettings = () => boundSettings
+    const createRuntime = vi.spyOn(CloudIdentityRuntime, 'create').mockResolvedValueOnce(runtime.value)
+    const entry = createDomainMainEntry({
+      getUserDataDir: () => root,
+      getDeviceId: () => 'device-1',
+      packageSecrets: memoryPackageSecrets(),
+      packageSettings: settings,
+      getAppVersion: () => '1.0.0',
+      internalServices: memoryInternalServices(),
+      defineCapability: (definition) => definition
+    })
+    const lifecycle = entry.contributions[2]!.value as {
+      activate(context: unknown): Promise<unknown>
+    }
+    const returnedDisposer = await lifecycle.activate(lifecycleContext(root)) as () => void
+
+    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      settings: {
+        schemaVersion: 1,
+        oidcIssuer: 'https://identity.example.test/realms/SciForge',
+        cloudBaseUrl: 'https://cloud.example.test'
+      }
+    }))
+
+    const factory = entry.contributions[0]!.value as ReturnType<typeof createIdentityCapabilityFactory>
+    const configure = (factory.createDefinitions() as IdentityCapabilityOptions[]).find(
+      ({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudConfigure
+    )!
+    const result = await configure.handler({
+      oidcIssuer: 'https://saved.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://saved-cloud.example.test'
+    }, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent: vi.fn()
+    })
+
+    expect(reconfigure).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      oidcIssuer: 'https://saved.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://saved-cloud.example.test'
+    })
+    expect(result.output).toMatchObject({
+      configured: true,
+      missing: [],
+      invalid: [],
+      source: { oidcIssuer: 'settings', cloudBaseUrl: 'settings' },
+      storage: 'available'
+    })
+    await expect(settings.read()).resolves.toMatchObject({
+      revision: 2,
+      value: {
+        schemaVersion: 1,
+        oidcIssuer: 'https://saved.example.test/realms/SciForge',
+        cloudBaseUrl: 'https://saved-cloud.example.test'
+      }
+    })
+
+    await configure.handler({
+      oidcIssuer: 'https://saved.example.test/realms/SciForge',
+      cloudBaseUrl: 'https://saved-cloud.example.test'
+    }, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent: vi.fn()
+    })
+    expect(reconfigure).toHaveBeenCalledOnce()
+    returnedDisposer()
+  })
+
   it('waits for initialization before disposing an in-flight activation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sciforge-identity-lifecycle-'))
     roots.push(root)
@@ -535,6 +734,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       getAppVersion: () => '1.0.0',
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -568,6 +768,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       getAppVersion: () => '1.0.0',
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -611,6 +812,7 @@ describe('Identity main contributions', () => {
       getUserDataDir: () => root,
       getDeviceId: () => 'device-1',
       packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
       getAppVersion: () => '1.0.0',
       internalServices: memoryInternalServices(),
       defineCapability: (definition) => definition
@@ -656,6 +858,7 @@ describe('Identity main contributions', () => {
         getUserDataDir: () => root,
         getDeviceId: () => 'device-1',
         packageSecrets: memoryPackageSecrets(),
+      packageSettings: memoryPackageSettings(),
         getAppVersion: () => '1.0.0',
         internalServices: memoryInternalServices(),
         defineCapability: (definition) => definition
@@ -712,6 +915,59 @@ function memoryPackageSecrets() {
   }
 }
 
+function memoryPackageSettings(): DomainMainPackageSettingsHost {
+  let revision = 0
+  let value: DomainPackageJsonValue = null
+  const snapshot = () => Object.freeze({ revision, value: value === null ? null : structuredClone(value) })
+  return {
+    read: async () => snapshot(),
+    write: async (next, expectedRevision) => {
+      if (expectedRevision !== revision) throw new Error('Package settings revision conflict.')
+      revision += 1
+      value = structuredClone(next)
+      return snapshot()
+    },
+    clear: async (expectedRevision) => {
+      if (expectedRevision !== revision) throw new Error('Package settings revision conflict.')
+      revision += 1
+      value = null
+      return snapshot()
+    }
+  }
+}
+
+function cloudConfigurationOptions() {
+  return {
+    getCloudConfiguration: async () => cloudConfigurationFixture(),
+    configureCloud: async (input: {
+      oidcIssuer: string | null
+      cloudBaseUrl: string | null
+    }) => cloudConfigurationFixture(input)
+  }
+}
+
+function cloudConfigurationFixture(
+  input: Readonly<{ oidcIssuer: string | null; cloudBaseUrl: string | null }> = {
+    oidcIssuer: 'https://identity.example.test/realms/SciForge',
+    cloudBaseUrl: 'https://cloud.example.test'
+  }
+): IdentityCloudConfiguration {
+  const source = input.oidcIssuer ? 'settings' as const : null
+  const cloudSource = input.cloudBaseUrl ? 'settings' as const : null
+  return {
+    configured: Boolean(input.oidcIssuer && input.cloudBaseUrl),
+    oidcIssuer: input.oidcIssuer,
+    cloudBaseUrl: input.cloudBaseUrl,
+    source: { oidcIssuer: source, cloudBaseUrl: cloudSource },
+    missing: [
+      ...(input.oidcIssuer ? [] : ['oidcIssuer' as const]),
+      ...(input.cloudBaseUrl ? [] : ['cloudBaseUrl' as const])
+    ],
+    invalid: [],
+    storage: 'available'
+  }
+}
+
 function lifecycleContext(root: string) {
   return {
     userDataDir: root,
@@ -750,7 +1006,8 @@ function runtimeDouble(
       close,
       snapshot: vi.fn(() => snapshot),
       semanticRevision: vi.fn(() => 'cloud-1'),
-      subscribe: vi.fn(() => () => undefined)
+      subscribe: vi.fn(() => () => undefined),
+      configuredSettings: vi.fn(() => null)
     } as unknown as CloudIdentityRuntime
   }
 }

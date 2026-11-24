@@ -60,6 +60,11 @@ type CapturedError = {
   message: string
   name?: string
   code?: string
+  /**
+   * Distinct final reason when a retried upstream failure gave up, for example
+   * `upstream_http_429_exhausted` while `code` stays `upstream_http_429`.
+   */
+  reasonCode?: string
   timestamp: string
 }
 
@@ -216,10 +221,12 @@ export class ModelRouterTraceSession {
   recordError(error: unknown): void {
     this.responseMetrics.error(error)
     const record = asRecord(error)
+    const reasonCode = capturedReasonCode(record)
     this.capturedError = {
       message: error instanceof Error ? error.message : String(error),
       ...(error instanceof Error ? { name: error.name } : {}),
       ...(typeof record?.code === 'string' ? { code: record.code } : {}),
+      ...(reasonCode ? { reasonCode } : {}),
       timestamp: this.now().toISOString()
     }
   }
@@ -317,7 +324,8 @@ export class ModelRouterTraceSession {
           stage: 'model-router',
           message: this.capturedError.message,
           ...(this.capturedError.name ? { name: this.capturedError.name } : {}),
-          ...(this.capturedError.code ? { code: this.capturedError.code } : {})
+          ...(this.capturedError.code ? { code: this.capturedError.code } : {}),
+          ...(this.capturedError.reasonCode ? { reasonCode: this.capturedError.reasonCode } : {})
         }
       })
     }
@@ -582,4 +590,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+/** The router carries the distinct final reason in its error details. */
+function capturedReasonCode(error: Record<string, unknown> | undefined): string | undefined {
+  const reasonCode = asRecord(error?.details)?.reasonCode
+  return typeof reasonCode === 'string' && reasonCode.trim() ? reasonCode : undefined
 }

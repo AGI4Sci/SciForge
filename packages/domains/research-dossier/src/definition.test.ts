@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRACT,
   RESEARCH_DOSSIER_RENDERER_RESOURCE_NAVIGATION_CONTRACT,
   RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRACT,
   domainPackageDefinition
@@ -26,4 +27,10 @@ test('research dossier is renderer-only and owns one right-panel surface', () =>
   assert.equal(domainPackageDefinition.entrypoints[0]?.contributions.filter(
     ({ kind }) => kind === 'renderer.workbench-toolbar-action'
   ).length, 1)
+})
+
+
+test('audit shell is a governed extension distinct from the research content slot', () => {
+  assert.deepEqual(RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRACT,{location:'research.audit-workspace',order:0,sideContributionId:'research-dossier.workbench-right-panel'})
+  assert.equal(domainPackageDefinition.entrypoints[0].contributions.filter(item=>item.kind==='renderer.extension').length,1)
 })

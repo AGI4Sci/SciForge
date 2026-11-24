@@ -1,6 +1,8 @@
-import React from 'react'
+// @vitest-environment happy-dom
+import React, { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { MessageTimeline } from './MessageTimeline'
 import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
 import i18n from '../../i18n'
@@ -33,8 +35,9 @@ it('keeps submitted answers between the preceding and subsequent runtime message
     activeThreadId="thread" live="LiveFollowupMarker" liveReasoning="" busyOverride runtimeConnection="ready"
     onRetryConnection={() => {}} onOpenSettings={() => {}}
   />)
-  const markers = ['BeforeQuestionMarker', 'SelectScopeMarker', 'AnsweredScopeMarker', 'AfterQuestionMarker', 'FollowupToolMarker', 'LiveFollowupMarker']
+  const markers = ['BeforeQuestionMarker', 'SelectScopeMarker', 'AnsweredScopeMarker', 'AfterQuestionMarker', 'LiveFollowupMarker']
   for (const marker of markers) expect(html).toContain(marker)
+  expect(html).not.toContain('FollowupToolMarker')
   for (let i = 1; i < markers.length; i++) expect(html.indexOf(markers[i - 1])).toBeLessThan(html.indexOf(markers[i]))
 })
 
@@ -88,4 +91,34 @@ it.each([true, false])('renders a generated image before subsequent questions wh
   />)
   expect(html).toContain('InlineFigureMarker')
   expect(html.indexOf('InlineFigureMarker')).toBeLessThan(html.indexOf('AfterImageQuestionMarker'))
+})
+
+it('allows a side conversation questionnaire to open using its owning transcript', async () => {
+  const { useChatStore } = await import('../../store/chat-store')
+  const previous = useChatStore.getState()
+  const block = { id: 'side-question', kind: 'user_input' as const, requestId: 'side-request',
+    questions: [], status: 'pending' as const }
+  const presenter = installedRendererContributions.userInput!
+  const render = vi.spyOn(presenter, 'render')
+  useChatStore.setState({
+    blocks: [],
+    sideConversations: { child: { ...previous.sideConversations.child, threadId: 'child', blocks: [block] } }
+  })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  try {
+    await act(async () => root.render(<MessageTimeline blocks={[block]}
+      activeThreadId="child" live="" liveReasoning="" busyOverride runtimeConnection="ready"
+      onRetryConnection={() => {}} onOpenSettings={() => {}} />))
+    expect(render).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'side-request', active: true, autoOpen: true }))
+    const trigger = [...container.querySelectorAll('button')].find((button) =>
+      button.textContent === i18n.t('userDecisions:answerQuestions', { count: 0 }))
+    expect(trigger).toBeDefined()
+    await act(async () => trigger!.click())
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  } finally {
+    await act(async () => root.unmount())
+    render.mockRestore()
+    useChatStore.setState(previous)
+  }
 })

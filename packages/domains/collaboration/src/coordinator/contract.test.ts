@@ -260,6 +260,7 @@ test('the one Collaboration activation accepts only an exact Project focus and a
 
 test('Project create result binds one fresh ordinary Session and explicit UI activation', () => {
   const result = {
+    initializationState: 'ready' as const,
     createIntentId: 'pct_ProjectCreate001',
     createdProjectId: 'prj_Project000001',
     workspace: fixture,
@@ -271,6 +272,7 @@ test('Project create result binds one fresh ordinary Session and explicit UI act
     activationRequestId: 'pca_Activation0001'
   }
   const parsed = projectCoordinatorProjectCreateResultSchema.parse(result)
+  assert.ok(parsed.initializationState === 'ready')
   assert.equal(parsed.createdProjectId, result.createdProjectId)
   assert.deepEqual(parsed.coordinatorSession, result.coordinatorSession)
   assert.equal(parsed.activationRequestId, result.activationRequestId)
@@ -286,6 +288,21 @@ test('Project create result binds one fresh ordinary Session and explicit UI act
       projectId: 'prj_OtherProject001'
     }
   }), /bind the exact new Project/u)
+})
+
+test('Project create pending result exposes only a real Cloud draft and bounded local recovery reason', () => {
+  const pending = {
+    initializationState: 'session_pending',
+    createIntentId: 'pct_ProjectCreate001',
+    createdProjectId: 'prj_Project000001',
+    workspace: fixture,
+    reason: 'runtime_not_found'
+  }
+  assert.deepEqual(projectCoordinatorProjectCreateResultSchema.parse(pending), { ...pending, workspace: projectCoordinatorWorkspaceSchema.parse(fixture) })
+  assert.throws(() => projectCoordinatorProjectCreateResultSchema.parse({ ...pending, reason: 'handler_failed: private JSON' }))
+  assert.throws(() => projectCoordinatorProjectCreateResultSchema.parse({ ...pending, activationRequestId: 'pca_Activation0001' }))
+  assert.throws(() => projectCoordinatorProjectCreateResultSchema.parse({ ...pending, coordinatorSession: { projectId: pending.createdProjectId, runtimeId: 'missing', threadId: 'fake' } }))
+  assert.throws(() => projectCoordinatorProjectCreateResultSchema.parse({ ...pending, createdProjectId: 'prj_OtherProject001' }))
 })
 
 test('Project delete HCI selects only one Project identity and cannot claim Cloud authority facts', () => {

@@ -1,0 +1,154 @@
+/*
+ * ui-affordance.css
+ *
+ * Global affordances shared by every renderer surface. This file is imported
+ * from `src/renderer/src/index.css` (the Tailwind entry) rather than from
+ * `main.tsx`, so Tailwind can hoist the `@layer base` block into the emitted
+ * base layer. That placement is what makes every existing utility win:
+ * base < components < utilities, and the unlayered legacy stylesheets
+ * (base-shell.css, markdown-code.css, the domain packages' own CSS) are
+ * emitted after Tailwind and therefore keep their explicit contracts too.
+ *
+ * Keep radii on this ladder for new work. The values mirror what the shell
+ * already uses; no existing radius is changed by this file.
+ */
+
+:root {
+  --ds-radius-xs: 4px;
+  --ds-radius-sm: 6px;
+  --ds-radius-md: 8px;
+  --ds-radius-lg: 10px;
+  --ds-radius-xl: 12px;
+  --ds-radius-2xl: 14px;
+  --ds-radius-3xl: 18px;
+  --ds-radius-pill: 999px;
+}
+
+/*
+ * Continuous-curvature (squircle) corners.
+ *
+ * `corner-shape` only reshapes an existing `border-radius`; an element without
+ * a radius is left completely untouched (`border-radius: 0` makes the property
+ * a no-op), which is why the universal selector is safe here. Everything keeps
+ * whatever radius it already has - this changes the curvature *shape*, never
+ * the size of a corner.
+ *
+ * `@supports` keeps engines without CSS Borders 4 (Firefox, WebKit) on the
+ * plain circular fallback, so the block is inert there instead of being an
+ * invalid declaration that could affect parsing.
+ *
+ * Chromium 148 is bundled with this Electron build; `corner-shape` has shipped
+ * since Chromium 139 (Chrome/Edge 139, 2025-08), so the squircle path is the
+ * live one in the desktop app.
+ */
+@supports (corner-shape: squircle) {
+  *,
+  *::before,
+  *::after {
+    corner-shape: squircle;
+  }
+}
+
+@layer base {
+  /*
+   * Button affordance.
+   *
+   * Every real button gets a resting border and a surface that is distinct
+   * from the page, a hover tint, a pressed state, and a keyboard focus ring.
+   * The rule intentionally does not set padding, width, height, or
+   * `aspect-ratio`: square icon-only recipes (`h-8 w-8`, `h-7 w-7`, ...) stay
+   * 1:1 and are never stretched into pills. `border-box` sizing comes from
+   * Tailwind's preflight, so the 1px border does not change layout.
+   *
+   * Components keep control: utilities (`bg-*`, `border-*`, `rounded-*`,
+   * `hover:*`, `focus-visible:*`) are emitted after the base layer and win over
+   * every declaration below, and the unlayered legacy stylesheets win on the
+   * equal-specificity properties they own.
+   */
+  button,
+  [role='button'] {
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-md);
+    background-color: var(--ds-surface-card);
+    background-image: none;
+    color: var(--ds-text);
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  button:hover:not(:disabled),
+  [role='button']:hover:not([aria-disabled='true']) {
+    border-color: var(--ds-border-strong);
+    background-color: var(--ds-surface-hover);
+  }
+
+  button:active:not(:disabled),
+  [role='button']:active:not([aria-disabled='true']) {
+    background-color: var(--ds-surface-hover);
+    box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.18);
+  }
+
+  button:focus-visible,
+  [role='button']:focus-visible {
+    outline: 2px solid var(--ds-accent);
+    outline-offset: 2px;
+  }
+
+  button:disabled,
+  [role='button'][aria-disabled='true'] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* A disabled control never reports hover feedback. */
+  button:disabled:hover,
+  [role='button'][aria-disabled='true']:hover {
+    border-color: var(--ds-border);
+    background-color: var(--ds-surface-card);
+    box-shadow: none;
+  }
+
+  /*
+   * Explicit opt-outs for chrome that owns its look in an unlayered legacy
+   * stylesheet (base-shell.css). Those classes only declare a hover background,
+   * so without these lines the base rule would leave them with a resting
+   * surface but no visible border - a half-styled pill. Keeping the resting
+   * state transparent preserves the existing hover-reveal contract.
+   *
+   * The window control buttons also opt out of the base radius: they are
+   * full-bleed title-bar hits and must stay square.
+   */
+  .toolbar-action,
+  .ds-windows-menu-button,
+  .ds-windows-menu-item,
+  .ds-window-control-btn,
+  .write-pdf-icon-button,
+  [role='menu'] button,
+  [role='menuitem'],
+  [role='listbox'] button {
+    border-color: transparent;
+    background-color: transparent;
+  }
+
+  .ds-window-control-btn {
+    border-radius: 0;
+  }
+}
+
+@layer components {
+  /*
+   * Explicit opt-out class for controls that are intentionally plain: sidebar
+   * navigation rows, title-bar chrome, and menu items. Apply it to the button
+   * element itself when the surrounding surface (not a border) is what makes
+   * the control discoverable. Hover/focus utilities still style the control.
+   */
+  .ds-button-plain {
+    border-width: 0;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+  }
+}

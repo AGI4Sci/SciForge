@@ -419,6 +419,7 @@ describe('Coordinator authority epoch', () => {
       },
       requiredAssurance: 'basic',
       prompt: 'Confirm how to interpret the ambiguous sample.',
+      interaction: {kind:'clarification'},
       expiresAt: TEST_LATER_TIMESTAMP
     }
     expect(restRequestSchema.safeParse(humanNeeded).success).toBe(true)

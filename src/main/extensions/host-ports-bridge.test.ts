@@ -110,7 +110,7 @@ describe('development plugin host ports bridge', () => {
     const { service, registry, executions } = await createPortsFixture({ ports: ['artifacts.commit', 'artifacts.read'] })
     try {
       const definition = registry.require('portsprobe.workspace')
-      const caller = { caller: { workspaceId: '/ws/one' } } as never
+      const caller = { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never
       await expect(definition.handler(
         { workspaceRoot: '/ws/foreign', operation: 'artifacts.commit', portInput: { x: 1 } }, caller))
         .rejects.toThrow('rejects a workspaceRoot outside the authenticated caller workspace')
@@ -141,7 +141,7 @@ describe('development plugin host ports bridge', () => {
     try {
       const definition = registry.require('portsprobe.workspace')
       const result = await definition.handler(
-        { operation: 'artifacts.read', portInput: { id: 7 } }, { caller: { workspaceId: '/ws/one' } } as never)
+        { operation: 'artifacts.read', portInput: { id: 7 } }, { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never)
       expect(result.output).toMatchObject({ ok: true })
       expect(executions).toEqual([{ operation: 'artifacts.read', input: { id: 7 }, workspaceId: '/ws/one' }])
     } finally {
@@ -152,7 +152,7 @@ describe('development plugin host ports bridge', () => {
   it('keeps the ports bridge wired across a candidate hot-swap generation change', async () => {
     const f = await createPortsFixture({ ports: ['artifacts.read'] })
     try {
-      const caller = { caller: { workspaceId: '/ws/one' } } as never
+      const caller = { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never
       const first = await f.registry.require('portsprobe.workspace').handler({ operation: 'artifacts.read' }, caller)
       expect(first.output).toMatchObject({ ok: true })
 
@@ -189,7 +189,7 @@ describe('development plugin host ports bridge', () => {
     try {
       const definition = registry.require('portsprobe.workspace')
       const result = await definition.handler(
-        { operation: 'artifacts.delete' }, { caller: { workspaceId: '/ws/one' } } as never)
+        { operation: 'artifacts.delete' }, { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never)
       expect(result.output).toMatchObject({ ok: false, code: 'unsupported_operation' })
       expect(executions).toEqual([])
     } finally {
@@ -202,7 +202,7 @@ describe('development plugin host ports bridge', () => {
     try {
       const definition = registry.require('portsprobe.workspace')
       const result = await definition.handler(
-        { operation: 'artifacts.commit' }, { caller: { workspaceId: '/ws/one' } } as never)
+        { operation: 'artifacts.commit' }, { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never)
       expect(result.output).toMatchObject({ ok: false, code: 'unsupported_operation' })
       expect(executions).toEqual([])
     } finally {
@@ -216,7 +216,7 @@ describe('development plugin host ports bridge', () => {
       const definition = registry.require('portsprobe.workspace')
       const result = await definition.handler(
         { operation: 'artifacts.commit', scopeRoot: '/ws/two' },
-        { caller: { workspaceId: '/ws/one' } } as never)
+        { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never)
       expect(result.output).toMatchObject({ ok: false, code: 'scope_mismatch' })
       expect(executions).toEqual([])
     } finally {
@@ -246,7 +246,7 @@ describe('development plugin host ports bridge', () => {
     try {
       const definition = registry.require('portsprobe.workspace')
       const result = await definition.handler(
-        { operation: 'artifacts.commit' }, { caller: { workspaceId: '/ws/one' } } as never)
+        { operation: 'artifacts.commit' }, { caller: { workspaceId: '/ws/one' }, assertPrincipalCurrent: () => {} } as never)
       expect(result.output).toMatchObject({ ok: false, code: 'unsupported_operation', message: 'executor refused' })
     } finally {
       await service.dispose()

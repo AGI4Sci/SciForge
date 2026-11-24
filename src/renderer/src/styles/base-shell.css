@@ -5,6 +5,33 @@
   --ds-sidebar-rail-width: 56px;
   --ds-write-titlebar-extra-inset: 0px;
   --ds-ui-scale: 1;
+
+  /*
+   * Typography system: one family stack for the whole product plus a single
+   * 12-step size ladder. Components use the Tailwind utilities (text-ds-md),
+   * stylesheets use the variables; both resolve here.
+   */
+  --ds-font-sans:
+    system-ui, -apple-system, 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI',
+    'Microsoft YaHei', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
+  --ds-font-display: var(--ds-font-sans);
+  --ds-font-mono:
+    'Cascadia Code', 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', Consolas, 'Liberation Mono', monospace;
+  /* Long-form writing surfaces keep a reading face by design. */
+  --ds-font-document: Georgia, Charter, 'Iowan Old Style', 'Noto Serif SC', serif;
+
+  --ds-text-2xs: 11px;
+  --ds-text-xs: 12px;
+  --ds-text-sm: 13px;
+  --ds-text-md: 14px;
+  --ds-text-lg: 15px;
+  --ds-text-xl: 16px;
+  --ds-text-2xl: 18px;
+  --ds-text-3xl: 20px;
+  --ds-text-4xl: 22px;
+  --ds-text-5xl: 24px;
+  --ds-text-6xl: 28px;
+  --ds-text-7xl: 32px;
   --bg-app: #faf9f5;
   --bg-sidebar: #f0eee6;
   --bg-canvas: #faf9f5;
@@ -324,7 +351,7 @@ html {
   border-radius: 6px;
   padding: 0 9px;
   color: var(--ds-text-muted);
-  font-size: 14px;
+  font-size: var(--ds-text-lg);
   font-weight: 500;
   line-height: 1;
   transition:
@@ -370,7 +397,7 @@ html {
   border-radius: 6px;
   padding: 7px 9px;
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-text-md);
   line-height: 1.25;
   text-align: left;
   transition:
@@ -385,7 +412,7 @@ html {
 .ds-windows-menu-shortcut {
   flex: 0 0 auto;
   color: var(--ds-text-faint);
-  font-size: 12px;
+  font-size: var(--ds-text-sm);
 }
 
 .ds-windows-menu-separator {
@@ -451,8 +478,8 @@ body {
   @apply antialiased;
   position: relative;
   isolation: isolate;
-  font-family:
-    'SF Pro Text', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--ds-font-sans);
+  font-size: var(--ds-text-md);
   background-color: var(--ds-bg-main);
   color: var(--ds-text);
   user-select: none;
@@ -2308,26 +2335,80 @@ pre {
   max-width: min(220px, 55%);
 }
 
+/*
+ * The toolbar rail is the outermost column of the workbench content row: it is
+ * rendered after the right panel, so opening or closing that panel never moves
+ * it. The slot collapses while empty (first paint, non-chat routes).
+ */
+.ds-workbench-toolbar-rail-host {
+  display: flex;
+  flex: 0 0 var(--ds-sidebar-rail-width);
+  width: var(--ds-sidebar-rail-width);
+  min-height: 0;
+  align-self: stretch;
+}
+
+.ds-workbench-toolbar-rail-host:empty {
+  display: none;
+}
+
+/*
+ * Vertical rail: icon-only pills stacked top to bottom. Labels stay in the
+ * accessible name and tooltip; the overflow menu keeps full label rows.
+ */
 .chat-workbench-topbar {
   position: relative;
   display: flex;
-  flex: 1 1 0%;
+  flex: 1 1 auto;
+  flex-direction: column;
   align-items: center;
   gap: 4px;
-  min-width: 44px;
+  width: 100%;
+  min-height: 0;
+  padding: 8px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-left: 1px solid var(--ds-sidebar-divider);
+  background: var(--ds-bg-sidebar);
+  scrollbar-width: none;
+}
+
+.chat-workbench-topbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Menu presentation: one trigger pill a host embeds in its own row. */
+.chat-workbench-toolbar-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .toolbar-action {
   position: relative;
   display: inline-flex;
-  flex: 0 0 44px;
+  flex: 0 0 auto;
   width: 44px;
   height: 44px;
   align-items: center;
   justify-content: center;
+  gap: 0;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 12px;
   color: var(--ds-text-muted);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+/*
+ * The rail is icon + tooltip: labels leave the layout while keeping the full
+ * string in the accessible name. Only the overflow menu re-enables them.
+ */
+.toolbar-action-label {
+  display: none;
+  min-width: 0;
 }
 
 .toolbar-action:hover, .toolbar-action.is-active {
@@ -2343,18 +2424,36 @@ pre {
 
 .toolbar-action:disabled { opacity: 0.45; cursor: not-allowed; }
 .toolbar-action.hidden { display: none; }
-.toolbar-tail { flex: 0 0 44px; width: 44px; }
+.toolbar-tail {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  /* Free space collects above the tail: the customizer/"more" pill sits at the
+     bottom of the rail instead of floating in the icon stack. */
+  margin-top: auto;
+}
 .toolbar-customize > span { display: none; }
 .toolbar-menu-action.toolbar-customize > span { display: inline; }
 
+/*
+ * The hidden measurement columns carry one pill per action plus the "More"
+ * tail variant. Heights are read from them, so the fit never depends on how
+ * many actions the rail currently renders.
+ */
 .toolbar-measure {
   position: absolute;
-  width: 100%;
+  top: 0;
+  left: 0;
   display: flex;
-  visibility: hidden;
-  pointer-events: none;
+  width: var(--ds-sidebar-rail-width);
+  flex-direction: column;
+  gap: 4px;
   height: 0;
   overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .toolbar-overflow {
@@ -2377,7 +2476,17 @@ pre {
   padding: 10px 12px;
   border-radius: 10px;
   text-align: left;
-  font-size: 14px;
+  font-size: var(--ds-text-lg);
+}
+
+/* Menu rows always show the complete label, wrapping instead of truncating. */
+.toolbar-menu-action .toolbar-action-label {
+  display: block;
+  flex: 1 1 auto;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .toolbar-attention {
@@ -2754,12 +2863,12 @@ pre {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
-    font-size: 15px;
+    font-size: var(--ds-text-xl);
     line-height: 1.25;
   }
 
   .ds-empty-hero-card-sub {
-    font-size: 13px;
+    font-size: var(--ds-text-md);
     line-height: 1.45;
   }
 
@@ -2772,7 +2881,7 @@ pre {
 
   .ds-empty-hero-sub {
     margin-top: 0.85rem;
-    font-size: 14px;
+    font-size: var(--ds-text-lg);
     line-height: 1.55;
   }
 }

@@ -20,9 +20,6 @@
     "paths": {
       "@sciforge/domain-sdk/*": [
         "../../domain-sdk/src/*"
-      ],
-      "@sciforge/domain-content-space/contract": [
-        "../content-space/src/contract.ts"
       ]
     },
     "jsx": "react-jsx"

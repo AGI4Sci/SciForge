@@ -53,7 +53,7 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
   const resumeWorkButton = canResumeWork ? (
     <button
       type="button"
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/12 px-3 py-1.5 text-[12px] font-semibold text-amber-950 transition hover:bg-amber-500/22 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-100"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/12 px-3 py-1.5 text-ds-sm font-semibold text-amber-950 transition hover:bg-amber-500/22 disabled:cursor-not-allowed disabled:opacity-60 dark:text-amber-100"
       title={deliveryReason || t('resumeWorkHint')}
       aria-label={t('resumeWork')}
       disabled={busy}
@@ -96,12 +96,12 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
           <>
           <div className="min-w-0 flex-1">
             <div
-              className="session-header-title line-clamp-2 break-words text-[16px] font-semibold leading-[22px] tracking-[-0.01em] text-ds-ink opacity-95"
+              className="session-header-title line-clamp-2 break-words text-ds-xl font-semibold leading-[22px] tracking-[-0.01em] text-ds-ink opacity-95"
               title={active.title}
             >
               {active.title}
             </div>
-            <div className="session-header-compact-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] leading-[17px] text-ds-muted">
+            <div className="session-header-compact-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-ds-sm leading-[17px] text-ds-muted">
               <span className="session-meta-workspace max-w-[min(42vw,240px)] truncate">{activeWorkspaceLabel}</span>
               <span className="session-meta-workspace-separator opacity-70">·</span>
               <span className="session-meta-mode shrink-0 capitalize">{active.mode}</span>
@@ -146,7 +146,7 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
           </>
         ) : (
           <div className="min-w-0 pt-0.5">
-            <div className="truncate text-[12.5px] font-medium text-ds-faint">{workspaceLabel}</div>
+            <div className="truncate text-ds-sm font-medium text-ds-faint">{workspaceLabel}</div>
           </div>
         )}
       </div>
@@ -158,7 +158,7 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
       {active ? (
         <>
           <div className="min-w-0 flex-1">
-            <div className="mb-1 flex min-w-0 items-center gap-2 text-[12.5px] font-medium text-ds-faint">
+            <div className="mb-1 flex min-w-0 items-center gap-2 text-ds-sm font-medium text-ds-faint">
               <span>{activeWorkspaceLabel}</span>
               <span>·</span>
               <span className="capitalize">{active.mode}</span>
@@ -168,7 +168,7 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
             <div className="flex min-w-0 items-center gap-2.5">
               {editing ? (
                 <input
-                  className="min-w-0 flex-1 rounded-2xl border border-ds-border bg-ds-elevated px-3.5 py-2 text-[21px] font-semibold tracking-[-0.02em] text-ds-ink focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/20"
+                  className="min-w-0 flex-1 rounded-2xl border border-ds-border bg-ds-elevated px-3.5 py-2 text-ds-3xl font-semibold tracking-[-0.02em] text-ds-ink focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/20"
                   value={draftTitle}
                   onChange={(e) => setDraftTitle(e.target.value)}
                   onBlur={() => commitTitle()}
@@ -188,7 +188,7 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
               ) : (
                 <button
                   type="button"
-                  className="min-w-0 truncate text-left text-[22px] font-semibold tracking-[-0.03em] text-ds-ink transition hover:text-accent"
+                  className="min-w-0 truncate text-left text-ds-4xl font-semibold tracking-[-0.03em] text-ds-ink transition hover:text-accent"
                   title={t('renameThreadHint')}
                   onClick={() => setEditing(true)}
                 >
@@ -196,7 +196,7 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
                 </button>
               )}
             </div>
-            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-[12.5px] text-ds-faint">
+            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-ds-sm text-ds-faint">
               <span className="inline-flex items-center rounded-full border border-ds-border bg-ds-subtle px-2.5 py-1 font-medium capitalize text-ds-muted">
                 {active.mode}
               </span>
@@ -245,20 +245,20 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
         </>
       ) : (
         <div className="min-w-0">
-          <div className="text-[12.5px] font-medium uppercase tracking-[0.16em] text-ds-faint">
+          <div className="text-ds-sm font-medium uppercase tracking-[0.16em] text-ds-faint">
             {workspaceLabel}
           </div>
-          <div className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ds-ink">
+          <div className="mt-1 text-ds-3xl font-semibold tracking-[-0.02em] text-ds-ink">
             {t('noSessionSelected')}
           </div>
-          <div className="mt-1 text-[13.5px] text-ds-faint">{t('sessionHeaderHint')}</div>
+          <div className="mt-1 text-ds-md text-ds-faint">{t('sessionHeaderHint')}</div>
         </div>
       )}
       {busy || deliveryState || resumeWorkButton ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {resumeWorkButton}
           {busy || deliveryState ? (
-            <span className="shrink-0 rounded-full bg-amber-500/18 px-3 py-1.5 text-[12.5px] font-semibold text-amber-950 dark:text-amber-100">
+            <span className="shrink-0 rounded-full bg-amber-500/18 px-3 py-1.5 text-ds-sm font-semibold text-amber-950 dark:text-amber-100">
               {deliveryState
                 ? t(`deliveryState${deliveryState.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`)
                 : t('running')}

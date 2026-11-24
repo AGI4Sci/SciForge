@@ -11,6 +11,7 @@ import { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-se
 import type { TraceEvent } from '@sciforge/full-trace'
 import { createDshHostRuntimeAdapter } from './dsh-agent-runtime-adapter'
 import { createAgentRuntimeHost } from './host'
+import { createDomainAgentExecutionHost } from '../../domain-agent-execution'
 import { defaultCodexRuntimeSettings, defaultLocalRuntimeSettings, defaultModelRouterSettings, defaultScheduleSettings, defaultSkillsSettings, defaultWorkflowSettings, defaultWriteSettings, type AppSettingsV1 } from '../../../shared/app-settings'
 import { defaultDshRuntimeSettings } from '../../../shared/app-settings-dsh'
 import type { AgentRuntimeEvent } from '../../../shared/agent-runtime-contract'
@@ -39,6 +40,152 @@ vi.mock('./agent-runtime-mcp-tool-lease', async importOriginal => {
 })
 
 describe('DSH Host bridge with a real ACP fixture child', () => {
+  it('persists minimal thread ownership across cold reopen and keeps it hidden with no MCP', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-minimal-cold-'))
+    const settings = createDefaultSettings()
+    const surface = { tools: vi.fn(() => []), call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() }
+    const make = () => createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('../../../../packages/workers/dsh-runtime/test/fixture.mjs', import.meta.url)), '--fixture-defaults', '--fixture-minimal'], stateDirectory: root,
+      safetyPatch: 'derived', verifyDeployment: async () => {}, toolSurface: surface })
+    let adapter = make()
+    try {
+      const thread = await adapter.startThread({ settings }, { runtimeId: 'dsh', workspace: root, contextProfile: 'minimal', allowedTools: [] })
+      expect(thread.workspace).toBe(root)
+      expect(await readdir(join(root, 'minimal', 'empty-workspace'))).toEqual([])
+      await adapter.close(); adapter = make()
+      await expect(adapter.readThreadPage({ settings }, { runtimeId: 'dsh', threadId: thread.id })).resolves.toMatchObject({ turns: [] })
+      await expect(adapter.listThreads({ settings }, { runtimeId: 'dsh', threadId: thread.id })).resolves.toEqual([expect.objectContaining({ workspace: root })])
+      expect(() => adapter.startTurn({ settings }, { runtimeId: 'dsh', threadId: thread.id, text: 'wrong' })).toThrow('does not match thread')
+      await adapter.resumeSession!({ settings }, { runtimeId: 'dsh', sessionId: thread.id })
+      const count = leases.length
+      const handle = await adapter.startTurn({ settings }, { runtimeId: 'dsh', threadId: thread.id, contextProfile: 'minimal', mode: 'agent', allowedTools: [], text: 'supplied only' })
+      await vi.waitFor(async () => expect((await adapter.readThreadPage({ settings }, { runtimeId: 'dsh', threadId: thread.id })).turns).toContainEqual(expect.objectContaining({ id: handle.turnId, status: 'completed' })))
+      expect(leases.length).toBe(count)
+      expect(surface.tools).not.toHaveBeenCalled()
+      expect(await adapter.listThreads({ settings }, { runtimeId: 'dsh' })).not.toContainEqual(expect.objectContaining({ id: thread.id }))
+    } finally { await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('releases minimal turn ownership after completion for consecutive turns and a different thread', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-minimal-consecutive-'))
+    const context = { settings: createDefaultSettings() }
+    const surface = { tools: vi.fn(() => []), call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() }
+    const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('../../../../packages/workers/dsh-runtime/test/fixture.mjs', import.meta.url)), '--fixture-defaults', '--fixture-minimal'],
+      stateDirectory: root, safetyPatch: 'derived', verifyDeployment: async () => {}, toolSurface: surface })
+    try {
+      const input = { runtimeId: 'dsh' as const, workspace: root, contextProfile: 'minimal' as const, allowedTools: [] }
+      const first = await adapter.startThread(context, input)
+      const second = await adapter.startThread(context, input)
+      expect(second.id).not.toBe(first.id)
+      const count = leases.length
+      const completed: string[] = []
+      for (const [threadId, text] of [[first.id, 'first'], [first.id, 'second'], [second.id, 'third']]) {
+        const handle = await adapter.startTurn(context, { ...input, threadId, mode: 'agent', text })
+        completed.push(handle.turnId)
+        await vi.waitFor(async () => expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId })).turns)
+          .toContainEqual(expect.objectContaining({ id: handle.turnId, status: 'completed', items: expect.arrayContaining([expect.objectContaining({ kind: 'assistant_message', text: 'hello' })]) })))
+      }
+      expect(new Set(completed).size).toBe(3)
+      expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: first.id })).turns.map(turn => turn.id)).toEqual(completed.slice(0, 2))
+      expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: second.id })).turns.map(turn => turn.id)).toEqual(completed.slice(2))
+      expect(leases.length).toBe(count)
+      expect(surface.tools).not.toHaveBeenCalled()
+      expect(surface.call).not.toHaveBeenCalled()
+    } finally { await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('releases minimal turn ownership after an actual ACP failure so the same thread can retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-minimal-retry-'))
+    const context = { settings: createDefaultSettings() }
+    const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('../../../../packages/workers/dsh-runtime/test/fixture.mjs', import.meta.url)), '--fixture-defaults', '--fixture-minimal'],
+      stateDirectory: root, safetyPatch: 'derived', verifyDeployment: async () => {},
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    try {
+      const input = { runtimeId: 'dsh' as const, contextProfile: 'minimal' as const, allowedTools: [] }
+      const thread = await adapter.startThread(context, { ...input, workspace: root })
+      const failed = await adapter.startTurn(context, { ...input, threadId: thread.id, mode: 'agent', text: 'badreply' })
+      await vi.waitFor(async () => expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: thread.id })).turns)
+        .toContainEqual(expect.objectContaining({ id: failed.turnId, status: 'failed' })))
+      const retry = await adapter.startTurn(context, { ...input, threadId: thread.id, mode: 'agent', text: 'retry' })
+      expect(retry.turnId).not.toBe(failed.turnId)
+      await vi.waitFor(async () => expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: thread.id })).turns)
+        .toEqual([expect.objectContaining({ id: failed.turnId, status: 'failed' }), expect.objectContaining({ id: retry.turnId, status: 'completed' })]))
+    } finally { await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('routes minimal synthetic work lifecycle events to live subscribers and the same durable journal after cold reopen', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-minimal-synthetic-'))
+    const context = { settings: createDefaultSettings() }
+    const make = () => createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('../../../../packages/workers/dsh-runtime/test/fixture.mjs', import.meta.url)), '--fixture-defaults', '--fixture-minimal'],
+      stateDirectory: root, safetyPatch: 'derived', verifyDeployment: async () => {},
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    let adapter = make()
+    const live = new AbortController()
+    const replay = new AbortController()
+    try {
+      const thread = await adapter.startThread(context, { runtimeId: 'dsh', workspace: root, contextProfile: 'minimal', allowedTools: [] })
+      const event: AgentRuntimeEvent = { runtimeId: 'dsh', threadId: thread.id, kind: 'work_lifecycle', workId: 'minimal-work', state: 'needs_continuation', reason: 'continuation_waiting_for_user', createdAt: new Date().toISOString() }
+      const received: AgentRuntimeEvent[] = []
+      const consuming = (async () => {
+        for await (const item of adapter.subscribeEvents(context, { runtimeId: 'dsh', threadId: thread.id, signal: live.signal })) {
+          received.push(item)
+          if (item.kind === 'work_lifecycle') live.abort()
+        }
+      })()
+      const published = await adapter.publishSyntheticEvent!(context, event)
+      await consuming
+      expect(published).toMatchObject({ ...event, seq: expect.any(Number) })
+      expect(received).toEqual([published])
+      const directory = join(root, 'minimal', 'host-history')
+      const files = (await readdir(directory)).filter(file => file.endsWith('.jsonl'))
+      expect(files).toHaveLength(1)
+      const journal = join(directory, files[0]!)
+      const before = await readFile(journal, 'utf8')
+      expect(before.trim().split('\n').map(line => JSON.parse(line)).filter(record => record.event?.kind === 'work_lifecycle'))
+        .toEqual([expect.objectContaining({ threadId: thread.id, event: published })])
+      await adapter.close(); adapter = make()
+      expect(await readFile(journal, 'utf8')).toBe(before)
+      const replayed: AgentRuntimeEvent[] = []
+      for await (const item of adapter.subscribeEvents(context, { runtimeId: 'dsh', threadId: thread.id, sinceSeq: 0, signal: replay.signal })) {
+        replayed.push(item)
+        if (item.kind === 'work_lifecycle') replay.abort()
+      }
+      expect(replayed).toEqual([published])
+      expect((await adapter.readThreadStatus(context, { runtimeId: 'dsh', threadId: thread.id })).latestSeq).toBe(published?.seq)
+      // work_lifecycle has no turn projection; assert its canonical journal and replay instead.
+      expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: thread.id })).turns).toEqual([])
+    } finally { live.abort(); replay.abort(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('executes the canonical hidden domain discussion request through Host and ACP', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-minimal-domain-'))
+    const settings = createDefaultSettings(); settings.activeAgentRuntime = 'dsh'
+    const surface = { tools: vi.fn(() => []), call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() }
+    const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('../../../../packages/workers/dsh-runtime/test/fixture.mjs', import.meta.url)), '--fixture-defaults', '--fixture-minimal'], stateDirectory: root,
+      safetyPatch: 'derived', verifyDeployment: async () => {}, toolSurface: surface })
+    const host = createAgentRuntimeHost({ settings: () => settings, adapters: [adapter] })
+    const execution = createDomainAgentExecutionHost({ runtime: host, defaultRuntimeId: () => 'dsh', runtimeReadiness: () => ({ state: 'ready', runtimeId: 'dsh', capabilityTags: [] }), pollIntervalMs: 10 })
+    try {
+      const result = await execution.run({ runtimeId: 'dsh', workspaceRoot: root, prompt: 'supplied only', contextProfile: 'minimal', allowedTools: [], interaction: 'background', mode: 'agent', metadata: { source: 'plugin-discussion' } })
+      expect(result.state).toBe('completed')
+      expect(surface.tools).not.toHaveBeenCalled()
+      expect((await host.listThreads({ runtimeId: 'dsh' })).every(thread => thread.id === 'saved-session')).toBe(true)
+    } finally { host.dispose(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('minimal profiles reject implicit tools and cannot cross an ordinary thread boundary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-minimal-contract-'))
+    const settings = createDefaultSettings()
+    const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url))], stateDirectory: root,
+      verifyDeployment: async () => {}, toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    try {
+      expect(adapter.contextProfiles).toEqual(['minimal'])
+      await expect(adapter.startThread({ settings }, { runtimeId: 'dsh', workspace: root, contextProfile: 'minimal' })).rejects.toThrow('explicit empty tool allowlist')
+      await expect(adapter.startThread({ settings }, { runtimeId: 'dsh', workspace: root, contextProfile: 'minimal', allowedTools: ['write'] })).rejects.toThrow('explicit empty tool allowlist')
+      const ordinary = await adapter.startThread({ settings }, { runtimeId: 'dsh', workspace: root })
+      expect(() => adapter.startTurn({ settings }, { runtimeId: 'dsh', threadId: ordinary.id, contextProfile: 'minimal', allowedTools: [], text: 'supplied only' })).toThrow('does not match thread')
+    } finally { await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
   it('discovers the held session through public Host lists after consecutive real ACP turns and a cold reopen', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-held-discovery-'))
     const settings = createDefaultSettings()
@@ -153,6 +300,43 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
       expect(boundaryRead).toHaveBeenCalledOnce()
       expect(dispatch).not.toHaveBeenCalled()
     } finally { host.dispose(); handoff.close(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('persists only completed structured ACP edits through paging, external details and cold reopen', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-edit-projection-'))
+    const context = { settings: createDefaultSettings() }
+    const makeAdapter = () => createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('../../../../packages/workers/dsh-runtime/test/fixture.mjs', import.meta.url))],
+      stateDirectory: root, verifyDeployment: async () => {}, requestTimeoutMs: 2000,
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    let adapter = makeAdapter()
+    let host = createAgentRuntimeHost({ settings: () => context.settings, adapters: [adapter] })
+    try {
+      const thread = await host.startThread({ runtimeId: 'dsh', workspace: root })
+      const handle = await host.startTurn({ runtimeId: 'dsh', threadId: thread.id, text: 'structured-edits' })
+      await vi.waitFor(async () => expect((await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: thread.id })).turns)
+        .toContainEqual(expect.objectContaining({ id: handle.turnId, status: 'completed' })))
+      const input = { runtimeId: 'dsh' as const, threadId: thread.id, limit: 1 }
+      const page = await adapter.readThreadPage(context, input)
+      const edits = page.turns.flatMap(turn => turn.items ?? []).filter(item => item.kind === 'tool' && item.toolKind === 'file_change')
+      expect(edits).toHaveLength(1)
+      const edit = edits[0]!
+      expect(edit).toMatchObject({ id: 'native-edit', status: 'completed', meta: {
+        authoritativeExecutionReceipt: false, factSource: 'runtime_lifecycle', acpSessionId: thread.id, acpContentType: 'diff'
+      } })
+      expect(edit.kind === 'tool' && edit.detailArtifact).toBeTruthy()
+      if (edit.kind !== 'tool' || !edit.detailArtifact) throw new Error('missing externalized diff')
+      const artifact = { runtimeId: 'dsh' as const, threadId: thread.id, ref: edit.detailArtifact.ref, size: edit.detailArtifact.size, offset: 0, maxBytes: 65_536 }
+      const original = await adapter.readToolArtifact(context, artifact)
+      expect(JSON.parse(original.content).changes[0].diff).toContain('-before\n+after\n')
+      expect(JSON.parse(original.content).changes[0].diff.endsWith('+large detail\n')).toBe(true)
+      const other = await host.startThread({ runtimeId: 'dsh', workspace: root })
+      await expect(adapter.readToolArtifact(context, { ...artifact, threadId: other.id })).rejects.toThrow()
+      host.dispose(); await adapter.close()
+      adapter = makeAdapter()
+      host = createAgentRuntimeHost({ settings: () => context.settings, adapters: [adapter] })
+      expect(await adapter.readThreadPage(context, input)).toEqual(page)
+      expect(await adapter.readToolArtifact(context, artifact)).toEqual(original)
+    } finally { host.dispose(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
   })
   it('reads a genuinely enrolled empty thread before turn and preserves accepted history across cold Host readback', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-history-'))

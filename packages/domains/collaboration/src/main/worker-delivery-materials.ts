@@ -3,13 +3,14 @@ import { constants } from 'node:fs'
 import { lstat, open, opendir, realpath } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
 import {
-  DELIVERY_MAX_FILE_COUNT, DELIVERY_MAX_TOTAL_BYTES, deliveryRelativePathSchema,
+  DELIVERY_MAX_FILE_COUNT, DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES, deliveryRelativePathSchema,
   type DeliveryOutputDescriptor
 } from '@sciforge/collaboration-contracts'
-import { workspaceAttachmentKind, workspaceAttachmentMaxBytes, workspaceAttachmentMediaType, workspaceAttachmentDisplayName, workspaceAttachmentSessionDirectory } from '@sciforge/domain-sdk/attachment-policy'
+import { workspaceAttachmentDisplayName, workspaceAttachmentSessionDirectory } from '@sciforge/domain-sdk/attachment-policy'
+import { validateDeliveryMaterialBytes, deliveryMaterialMediaType, deliveryMaterialAdmissionError } from '../delivery-material-policy.js'
 import { portableWorkspacePathComparisonKey } from '@sciforge/domain-sdk/file-transfer-portability'
 import type {
-  WorkerDeliverySelectedMaterial, WorkerDeliveryMaterialsResult
+  WorkerDeliveryDraft, WorkerDeliverySelectedMaterial, WorkerDeliveryMaterialsResult
 } from '../worker-delivery.js'
 
 const LIST_MAX_ENTRIES = 10_000
@@ -19,6 +20,7 @@ type MaterialContext = Readonly<{
   workspaceRoot: string
   threadId: string | null
   selectedMaterials: readonly WorkerDeliverySelectedMaterial[]
+  declaredMaterial?: WorkerDeliveryDraft['declaredMaterial']
   declared: Readonly<{ fileName: string; mediaType: string; maxBytes: number }> | null
 }>
 export type ReadDeliveryMaterial = Readonly<{ metadata: DeliveryOutputDescriptor; bytes: Buffer }>
@@ -67,7 +69,7 @@ async function safePath(context: MaterialContext, raw: string, expected: Deliver
   return current
 }
 
-function materialSource(context: MaterialContext, selection: WorkerDeliverySelectedMaterial): 'member' | 'attachment' {
+function materialSource(context: MaterialContext, selection: NonNullable<WorkerDeliveryDraft['declaredMaterial']>): 'ai' | 'member' | 'attachment' {
   const uploads = context.threadId ? workspaceAttachmentSessionDirectory(context.threadId) : null
   const attachment = uploads && selection.relativePath.startsWith(`${uploads}/`)
   if (selection.source === 'attachment' && !attachment) throw new Error('会话附件必须位于本次会话附件目录。')
@@ -77,32 +79,34 @@ function materialSource(context: MaterialContext, selection: WorkerDeliverySelec
 /** Validate every bound before allocating content; only explicitly selected bytes are read. */
 export async function readDeliveryMaterials(context: MaterialContext, expectedRoot?: DeliveryWorkspaceIdentity): Promise<ReadDeliveryMaterial[]> {
   const root = await readDeliveryWorkspaceIdentity(context.workspaceRoot, expectedRoot)
+  if (context.declaredMaterial && !context.declared) throw new Error('本任务没有声明必交文件。')
   const entries = [
-    ...(context.declared ? [{ relativePath: context.declared.fileName, declared: context.declared }] : []),
+    ...(context.declared ? [{ relativePath: context.declaredMaterial?.relativePath ?? context.declared.fileName,
+      outputPath: context.declared.fileName, declared: context.declared, selection: context.declaredMaterial ?? undefined }] : []),
     ...context.selectedMaterials.map((selection) => ({ relativePath: selection.relativePath, selection }))
   ]
   if (entries.length > DELIVERY_MAX_FILE_COUNT) throw new Error(`最多提交 ${DELIVERY_MAX_FILE_COUNT} 项文件。`)
   const seen = new Set<string>()
+  const sourcePaths = new Set<string>()
   let total = 0
   const checked = []
   for (const entry of entries) {
-    const comparison = portableWorkspacePathComparisonKey(entry.relativePath)
-    if (seen.has(comparison)) throw new Error(`文件 ${materialLabel(entry.relativePath)} 重复或属于必交产出。`)
+    const comparison = portableWorkspacePathComparisonKey('outputPath' in entry ? entry.outputPath : entry.relativePath)
+    const sourceComparison = portableWorkspacePathComparisonKey(entry.relativePath)
+    if (seen.has(comparison) || sourcePaths.has(sourceComparison)) throw new Error(`文件 ${materialLabel(entry.relativePath)} 重复或属于必交产出。`)
     seen.add(comparison)
+    sourcePaths.add(sourceComparison)
     const path = await safePath(context, entry.relativePath, root).catch((cause: unknown) => {
       throw new Error(`文件 ${materialLabel(entry.relativePath)} 不可用，请确认位于任务目录且不是符号链接。`, { cause })
     })
     const info = await lstat(path).catch((cause: unknown) => { throw new Error(`文件 ${materialLabel(entry.relativePath)} 不可用，请重新选择。`, { cause }) })
     const declared = 'declared' in entry ? entry.declared : undefined
-    const kind = workspaceAttachmentKind({ name: basename(entry.relativePath) })
-    if (!declared && kind === 'unsupported') throw new Error(`文件 ${materialLabel(entry.relativePath)} 的类型暂不支持，请选择支持的资料格式。`)
-    const max = declared?.maxBytes ?? workspaceAttachmentMaxBytes(kind)
     if (!info.isFile()) throw new Error(`文件 ${materialLabel(entry.relativePath)} 不是可提交文件。`)
-    if (info.size > max || declared && info.size === 0) {
-      throw new Error(`文件 ${materialLabel(entry.relativePath)} 大小不符合要求（上限 ${max / 1024 / 1024} MB）。`)
-    }
+    const admissionError = deliveryMaterialAdmissionError({ name: basename(entry.relativePath), byteCount: info.size },
+      declared ? { maxBytes: declared.maxBytes, ...(context.declaredMaterial ? { mediaType: declared.mediaType } : {}) } : null)
+    if (admissionError) throw new Error(`文件 ${materialLabel(entry.relativePath)}：${admissionError}`)
     total += info.size
-    if (total > DELIVERY_MAX_TOTAL_BYTES) throw new Error(`文件 ${materialLabel(entry.relativePath)} 使提交内容超过 200 MB。`)
+    if (total > DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES) throw new Error(`文件 ${materialLabel(entry.relativePath)} 使提交内容超过 ${DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES / 1024 / 1024} MiB。`)
     checked.push({ entry, path, info, declared })
   }
   const result: ReadDeliveryMaterial[] = []
@@ -130,15 +134,17 @@ export async function readDeliveryMaterials(context: MaterialContext, expectedRo
         throw new Error(`文件 ${materialLabel(entry.relativePath)} 有新改动，请预览后再次提交。`)
       }
       result.push({ bytes, metadata: {
-        fileName: workspaceAttachmentDisplayName(entry.relativePath), relativePath: entry.relativePath,
+        fileName: declared?.fileName ?? workspaceAttachmentDisplayName(entry.relativePath), relativePath: declared?.fileName ?? entry.relativePath,
         role: declared ? 'declared' : 'member',
-        source: declared ? 'ai' : materialSource(context, 'selection' in entry ? entry.selection : { relativePath: entry.relativePath }),
-        mediaType: declared?.mediaType ?? workspaceAttachmentMediaType({ name: basename(entry.relativePath) }), byteCount: bytes.length,
+        source: declared && !context.declaredMaterial ? 'ai' : materialSource(context, entry.selection ?? { relativePath: entry.relativePath }),
+        mediaType: declared?.mediaType ?? deliveryMaterialMediaType({ name: basename(entry.relativePath) }), byteCount: bytes.length,
         sha256: createHash('sha256').update(bytes).digest('hex')
       } })
     } catch (cause) {
       throw new Error(`文件 ${materialLabel(entry.relativePath)} 不可用或有新改动，请预览后再次提交。`, { cause })
     } finally { await handle.close() }
+    try { validateDeliveryMaterialBytes({ name: basename(entry.relativePath) }, result[result.length - 1]!.bytes) }
+    catch (cause) { throw new Error(`文件 ${materialLabel(entry.relativePath)}：${cause instanceof Error ? cause.message : '内容不符合要求。'}`, { cause }) }
   }
   return result
 }
@@ -174,8 +180,13 @@ export async function listDeliveryMaterials(context: MaterialContext, input: Rea
         try {
           const path = await safePath(context, relativePath, root)
           const info = await lstat(path)
+          const file = { name: basename(relativePath), byteCount: info.size }
+          const declared = context.declared
+          const eligibleRequired = declared && !deliveryMaterialAdmissionError(file, relativePath === declared.fileName ? { maxBytes: declared.maxBytes } : declared)
+          const eligibleAdditional = !deliveryMaterialAdmissionError(file, null)
+          if (!info.isFile() || !eligibleRequired && !eligibleAdditional) continue
           files.push({ relativePath, fileName: workspaceAttachmentDisplayName(relativePath), byteCount: info.size,
-            mediaType: context.declared?.fileName === relativePath ? context.declared.mediaType : workspaceAttachmentMediaType({ name: basename(relativePath) }),
+            mediaType: context.declared?.fileName === relativePath ? context.declared.mediaType : deliveryMaterialMediaType({ name: basename(relativePath) }),
             source: context.declared?.fileName === relativePath ? 'ai' : materialSource(context,
               context.selectedMaterials.find((selection) => selection.relativePath === relativePath) ?? { relativePath }) })
         } catch { /* A concurrent removal cannot make a file selectable. */ }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const admissionMock = vi.hoisted(() => ({
-  completeInputRecovery: vi.fn(async () => undefined), acceptQueuedInput: vi.fn(), abandonQueuedInput: vi.fn(), readQueuedInputs: vi.fn(), trySessionDecision: vi.fn(), auxiliary: vi.fn()
+  completeInputRecovery: vi.fn(async () => undefined), acceptQueuedInput: vi.fn(), abandonQueuedInput: vi.fn(), readQueuedInputs: vi.fn(), trySessionDecision: vi.fn(), auxiliary: vi.fn(), startTurn: vi.fn()
 }))
 vi.mock('../agent/agent-runtime-client', () => ({ agentRuntimeClient: admissionMock }))
 import type {
@@ -362,6 +362,24 @@ describe('chat-store-thread-actions queued messages', () => {
     }
     await expect(actions.sendMessage('keep the explicit provider level')).resolves.toBe(true)
     expect(state.queuedMessages[0]?.reasoningEffort).toBe('high')
+  })
+
+  it.each([undefined, 'high'])('keeps queued Codex effort %s after composer and catalog changes', async (effort) => {
+    const { actions, state } = buildHarness()
+    const sendUserMessage = vi.fn(async (_threadId: string, _text: string, _options?: { reasoningEffort?: string }) => ({ threadId: 'thr_existing', turnId: 'queued-turn' }))
+    registryMock.getProvider.mockReturnValue({ sendUserMessage, rememberThreadRuntime: vi.fn() })
+    state.busy = true
+    state.composerReasoningEffort = effort ?? ''
+    await actions.sendMessage('original requirement')
+    const queued = state.queuedMessages[0]
+    expect(queued.reasoningEffort).toBe(effort)
+    state.busy = false
+    state.composerReasoningEffort = 'medium'
+    state.composerModelCatalog = { available: true, complete: true, defaultModelId: 'changed',
+      models: [{ id: 'changed', displayName: 'Changed', isDefault: true, inputModalities: ['text'], reasoningEfforts: [], serviceTiers: [] }] }
+    await expect(actions.sendMessage(queued.text, queued.mode, { queued })).resolves.toBe(true)
+    expect(sendUserMessage).toHaveBeenCalledOnce()
+    expect(sendUserMessage.mock.calls[0]?.[2]?.reasoningEffort).toBe(effort)
   })
 
   beforeEach(() => {

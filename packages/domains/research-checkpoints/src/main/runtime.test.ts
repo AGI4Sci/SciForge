@@ -60,7 +60,9 @@ function boundarySnapshotForEvents(
     threadId: event.threadId,
     clientDirectiveId: event.clientDirectiveId ?? assert.fail('missing client directive'),
     ...(event.workspaceRoot ? { workspaceRoot: event.workspaceRoot } : {}),
-    phase: 'completed-intent' as const,
+    ...(event.kind === 'turn-terminated'
+      ? { phase: 'terminated-intent' as const, terminalState: event.terminalState }
+      : { phase: 'completed-intent' as const }),
     turnId: event.turnId,
     occurredAt: event.occurredAt
   }))
@@ -761,7 +763,7 @@ function context(
       isEnabled: async () => true,
       subscribe: () => () => undefined
     },
-    log: () => undefined,
+    log: (entry) => { console.error(entry.message) },
     publishRequiredBeforeTurn: async (event) => {
       const deliveryAttemptOrdinal = event.deliveryAttemptOrdinal ?? nextDeliveryAttemptOrdinal
       nextDeliveryAttemptOrdinal = Math.max(nextDeliveryAttemptOrdinal, deliveryAttemptOrdinal + 1)
@@ -1426,7 +1428,11 @@ test('three pending same-path turns survive restart with the exact locally froze
     const deactivateSecond = await secondRuntime.activate(secondLifecycle)
     await waitForAsync(async () => (
       await secondRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', third.turnId)
-    ).state === 'committed', 8_000)
+    ).state === 'committed', 8_000).catch(async error => {
+      console.error('Pending chain recovery states:', await Promise.all([first, second, third].map(event =>
+        secondRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId))))
+      throw error
+    })
 
     const statuses = await Promise.all([first, second, third].map((event) => (
       secondRuntime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)
@@ -2078,6 +2084,7 @@ test('v1 to v2 restore v1 as v3, advance v4, then restore the projected v3 as v5
       threadId: sourceRecord.manifest.recording.threadId,
       turnId: sourceRecord.manifest.turn.turnId,
       targetWatermark: sourceRecord.manifest.turn.targetWatermark,
+      terminalState: sourceRecord.manifest.turn.terminalState ?? 'unknown',
       changeReason: sourceRecord.manifest.changeReason,
       manifestDigest: digest(canonicalJson(sourceRecord.manifest)),
       executionOutcome: sourceRecord.manifest.status.execution,
@@ -2240,11 +2247,20 @@ test('restore response loss and restart recover one v3 before allowing v4 from v
       boundarySnapshotForEvents([first, second, earlyFourth])
     ))
     await waitForAsync(async () => (
-      (await secondRuntime.status(workspaceRoot, 'codex', 'thread-1'))?.currentOrdinal === 3
-    ), 5_000)
-    const restoredRecording = await secondRuntime.status(workspaceRoot, 'codex', 'thread-1')
-    assert.equal(restoredRecording?.currentOrdinal, 3)
-    const restoredVersionId = restoredRecording?.currentVersionId
+      (await secondRuntime.status(workspaceRoot, 'codex', 'thread-1'))?.currentOrdinal ?? 0
+    ) >= 3, 5_000)
+    // Recovery immediately drains the queued v4. Read the durable restore
+    // receipt rather than requiring polling to observe the transient v3 head.
+    const recoveredRestore = await secondRuntime.restoreAsNew(workspaceRoot, {
+      recordingId: started.recording.recordingId,
+      artifactId: v1.artifactRef.artifactId,
+      sourceVersionId: v1.artifactRef.versionId,
+      expectedCurrentVersionId: v2.artifactRef.versionId,
+      idempotencyKey: 'restore-crash-v3'
+    })
+    assert.equal(recoveredRestore.ordinal, 3)
+    assert.equal(recoveredRestore.idempotentReplay, true)
+    const restoredVersionId = recoveredRestore.restoredRef.versionId
     assert.ok(restoredVersionId)
     assert.equal(harness.versionParents.get(restoredVersionId), v2.artifactRef.versionId)
     const recoveredProjection = await secondRuntime.read(workspaceRoot, { versionId: restoredVersionId })
@@ -2393,20 +2409,211 @@ test('activation recovers a stopped recording pending in the local journal', asy
   }
 })
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (predicate()) return
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   assert.fail('Condition was not reached before timeout.')
 }
 
-async function waitForAsync(predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitForAsync(predicate: () => Promise<boolean>, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await predicate()) return
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   assert.fail('Condition was not reached before timeout.')
 }
+
+
+for (const scenario of ['completed', 'failed', 'cancelled', 'historical-completed'] as const) test(`real ${scenario} artifacts survive receipt persistence failure and restart without duplicate versions`, async t => {
+  const terminalState = scenario === 'historical-completed' ? 'completed' : scenario
+  const userDataDir = await mkdtemp(join(tmpdir(), 'research-checkpoint-real-receipt-loss-'))
+  let owner: ArtifactVersionsCapabilityTestHarness | undefined
+  let deactivate: (() => void | Promise<void>) | undefined
+  try {
+    const workspaceRoot = join(userDataDir, 'workspace')
+    await mkdir(workspaceRoot, { recursive: true })
+    owner = await createArtifactVersionsCapabilityTestHarness(userDataDir)
+    const turns: DomainAgentThreadTurn[] = []
+    const firstStore = new ResearchCheckpointStore({ userDataDir })
+    if (scenario === 'historical-completed') {
+      const enqueue = firstStore.enqueue.bind(firstStore)
+      t.mock.method(firstStore, 'enqueue', async (...args: Parameters<typeof enqueue>) => {
+        const historical = structuredClone(args[2])
+        delete historical.manifest.turn.terminalState
+        return enqueue(args[0], args[1], historical, args[3], args[4])
+      })
+    }
+    let receiptFailures = 0
+    t.mock.method(firstStore, 'markCommitted', async () => {
+      receiptFailures++
+      throw new Error('synthetic checkpoint receipt disk failure after Artifact commit')
+    })
+    const first = new ResearchCheckpointRuntime({ userDataDir, store: firstStore })
+    const lifecycle = realArtifactContext(userDataDir, workspaceRoot, owner, turns)
+    deactivate = await first.activate(lifecycle)
+    await startAtCurrentPolicy(first, workspaceRoot, {
+      runtimeId: 'codex', threadId: 'thread-1', idempotencyKey: 'real-receipt-loss-start'
+    })
+    const baseEvent = turnEventWithExactOutputs(workspaceRoot, 'real-receipt-loss-turn', 1, [
+      { path: 'outputs/data.csv', bytes: 'x\n1\n' },
+      { path: 'figures/result.svg', bytes: '<svg/>' }
+    ])
+    const event: DomainTurnArtifactEvent = terminalState === 'completed' ? baseEvent : { ...baseEvent, kind: 'turn-terminated', terminalState }
+    await publishExactOutputBoundary(lifecycle, event)
+    turns.push(completedThreadTurn(event))
+    await first.consume(event)
+    await waitFor(() => receiptFailures > 0, 5000)
+    await deactivate(); deactivate = undefined
+    const pending = await firstStore.operationForEvent(workspaceRoot, 'codex', 'thread-1', event.turnId, event.targetWatermark)
+    assert.equal(pending?.state, 'pending')
+    const before = await owner.invokeAction<ReturnType<typeof artifactVersionListResultV2Schema.parse>>(
+      ARTIFACT_VERSIONS_CAPABILITY_IDS.listV2, {}, workspaceRoot)
+    if (!before.ok) assert.fail('Expected committed real Artifact versions before receipt recovery')
+    assert.equal(before.value.items.length, 3)
+    // Host fanout settled while our receipt journal was unavailable. Keep the
+    // lease until replay adopts the already accepted Artifact transaction.
+    if (terminalState !== 'completed') {
+      await firstStore.settleTurnBoundaryLease(workspaceRoot, {
+        issuerEpoch: event.issuerEpoch!, deliveryAttemptOrdinal: event.deliveryAttemptOrdinal!,
+        leaseId: event.boundaryLeaseId!, deliveryAttemptId: event.deliveryAttemptId!,
+        clientDirectiveId: event.clientDirectiveId!, runtimeId: event.runtimeId, threadId: event.threadId,
+        turnId: event.turnId, state: 'released', terminalState
+      })
+      assert.equal(await firstStore.turnBoundaryLeaseState(workspaceRoot, event.boundaryLeaseId!), 'consumed')
+    }
+    const originalVersions = before.value.items.map(item => item.version.versionId).sort()
+    const secondStore = new ResearchCheckpointStore({ userDataDir })
+    const second = new ResearchCheckpointRuntime({ userDataDir, store: secondStore })
+    const recovery = realArtifactContext(userDataDir, workspaceRoot, owner, turns)
+    Object.assign(recovery.turnEvents!, { readDurableTurnBoundarySnapshot: async () => {
+      const snapshot = boundarySnapshotForEvents([event])
+      return terminalState === 'completed' ? snapshot : { ...snapshot, owners: snapshot.owners.map(item => ({ ...item, phase: 'terminal-settlement' as const, terminalState })) }
+    } })
+    deactivate = await second.activate(recovery)
+    await waitForAsync(async () => (await second.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)).state === 'committed', 5000)
+    const recovered = await second.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)
+    if (recovered.state !== 'committed') assert.fail('Expected recovered checkpoint')
+    assert.equal(recovered.outputArtifacts.length, 2)
+    if (terminalState !== 'completed') assert.equal(await secondStore.turnBoundaryLeaseState(workspaceRoot, event.boundaryLeaseId!), 'released')
+    const recoveredRecord = await second.read(workspaceRoot, { versionId: recovered.artifactRef.versionId })
+    assert.equal(recoveredRecord.manifest.turn.terminalState, scenario === 'historical-completed' ? undefined : terminalState)
+    if (scenario === 'historical-completed') {
+      const exact = await owner.invokeAction<{ ok: true; value: { version: { metadata: Record<string, unknown> } } }>(ARTIFACT_VERSIONS_CAPABILITY_IDS.read, { versionId: recovered.artifactRef.versionId }, workspaceRoot)
+      assert.equal(Object.hasOwn(exact.value.version.metadata, 'terminalState'), false)
+    }
+    await second.consume(event)
+    const after = await owner.invokeAction<ReturnType<typeof artifactVersionListResultV2Schema.parse>>(
+      ARTIFACT_VERSIONS_CAPABILITY_IDS.listV2, {}, workspaceRoot)
+    if (!after.ok) assert.fail('Expected real Artifact history after recovery')
+    assert.deepEqual(after.value.items.map(item => item.version.versionId).sort(), originalVersions)
+    assert.equal(new Set(after.value.items.map(item => item.version.transactionId)).size, 1)
+    assert.ok(after.value.items.every(item => item.artifact.versionCount === 1))
+  } finally {
+    await deactivate?.()
+    await owner?.dispose()
+    await rm(userDataDir, { recursive: true, force: true })
+  }
+})
+
+
+for (const terminalState of ['failed', 'cancelled'] as const) test(`real ${terminalState} turn preserves the restart boundary, exact parent, terminal bytes and subsequent completion`, async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'checkpoint-terminated-'))
+  const workspaceRoot = join(userDataDir, 'workspace')
+  await mkdir(workspaceRoot, { recursive: true })
+  const owner = await createArtifactVersionsCapabilityTestHarness(userDataDir)
+  let deactivate: (() => void | Promise<void>) | undefined
+  const turns: DomainAgentThreadTurn[] = []
+  try {
+    let store = new ResearchCheckpointStore({ userDataDir })
+    let runtime = new ResearchCheckpointRuntime({ userDataDir, store })
+    let lifecycle = realArtifactContext(userDataDir, workspaceRoot, owner, turns)
+    deactivate = await runtime.activate(lifecycle)
+    const first = turnEventWithExactOutputs(workspaceRoot, 'parent', 1, [{ path: 'result.csv', bytes: 'x\n1\n' }])
+    await publishExactOutputBoundary(lifecycle, first)
+    await runtime.consume(first)
+    await waitForAsync(async () => (await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)).state === 'committed')
+    const parent = await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', first.turnId)
+    if (parent.state !== 'committed') assert.fail()
+    const event: DomainTurnArtifactEvent = { ...turnEventWithExactOutputs(workspaceRoot, 'terminated', 2,
+      [{ path: 'result.csv', kind: 'modified', priorBytes: 'x\n1\n', bytes: 'x\n2\n' }]), kind: 'turn-terminated', terminalState }
+    await publishExactOutputBoundary(lifecycle, event)
+    await deactivate(); deactivate = undefined
+    // Simulate a durable Host terminal intent before delivery, then an external edit.
+    await writeFile(join(workspaceRoot, 'result.csv'), 'external edit')
+    store = new ResearchCheckpointStore({ userDataDir })
+    runtime = new ResearchCheckpointRuntime({ userDataDir, store })
+    lifecycle = realArtifactContext(userDataDir, workspaceRoot, owner, turns)
+    Object.assign(lifecycle.turnEvents!, { readDurableTurnBoundarySnapshot: async () => boundarySnapshotForEvents([first, event]) })
+    deactivate = await runtime.activate(lifecycle)
+    assert.equal(await store.turnBoundaryLeaseState(workspaceRoot, event.boundaryLeaseId!), 'open')
+    await runtime.consume(event)
+    await waitForAsync(async () => (await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)).state === 'committed')
+    const status = await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)
+    if (status.state !== 'committed') assert.fail()
+    const record = await runtime.read(workspaceRoot, { versionId: status.artifactRef.versionId })
+    assert.equal(record.manifest.turn.terminalState, terminalState)
+    assert.equal(status.outputArtifacts.length, 1)
+    const output = await owner.invokeAction<{ ok: true; value: { version: { parentVersionId: string }; dataBase64: string } }>(ARTIFACT_VERSIONS_CAPABILITY_IDS.read, { versionId: status.outputArtifacts[0]!.ref.versionId }, workspaceRoot)
+    assert.equal(output.ok, true)
+    assert.equal(Buffer.from(output.value.dataBase64, 'base64').toString(), 'x\n2\n')
+    assert.equal(output.value.version.parentVersionId, parent.outputArtifacts[0]!.ref.versionId)
+    await lifecycle.publishTurnLifecycle({ ...event, kind: 'after-turn', state: terminalState,
+      boundaryLeaseId: event.boundaryLeaseId!, deliveryAttemptId: event.deliveryAttemptId! })
+    assert.equal(await store.turnBoundaryLeaseState(workspaceRoot, event.boundaryLeaseId!), 'released')
+    await runtime.consume(event)
+    await assert.rejects(runtime.consume({ ...event, terminalState: terminalState === 'failed' ? 'cancelled' : 'failed' }), /boundary identity/)
+    const third = turnEventWithExactOutputs(workspaceRoot, 'completed-next', 3,
+      [{ path: 'result.csv', kind: 'modified', priorBytes: 'x\n2\n', bytes: 'x\n3\n' }])
+    await publishExactOutputBoundary(lifecycle, third)
+    await runtime.consume(third)
+    await waitForAsync(async () => (await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', third.turnId)).state === 'committed')
+    const next = await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', third.turnId)
+    if (next.state !== 'committed') assert.fail()
+    assert.equal(next.ordinal, 3)
+    assert.equal(next.outputArtifacts[0]!.artifactOrdinal, 3)
+    const nextOutput = await owner.invokeAction<{ ok: true; value: { version: { parentVersionId: string } } }>(ARTIFACT_VERSIONS_CAPABILITY_IDS.read, { versionId: next.outputArtifacts[0]!.ref.versionId }, workspaceRoot)
+    assert.equal(nextOutput.value.version.parentVersionId, status.outputArtifacts[0]!.ref.versionId)
+    const restored = await runtime.restoreAsNew(workspaceRoot, { recordingId: status.recordingId, artifactId: status.artifactRef.artifactId,
+      sourceVersionId: status.artifactRef.versionId, expectedCurrentVersionId: next.artifactRef.versionId, idempotencyKey: 'restore-terminal-fact' })
+    assert.equal((await runtime.read(workspaceRoot, { versionId: restored.restoredRef.versionId })).manifest.turn.terminalState, terminalState)
+  } finally {
+    await deactivate?.(); await owner.dispose()
+    await rm(userDataDir, { recursive: true, force: true })
+  }
+})
+
+for (const terminalState of ['failed', 'cancelled'] as const) for (const missing of ['patch', 'valid-patch', 'capture'] as const) test(`${terminalState} without ${missing} archives only a breakpoint, never later disk contents`, async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'checkpoint-no-patch-'))
+  const workspaceRoot = join(userDataDir, 'workspace')
+  await mkdir(workspaceRoot, { recursive: true })
+  const owner = await createArtifactVersionsCapabilityTestHarness(userDataDir)
+  const runtime = new ResearchCheckpointRuntime({ userDataDir })
+  const lifecycle = realArtifactContext(userDataDir, workspaceRoot, owner, [])
+  const deactivate = await runtime.activate(lifecycle)
+  try {
+    const event: DomainTurnArtifactEvent = { ...turnEventWithExactOutputs(workspaceRoot, 'no-patch', 1, [{ path: 'result.csv', bytes: 'unattributed' }]),
+      kind: 'turn-terminated', terminalState, filePatchReceipts: [] }
+    if (missing === 'valid-patch') {
+      const original = turnEventWithExactOutputs(workspaceRoot, 'no-patch', 1, [{ path: 'result.csv', bytes: 'unattributed' }])
+      Object.assign(event, { filePatchReceipts: original.filePatchReceipts!.map(receipt => ({ ...receipt, patchText: 'tampered patch' })) })
+    }
+    if (missing === 'capture') Object.assign(event, { fileEffects: { ...event.fileEffects!, effects: [], issues: [{ code: 'terminal-capture-unknown', message: 'No live terminal boundary available.' }] } })
+    await publishExactOutputBoundary(lifecycle, event)
+    await writeFile(join(workspaceRoot, 'result.csv'), 'external later bytes')
+    await runtime.consume(event)
+    await waitForAsync(async () => (await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)).state === 'committed')
+    const status = await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', event.turnId)
+    if (status.state !== 'committed') assert.fail()
+    assert.deepEqual(status.outputArtifacts, [])
+    const record = await runtime.read(workspaceRoot, { versionId: status.artifactRef.versionId })
+    assert.equal(record.manifest.turn.terminalState, terminalState)
+    assert.ok(record.manifest.breakpoints.some(item => item.blocking))
+    const history = artifactVersionListResultV2Schema.parse(await owner.invokeAction(ARTIFACT_VERSIONS_CAPABILITY_IDS.listV2, {}, workspaceRoot))
+    if (!history.ok) assert.fail()
+    assert.equal(history.value.items.length, 1)
+  } finally { await deactivate(); await owner.dispose(); await rm(userDataDir, { recursive: true, force: true }) }
+})

@@ -1,3 +1,13 @@
+import {
+  documentCommentMutateRequestSchema, documentCommentMutateResponseSchema, documentCommentReadRequestSchema, documentCommentResponseSchema, documentShareCreateRequestSchema, documentShareLookupRequestSchema, documentShareManageResponseSchema, documentShareRevokeRequestSchema,
+  type DocumentCommentMutateRequest, type DocumentCommentMutateResponse, type DocumentCommentReadRequest, type DocumentCommentResponse, type DocumentShareCreateRequest, type DocumentShareLookupRequest, type DocumentShareManageResponse, type DocumentShareRevokeRequest
+} from '@sciforge/document-sharing-contracts'
+import {
+  cloudSpaceEnsureRequestSchema, cloudSpaceResponseSchema, cloudSpacesListResponseSchema,
+  cloudSpaceSessionRequestSchema, cloudSpaceSessionGrantSchema,
+  type CloudSpaceEnsureRequest, type CloudSpaceResponse, type CloudSpacesListResponse,
+  type CloudSpaceSessionRequest, type CloudSpaceSessionGrant
+} from '@sciforge/cloud-spaces-contracts'
 import { z } from 'zod'
 import {
   deviceIdSchema,
@@ -17,7 +27,7 @@ import {
 
 export const AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID =
   'sciforge.authenticated-cloud-transport' as const
-export const AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION = '4.0.0' as const
+export const AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION = '7.0.0' as const
 export const AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID = 'sciforge.cloud.command' as const
 
 const publicAuthenticatedCloudCommandSchema = restRequestSchema.superRefine(
@@ -92,6 +102,13 @@ export const authenticatedCloudTransportStatusSchema = z.discriminatedUnion('sta
 ])
 
 export type AuthenticatedCloudRequest = z.infer<typeof authenticatedCloudRequestSchema>
+export const authenticatedCloudBindingSchema = z.object({
+  baseUrl: z.url().max(2_048), userId: userIdSchema, deviceId: deviceIdSchema,
+  deviceRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  sessionGeneration: z.string().min(1).max(128)
+}).strict().readonly()
+export type AuthenticatedCloudBinding = z.infer<typeof authenticatedCloudBindingSchema>
+export type AuthenticatedCloudExecutionOptions = Readonly<{ signal?: AbortSignal; expectedBinding?: AuthenticatedCloudBinding }>
 export type AuthenticatedCloudResponse = z.infer<typeof authenticatedCloudResponseSchema>
 export type AuthenticatedCloudTransportStatus = z.infer<
   typeof authenticatedCloudTransportStatusSchema
@@ -124,12 +141,22 @@ export type AuthenticatedObjectReadInput = z.infer<typeof authenticatedObjectRea
 export type AuthenticatedObjectReadResult = z.infer<typeof authenticatedObjectReadResultSchema>
 
 export type AuthenticatedCloudTransport = Readonly<{
+  lookupDocumentShare(input: DocumentShareLookupRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<DocumentShareManageResponse>
+  createDocumentShare(input: DocumentShareCreateRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<DocumentShareManageResponse>
+  revokeDocumentShare(input: DocumentShareRevokeRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<DocumentShareManageResponse>
+  readDocumentComments(input: DocumentCommentReadRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<DocumentCommentResponse>
+  mutateDocumentComments(input: DocumentCommentMutateRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<DocumentCommentMutateResponse>
+
+  listCloudSpaces(options?: Readonly<{ signal?: AbortSignal }>): Promise<CloudSpacesListResponse>
+  ensureCloudSpace(input: CloudSpaceEnsureRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<CloudSpaceResponse>
+  /** Main-only, single-use browser bootstrap grant; never forward to a renderer. */
+  createCloudSpaceSession(input: CloudSpaceSessionRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<CloudSpaceSessionGrant>
   stageObject(input: AuthenticatedObjectStageInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<ObjectStagedResponse>
   readObject(input: AuthenticatedObjectReadInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<AuthenticatedObjectReadResult>
   status(): AuthenticatedCloudTransportStatus
   execute(
     request: AuthenticatedCloudRequest,
-    options?: Readonly<{ signal?: AbortSignal }>
+    options?: AuthenticatedCloudExecutionOptions
   ): Promise<AuthenticatedCloudResponse>
 }>
 
@@ -141,8 +168,10 @@ export type AuthenticatedCloudTransportErrorCode =
   | 'operation_not_allowed'
   | 'cloud_unavailable'
   | 'cloud_rejected'
+  | 'object_upload_limit'
   | 'cloud_response_invalid'
   | 'cloud_timeout'
+  | 'space_not_ready'
 
 export class AuthenticatedCloudTransportError extends Error {
   constructor(
@@ -159,11 +188,29 @@ export function defineAuthenticatedCloudTransport(
   input: AuthenticatedCloudTransport
 ): AuthenticatedCloudTransport {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
+    typeof input.lookupDocumentShare !== 'function' ||
+    typeof input.createDocumentShare !== 'function' ||
+    typeof input.revokeDocumentShare !== 'function' ||
+    typeof input.readDocumentComments !== 'function' ||
+    typeof input.mutateDocumentComments !== 'function' ||
     typeof input.status !== 'function' || typeof input.execute !== 'function' ||
-    typeof input.stageObject !== 'function' || typeof input.readObject !== 'function') {
+    typeof input.listCloudSpaces !== 'function' || typeof input.ensureCloudSpace !== 'function' ||
+    typeof input.createCloudSpaceSession !== 'function' || typeof input.stageObject !== 'function' || typeof input.readObject !== 'function') {
     throw new TypeError('Authenticated Cloud transport is invalid.')
   }
   return Object.freeze({
+    lookupDocumentShare: async (value, options) => documentShareManageResponseSchema.parse(await input.lookupDocumentShare(documentShareLookupRequestSchema.parse(value), options)),
+    createDocumentShare: async (value, options) => documentShareManageResponseSchema.parse(await input.createDocumentShare(documentShareCreateRequestSchema.parse(value), options)),
+    revokeDocumentShare: async (value, options) => documentShareManageResponseSchema.parse(await input.revokeDocumentShare(documentShareRevokeRequestSchema.parse(value), options)),
+    readDocumentComments: async (value, options) => documentCommentResponseSchema.parse(await input.readDocumentComments(documentCommentReadRequestSchema.parse(value), options)),
+    mutateDocumentComments: async (value, options) => documentCommentMutateResponseSchema.parse(await input.mutateDocumentComments(documentCommentMutateRequestSchema.parse(value), options)),
+    listCloudSpaces: async options => cloudSpacesListResponseSchema.parse(await input.listCloudSpaces(options)),
+    ensureCloudSpace: async (inputValue, options) => cloudSpaceResponseSchema.parse(
+      await input.ensureCloudSpace(cloudSpaceEnsureRequestSchema.parse(inputValue), options)
+    ),
+    createCloudSpaceSession: async (inputValue, options) => cloudSpaceSessionGrantSchema.parse(
+      await input.createCloudSpaceSession(cloudSpaceSessionRequestSchema.parse(inputValue), options)
+    ),
     stageObject: async (rawInput, options) => {
       const parsed = authenticatedObjectStageInputSchema.parse(rawInput)
       return objectStagedResponseSchema.parse(await input.stageObject({ ...parsed, body: new Uint8Array(parsed.body) }, options))

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   createNativeIdentityPrivateVault,
@@ -135,3 +135,37 @@ function memoryBinding(
     deleteSecret: (key) => { values.delete(key) }
   }
 }
+
+it('coalesces overlapping native reads without retaining settled secrets or failures', async () => {
+  const binding = memoryBinding(new Map(), [])
+  let finish!: (value: string | null) => void
+  const read = vi.fn(() => new Promise<string | null>(resolve => { finish = resolve }))
+  const vault = createNativeIdentityPrivateVault({ installationId: INSTALLATION_ID, binding: { ...binding, readSecret: read } })
+  const ref = { kind: 'oidc-session' } as const
+  const first = vault.read(ref), second = vault.read(ref)
+  await Promise.resolve()
+  expect(read).toHaveBeenCalledTimes(1)
+  finish('secret')
+  expect(await Promise.all([first, second])).toEqual(['secret', 'secret'])
+  read.mockRejectedValueOnce(new Error('denied'))
+  await expect(vault.read(ref)).rejects.toThrow('denied')
+  read.mockResolvedValueOnce('updated')
+  expect(await vault.read(ref)).toBe('updated')
+  expect(read).toHaveBeenCalledTimes(3)
+})
+
+it('does not reuse an old pending read after a mutation', async () => {
+  const binding = memoryBinding(new Map(), [])
+  let finish!: (value: string | null) => void
+  const read = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    .mockResolvedValue('new')
+  const vault = createNativeIdentityPrivateVault({ installationId: INSTALLATION_ID, binding: { ...binding, readSecret: read } })
+  const ref = { kind: 'device-key' } as const
+  const old = vault.read(ref)
+  await Promise.resolve()
+  await vault.write(ref, 'new')
+  expect(await vault.read(ref)).toBe('new')
+  finish('old')
+  expect(await old).toBe('old')
+  expect(read).toHaveBeenCalledTimes(2)
+})

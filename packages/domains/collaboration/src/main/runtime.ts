@@ -1,3 +1,5 @@
+import type { SessionAcceptedInputEvent } from '@sciforge/domain-sdk/agent-execution'
+import { referencedTaskIds, TASK_CHAT_END, type TaskChatReadInput } from '../chat-association-contract.js'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import {
@@ -41,6 +43,8 @@ import type {
   CollaborationTaskListInput,
   CollaborationTaskOfferDecisionInput,
   CollaborationTaskReturnInput,
+  CollaborationTaskSessionContinueInput,
+  CollaborationTaskSessionContinueResult,
   CollaborationTaskView,
   CollaborationOfferAvailability,
   CollaborationProjectionView
@@ -79,6 +83,7 @@ import {
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
+import { workerFollowupView } from '../task-followup.js'
 import { parseWorkerRuntimeResult } from '../worker-runtime-result.js'
 import type {
   LocalTaskInteractionView,
@@ -89,6 +94,7 @@ import { workerResidualDisposeInputSchema } from '../worker-delivery.js'
 import type {
   WorkerDeliveryReadInput,
   WorkerDeliveryMaterialsInput,
+  WorkerDeliveryMaterialImportInput,
   WorkerDeliveryMaterialsResult,
   WorkerDeliveryDraftSaveInput,
   WorkerDeliverySubmitInput,
@@ -127,6 +133,7 @@ export function isCoordinatorProjectInboxPayload(
   payload: AgentInboxMessage['payload']
 ): boolean {
   return payload.type === 'project.started' ||
+    payload.type === 'project.updated' ||
     payload.type === 'project.plan.confirmed' ||
     payload.type === 'project.requirements.confirmed' ||
     payload.type === 'project.membership.changed' ||
@@ -303,6 +310,7 @@ export class CollaborationRuntime {
       now: this.options.now
     })
     tasks = new CollaborationTaskAdapter({
+      wakeups: context.wakeups,
       store: this.store,
       connection,
       outbox,
@@ -327,11 +335,13 @@ export class CollaborationRuntime {
     this.projections = projections
     this.tasks = tasks
 
+    const disposeAcceptedInput = context.turnEvents.subscribeAcceptedInput?.(event => this.recordAcceptedTaskChatInput(event))
     const disposeAdmission = context.turnEvents.subscribeRequiredAdmission?.((event) => tasks.acceptSessionAdmission(event))
     const disposeOutput = context.turnEvents.subscribeRequiredOutput?.((event) =>
       tasks.acceptSessionOutput(event, (ref) => context.agentThreads.read(ref)))
     const disposeTurnEvents = context.turnEvents.subscribe(async (event) => {
       if (event.kind !== 'after-turn' || !('turnId' in event) || !event.turnId) return
+      await this.recordTaskChatTurn(event.runtimeId, event.threadId, event.turnId, event.occurredAt, event.principal?.subject, event.clientDirectiveId)
       const matching = activeProjectionBindingsForSession(
         this.store.snapshot().projections,
         event.runtimeId,
@@ -355,16 +365,34 @@ export class CollaborationRuntime {
     })
     const disposeRemoteApprovals = remoteApprovals?.subscribe() ?? (() => undefined)
 
-    await this.reconcileTranscriptSnapshots()
-    await projections.recover()
+    const traced = process.env.SCIFORGE_STARTUP_TRACE === '1'
+    const lap = async <T>(step: string, run: () => Promise<T>): Promise<T> => {
+      const at = Date.now()
+      try {
+        return await run()
+      } finally {
+        if (traced) {
+          context.log({
+            level: 'info',
+            message: 'Collaboration startup step.',
+            detail: { step, elapsedMs: Date.now() - at }
+          })
+        }
+      }
+    }
+    await lap('transcript-snapshots', () => this.reconcileTranscriptSnapshots())
+    await lap('projection-recovery', () => projections.recover())
     this.syncTranscriptSubscriptions()
-    await connection.activate()
+    await lap('connection-activate', () => connection.activate())
     // Each canonical online transition reconciles Project visibility before
     // Task recovery can execute; offline runs remain durable until that transition.
-    await tasks.recover()
-    await tasks.publishAvailability(connection.state().state === 'connected' ? 'online' : 'offline')
+    await lap('task-recovery', () => tasks.recover())
+    await lap('availability-publish', () =>
+      tasks.publishAvailability(connection.state().state === 'connected' ? 'online' : 'offline')
+    )
 
     return async () => {
+      await disposeAcceptedInput?.()
       await disposeAdmission?.()
       await disposeOutput?.()
       await disposeTurnEvents()
@@ -824,6 +852,76 @@ export class CollaborationRuntime {
     return { managedContainer }
   }
 
+  readTaskChats(input: TaskChatReadInput) {
+    const state = this.store.snapshot()
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (identity.state !== 'ready' || state.user?.userId !== identity.userId) return { associations: [], activeTaskId: null }
+    const visible = new Set(state.projects.filter(project => !state.projectUnavailableFences.some(fence => fence.projectId === project.projectId)).map(project => project.projectId))
+    const associations = state.taskChatAssociations.filter(item => item.userId === identity.userId && visible.has(item.projectId) && (!input.taskId || item.taskId === input.taskId) && (!input.runtimeId || item.runtimeId === input.runtimeId) && (!input.threadId || item.threadId === input.threadId))
+      // Optional fields in existing in-memory state may be explicitly undefined.
+      // Publish their absent wire shape without weakening the capability JSON check.
+      .map(({ turnId, clientDirectiveId, endedAt, endMessageId, ...association }) => ({
+        ...association,
+        ...(turnId === undefined ? {} : { turnId }),
+        ...(clientDirectiveId === undefined ? {} : { clientDirectiveId }),
+        ...(endedAt === undefined ? {} : { endedAt }),
+        ...(endMessageId === undefined ? {} : { endMessageId })
+      }))
+    const key = JSON.stringify([identity.userId, input.runtimeId, input.threadId])
+    const dedicated = state.taskRuns.find(run => run.runtimeId === input.runtimeId && run.threadId === input.threadId && run.execution?.assigneeUserId === identity.userId && visible.has(run.offer.projectId))
+    return { associations, detached: state.taskChatClosedSessions.includes(key), activeTaskId: !input.runtimeId || !input.threadId || state.taskChatClosedSessions.includes(key) ? null : associations.at(-1)?.taskId ?? dedicated?.offer.taskId ?? null }
+  }
+
+  private async recordAcceptedTaskChatInput(event: SessionAcceptedInputEvent): Promise<void> {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (identity.state !== 'ready' || this.store.snapshot().user?.userId !== identity.userId || event.principal?.subject !== identity.userId) return
+    const { runtimeId, threadId } = event
+    const key = JSON.stringify([identity.userId, runtimeId, threadId])
+    const occurredAt = (this.options.now?.() ?? new Date()).toISOString()
+    await this.store.transact(state => {
+      if (state.user?.userId !== identity.userId) return
+      const inputKey = JSON.stringify([identity.userId, runtimeId, threadId, event.receipt.clientDirectiveId, event.receipt.revision])
+      if (state.taskChatAcceptedInputs.includes(inputKey)) return
+      const previous = [...state.taskChatAssociations].reverse().find(item => item.userId === identity.userId && item.runtimeId === runtimeId && item.threadId === threadId)
+      const explicitIds = referencedTaskIds(event.text)
+      if (explicitIds.length > 1) throw new Error('每条消息只能关联一个任务，请移除其他任务后再发送。')
+      if (event.text.includes(TASK_CHAT_END) && !explicitIds.length) {
+        state.taskChatAcceptedInputs.push(inputKey)
+        if (!state.taskChatClosedSessions.includes(key)) state.taskChatClosedSessions.push(key)
+        if (previous && !previous.endedAt) { previous.endedAt = occurredAt; previous.endMessageId = event.receipt.clientDirectiveId }
+        return
+      }
+      const dedicated = state.taskRuns.find(run => run.runtimeId === runtimeId && run.threadId === threadId && run.execution?.assigneeUserId === identity.userId)
+      const inheritedTaskId = previous?.taskId ?? dedicated?.offer.taskId
+      const ids = explicitIds.length ? explicitIds : inheritedTaskId && !state.taskChatClosedSessions.includes(key) ? [inheritedTaskId] : []
+      if (!ids.length) return
+      state.taskChatAcceptedInputs.push(inputKey)
+      for (const taskId of ids) {
+        const task = state.tasks.find(item => item.taskId === taskId) ?? this.connection?.cloudDashboards().filter(dashboard => !dashboard.revoked && !dashboard.stale).flatMap(dashboard => dashboard.tasks).find(item => item.taskId === taskId)
+        if (!task || !state.projects.some(item => item.projectId === task.projectId) || state.projectUnavailableFences.some(item => item.projectId === task.projectId)) continue
+        if (previous && previous.taskId !== taskId && !previous.endedAt) { previous.endedAt = occurredAt; previous.endMessageId = event.receipt.clientDirectiveId }
+        state.taskChatClosedSessions = state.taskChatClosedSessions.filter(item => item !== key)
+        state.taskChatAssociations.push({ userId: identity.userId, projectId: task.projectId, taskId, runtimeId, threadId, ...(event.receipt.turnId === undefined ? {} : { turnId: event.receipt.turnId }), clientDirectiveId: event.receipt.clientDirectiveId, messageId: event.receipt.clientDirectiveId, occurredAt })
+      }
+    })
+  }
+
+  private async recordTaskChatTurn(runtimeId: string, threadId: string, turnId: string, _occurredAt: string, subject?: string, clientDirectiveId?: string): Promise<void> {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (!clientDirectiveId || identity.state !== 'ready' || subject !== identity.userId) return
+    const thread = await this.context!.agentThreads.read({ runtimeId, threadId })
+    const turn = thread.turns.find(item => item.id === turnId)
+    const message = turn?.messages.find(item => item.kind === 'user-message')
+    await this.store.transact(state => {
+      for (const item of state.taskChatAssociations) {
+        if (item.userId === identity.userId && item.runtimeId === runtimeId && item.threadId === threadId && item.clientDirectiveId === clientDirectiveId) {
+          item.turnId = turnId
+          if (message) item.messageId = message.itemId
+        }
+      }
+    })
+  }
+
   listTasks(input: CollaborationTaskListInput): readonly CollaborationTaskView[] {
     return this.taskViews(this.store.snapshot(), input)
   }
@@ -910,25 +1008,54 @@ export class CollaborationRuntime {
     return this.requireTasks().appendTaskCheckpoint(input)
   }
 
+  /** Local reads remain available offline, but never across Host/store accounts. */
+  authorizeTaskInteractionRead(principalUserId: string): void {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (!principalUserId || this.store.snapshot().user?.userId !== principalUserId ||
+        ('userId' in identity && identity.userId !== principalUserId)) {
+      throw new Error('The current Principal does not own this local collaboration identity.')
+    }
+  }
+
+  async readTaskInteractionView(
+    input: Readonly<{ projectId: string; taskId: string; executionId?: string }>,
+    access: Readonly<{ userId: string; assertCurrent(): void }>
+  ): Promise<LocalTaskInteractionView> {
+    access.assertCurrent()
+    await this.openLocalStore()
+    access.assertCurrent()
+    this.authorizeTaskInteractionRead(access.userId)
+    const view = this.taskInteractionView(input.projectId, input.taskId, input.executionId, access.userId)
+    access.assertCurrent()
+    this.authorizeTaskInteractionRead(access.userId)
+    return view
+  }
+
   taskInteractionView(
     projectId: string,
     taskId: string,
-    executionId?: string
+    executionId: string | undefined,
+    principalUserId: string
   ): LocalTaskInteractionView {
+    this.authorizeTaskInteractionRead(principalUserId)
     return this.requireTasks().taskInteractionView(projectId, taskId, executionId)
   }
 
   listTaskInteractions(
     projectId: string,
-    taskId?: string
+    taskId: string | undefined,
+    principalUserId: string
   ): readonly CollaborationTaskInteraction[] {
+    this.authorizeTaskInteractionRead(principalUserId)
     return this.requireTasks().listTaskInteractions(projectId, taskId)
   }
 
   listTaskCheckpoints(
     projectId: string,
-    taskId?: string
+    taskId: string | undefined,
+    principalUserId: string
   ): readonly CollaborationTaskCheckpoint[] {
+    this.authorizeTaskInteractionRead(principalUserId)
     return this.requireTasks().listTaskCheckpoints(projectId, taskId)
   }
 
@@ -971,6 +1098,45 @@ export class CollaborationRuntime {
   async decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<void> {
     await this.requireTasks().decideOffer(input.taskOfferId, { decision: input.decision })
     await this.refreshDashboardsAfterCommand()
+  }
+
+  async openTaskSession(input: Readonly<{ projectId: string; taskId: string; executionId?: string }>) {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (identity.state !== 'ready' || this.store.snapshot().user?.userId !== identity.userId) throw new Error('请使用当前协作账户打开任务会话。')
+    const runs = this.store.snapshot().taskRuns.filter((run) => run.offer.projectId === input.projectId &&
+      run.offer.taskId === input.taskId && (!input.executionId || run.offer.executionId === input.executionId) &&
+      run.execution?.assigneeUserId === identity.userId && run.execution.assigneeAgentId === this.localAgentId())
+    if (runs.length !== 1) throw new Error('请指定当前任务执行，再打开会话。')
+    const session = await this.requireTasks().ensureTaskSession({ ...input, executionId: runs[0]!.offer.executionId }, identity.userId)
+    return { opened: true as const, sessionId: session.threadId, ...session }
+  }
+
+  async pauseTask(input: Readonly<{ projectId: string; taskId: string; executionId: string }>): Promise<void> {
+    const identity = this.options.authenticatedCloudTransport.status()
+    const run = this.store.snapshot().taskRuns.find((candidate) => candidate.offer.executionId === input.executionId)
+    if (identity.state !== 'ready' || this.store.snapshot().user?.userId !== identity.userId ||
+        !run || run.offer.projectId !== input.projectId || run.offer.taskId !== input.taskId ||
+        run.execution?.assigneeUserId !== identity.userId || run.execution.assigneeAgentId !== this.localAgentId()) {
+      throw new Error('只有当前电脑上的任务执行人可以暂停任务。')
+    }
+    if (this.taskInteractionView(input.projectId, input.taskId, input.executionId, identity.userId).state === 'paused_local') return
+    const interaction = await this.submitTaskInteraction({ ...input, kind: 'pause', origin: 'human' })
+    if (interaction.state !== 'applied') throw new Error(interaction.error ?? '任务暂停尚未完成，请检查当前任务状态。')
+  }
+
+  async startTask(input: Parameters<CollaborationTaskAdapter['startTask']>[0]): Promise<void> {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (identity.state !== 'ready' || this.store.snapshot().user?.userId !== identity.userId) throw new Error('请使用当前协作账户开始任务。')
+    await this.requireTasks().startTask(input, identity.userId)
+    await this.refreshDashboardsAfterCommand()
+  }
+
+  async continueTaskSession(input: CollaborationTaskSessionContinueInput): Promise<CollaborationTaskSessionContinueResult> {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (identity.state !== 'ready' || this.store.snapshot().user?.userId !== identity.userId) throw new Error('请使用当前协作账户接续任务。')
+    const result = await this.requireTasks().continueTaskSession(input, identity.userId)
+    await this.refreshDashboardsAfterCommand()
+    return result
   }
 
   async returnTask(input: CollaborationTaskReturnInput): Promise<void> {
@@ -1041,7 +1207,8 @@ export class CollaborationRuntime {
     })
   }
 
-  workerDeliveryView(input: WorkerDeliveryReadInput): Promise<WorkerDeliveryView> {
+  async workerDeliveryView(input: WorkerDeliveryReadInput, source?: Readonly<{ runtimeId: string; threadId: string; userId: string; assertCurrent(): void }>): Promise<WorkerDeliveryView> {
+    if (source) await this.authorizeAgentDraftContext(input, source)
     return this.requireTasks().refreshWorkerDelivery(input)
   }
 
@@ -1049,8 +1216,37 @@ export class CollaborationRuntime {
     return this.requireTasks().listWorkerDeliveryMaterials(input)
   }
 
-  saveWorkerDeliveryDraft(input: WorkerDeliveryDraftSaveInput): Promise<WorkerDeliveryView> {
-    return this.requireTasks().saveWorkerDeliveryDraft(input)
+  importWorkerDeliveryMaterial(input: WorkerDeliveryMaterialImportInput) {
+    const identity = this.options.authenticatedCloudTransport.status()
+    if (identity.state !== 'ready' || identity.userId !== this.store.snapshot().user?.userId) {
+      throw new Error('请先连接当前任务执行人的云端账户。')
+    }
+    return this.requireTasks().importWorkerDeliveryMaterial(input)
+  }
+
+  async saveWorkerDeliveryDraft(input: WorkerDeliveryDraftSaveInput, source?: Readonly<{ runtimeId: string; threadId: string; userId: string; assertCurrent(): void }>): Promise<WorkerDeliveryView> {
+    if (!source) return this.requireTasks().saveWorkerDeliveryDraft(input)
+    const sourceChat = await this.authorizeAgentDraftContext(input, source)
+    return this.requireTasks().saveWorkerDeliveryDraft(input, sourceChat)
+  }
+
+  private async authorizeAgentDraftContext(input: WorkerDeliveryReadInput, source: Readonly<{ runtimeId: string; threadId: string; userId: string; assertCurrent(): void }>) {
+    source.assertCurrent()
+    const identity = this.options.authenticatedCloudTransport.status()
+    const run = this.store.snapshot().taskRuns.find(item => item.offer.executionId === input.executionId)
+    if (identity.state !== 'ready' || identity.userId !== source.userId || this.store.snapshot().user?.userId !== source.userId || run?.execution?.assigneeUserId !== source.userId || run.offer.taskId !== input.taskId || run.offer.projectId !== input.projectId) throw new Error('只有当前任务执行人可以从关联聊天写入草稿。')
+    if (!this.store.snapshot().projects.some(project => project.projectId === input.projectId) || this.store.snapshot().projectUnavailableFences.some(fence => fence.projectId === input.projectId)) throw new Error('项目访问权限已失效。')
+    const thread = await this.context!.agentThreads.read({ runtimeId: source.runtimeId, threadId: source.threadId })
+    const turn = thread.turns.at(-1)
+    const association = this.readTaskChats({ runtimeId: source.runtimeId, threadId: source.threadId })
+    if (!turn || (association.activeTaskId !== input.taskId)) throw new Error('请先在当前聊天中引用此任务。')
+    source.assertCurrent()
+    return { runtimeId: source.runtimeId, threadId: source.threadId, turnId: turn.id }
+
+  }
+
+  async cancelFailedWorkerDelivery(input: import('../worker-delivery.js').WorkerDeliveryCancelInput): Promise<WorkerDeliveryView> {
+    return this.requireTasks().cancelFailedWorkerDelivery(input)
   }
 
   async submitWorkerDelivery(input: WorkerDeliverySubmitInput): Promise<WorkerDeliveryView> {
@@ -1384,6 +1580,7 @@ export function collaborationTaskViewForRun(
           : 'available' as const
       : 'available' as const
   const humanQuestion = needsHumanQuestion(run)
+  const followup = workerFollowupView(run.followups.at(-1), run.agentJournal.at(-1))
   if (!run.execution) {
     throw new Error('A claimed local Task run is missing its immutable Worker execution.')
   }
@@ -1393,6 +1590,7 @@ export function collaborationTaskViewForRun(
     taskOfferId: run.offer.taskOfferId,
     workerUserId: run.execution.assigneeUserId,
     executionId: run.offer.executionId,
+    ...(run.executionMode !== undefined ? { executionMode: run.executionMode } : {}),
     ...(run.execution.contractRevision ?? run.task?.contractRevision ?? run.offer.contractRevision
       ? { contractRevision: run.execution.contractRevision ?? run.task?.contractRevision ?? run.offer.contractRevision! }
       : {}),
@@ -1404,6 +1602,7 @@ export function collaborationTaskViewForRun(
     revision: run.task?.revision ?? run.expectedTaskRevision,
     title: run.task?.title ?? 'Pending Task offer',
     state: run.state,
+    ...(followup ? { followup } : {}),
     decisionRequired: false,
     preflightReasons: run.latestPreflight?.reasons ?? [],
     ...(latestTurn ? { localTurnId: latestTurn } : {}),

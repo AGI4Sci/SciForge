@@ -5,10 +5,13 @@ import {
   defineTrustedRendererDomainPackageEntry,
   type DomainRendererCommandHandler,
   type DomainRendererWorkbenchGlobalOverlayValue,
+  type DomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 import {
+  IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRIBUTION,
+  IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRACT,
   IDENTITY_RENDERER_COMMAND_CONTRIBUTION,
   IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRACT,
   IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION,
@@ -19,6 +22,7 @@ import {
   IDENTITY_RENDERER_TOOLBAR_I18N_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
+import { AccountSidebarSection } from './AccountSidebarSection.js'
 import { IdentityAccountOverlay } from './IdentityAccountOverlay.js'
 import { createIdentityRendererClient } from './client.js'
 import {
@@ -28,6 +32,7 @@ import {
   type IdentityToolbarI18nResourceContribution
 } from './messages.js'
 import { IdentityRendererProjection } from './projection.js'
+import { AccountUsageProjection } from './usage.js'
 
 type IdentityRendererLifecycle = Readonly<{
   activate(): void | (() => void)
@@ -37,6 +42,7 @@ type IdentityRendererContribution =
   | DomainRendererCommandHandler
   | DomainRendererWorkbenchToolbarActionValue<typeof UserRound>
   | DomainRendererWorkbenchGlobalOverlayValue<ReactElement>
+  | DomainRendererWorkbenchNavigationSectionValue<ReactElement>
   | IdentityRendererLifecycle
   | IdentityI18nResourceContribution
   | IdentityToolbarI18nResourceContribution
@@ -51,6 +57,7 @@ export function createDomainRendererEntry(
   const projection = new IdentityRendererProjection(
     createIdentityRendererClient(host.capabilityInvoker)
   )
+  const usage = new AccountUsageProjection()
 
   const command: DomainRendererCommandHandler = Object.freeze({
     execute: (invocation) => {
@@ -83,7 +90,39 @@ export function createDomainRendererEntry(
         <IdentityAccountOverlay
           projection={projection}
           firstRun={isFirstRunActivation(context.activation?.payload)}
-          onClose={context.onClose}
+          focusSection={overlayFocusSection(context.activation?.payload)}
+          onClose={() => {
+            context.onClose()
+            void usage.load()
+          }}
+        />
+      )
+    })
+  const accountNavigation: DomainRendererWorkbenchNavigationSectionValue<ReactElement> =
+    Object.freeze({
+      render: (context) => (
+        <AccountSidebarSection
+          projection={projection}
+          usage={usage}
+          className={context.className}
+          onOpenAccount={() => {
+            workbench.toggleGlobalOverlay!({
+              contributionId: IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION.id,
+              sessionId: context.session.id,
+              open: true
+            })
+          }}
+          onOpenCloud={() => {
+            workbench.toggleGlobalOverlay!({
+              contributionId: IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION.id,
+              sessionId: context.session.id,
+              open: true,
+              activation: {
+                revision: 1,
+                payload: { section: 'cloud' }
+              }
+            })
+          }}
         />
       )
     })
@@ -108,6 +147,7 @@ export function createDomainRendererEntry(
       })
       return () => {
         disposed = true
+        usage.dispose()
         projection.dispose()
       }
     }
@@ -131,6 +171,11 @@ export function createDomainRendererEntry(
         value: overlay
       },
       {
+        ...IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRIBUTION,
+        contract: IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRACT,
+        value: accountNavigation
+      },
+      {
         ...IDENTITY_RENDERER_LIFECYCLE_CONTRIBUTION,
         value: lifecycle
       },
@@ -152,6 +197,16 @@ function isFirstRunActivation(payload: unknown): boolean {
     !Array.isArray(payload) &&
     'mode' in payload &&
     payload.mode === 'first-run'
+}
+
+function overlayFocusSection(payload: unknown): 'cloud' | null {
+  return typeof payload === 'object' &&
+    payload !== null &&
+    !Array.isArray(payload) &&
+    'section' in payload &&
+    payload.section === 'cloud'
+    ? 'cloud'
+    : null
 }
 
 export * from './client.js'

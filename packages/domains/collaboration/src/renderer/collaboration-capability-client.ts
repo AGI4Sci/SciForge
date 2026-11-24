@@ -1,3 +1,4 @@
+import { createTaskChatClient } from './task-chat-client.js'
 import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 import type { z } from 'zod'
 
@@ -39,11 +40,18 @@ import {
   collaborationTaskCheckpointAppendResultSchema,
   collaborationTaskOfferDecisionInputSchema,
   collaborationTaskOfferDecisionResultSchema,
+  collaborationTaskPauseInputSchema,
+  collaborationTaskPauseResultSchema,
+  collaborationTaskStartInputSchema,
+  collaborationTaskStartResultSchema,
+  type CollaborationTaskStartInput,
   collaborationTaskReturnInputSchema,
   collaborationTaskReturnResultSchema,
   type CollaborationTaskReturnInput,
   collaborationTaskSessionOpenInputSchema,
   collaborationTaskSessionOpenResultSchema,
+  collaborationTaskSessionContinueInputSchema,
+  collaborationTaskSessionContinueResultSchema,
   type CollaborationActivityCommentInput,
   type CollaborationConnectionConfigureInput,
   type CollaborationNotificationMarkReadInput,
@@ -63,15 +71,21 @@ import {
   type CollaborationTaskCheckpointAppendInput,
   type CollaborationTaskOfferDecisionInput,
   type CollaborationTaskSessionOpenInput,
+  type CollaborationTaskSessionContinueInput,
+  type CollaborationTaskSessionContinueResult,
 } from '../contract.js'
 import {
   workerDeliveryReadInputSchema,
   workerDeliveryMaterialsInputSchema,
   workerDeliveryMaterialsResultSchema,
+  workerDeliveryMaterialImportInputSchema,
+  workerDeliveryMaterialImportResultSchema,
+  type WorkerDeliveryMaterialImportInput,
   type WorkerDeliveryMaterialsInput,
   type WorkerDeliveryMaterialsResult,
   workerDeliveryDraftSaveInputSchema,
   workerDeliveryResultSchema,
+  workerDeliveryCancelInputSchema, type WorkerDeliveryCancelInput,
   workerDeliverySubmitInputSchema,
   workerResidualDisposeInputSchema,
   type WorkerDeliveryReadInput,
@@ -179,10 +193,22 @@ const contracts = Object.freeze({
     inputSchema: workerDeliveryMaterialsInputSchema,
     outputSchema: workerDeliveryMaterialsResultSchema
   }),
+  workerDeliveryMaterialImport: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.workerDeliveryMaterialImport,
+    effect: 'workspace-write' as const,
+    inputSchema: workerDeliveryMaterialImportInputSchema,
+    outputSchema: workerDeliveryMaterialImportResultSchema
+  }),
   workerDeliveryDraftSave: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.workerDeliveryDraftSave,
     effect: 'workspace-write' as const,
     inputSchema: workerDeliveryDraftSaveInputSchema,
+    outputSchema: workerDeliveryResultSchema
+  }),
+  workerDeliveryCancel: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.workerDeliveryCancel,
+    effect: 'workspace-write' as const,
+    inputSchema: workerDeliveryCancelInputSchema,
     outputSchema: workerDeliveryResultSchema
   }),
   deliverySubmit: Object.freeze({
@@ -216,11 +242,29 @@ const contracts = Object.freeze({
     inputSchema: collaborationTaskOfferDecisionInputSchema,
     outputSchema: collaborationTaskOfferDecisionResultSchema
   }),
+  taskSessionContinue: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskSessionContinue,
+    effect: 'workspace-write' as const,
+    inputSchema: collaborationTaskSessionContinueInputSchema,
+    outputSchema: collaborationTaskSessionContinueResultSchema
+  }),
   taskSessionOpen: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.taskSessionOpen,
-    effect: 'read' as const,
+    effect: 'workspace-write' as const,
     inputSchema: collaborationTaskSessionOpenInputSchema,
     outputSchema: collaborationTaskSessionOpenResultSchema
+  }),
+  taskPause: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskPause,
+    effect: 'workspace-write' as const,
+    inputSchema: collaborationTaskPauseInputSchema,
+    outputSchema: collaborationTaskPauseResultSchema
+  }),
+  taskStart: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskStart,
+    effect: 'external-write' as const,
+    inputSchema: collaborationTaskStartInputSchema,
+    outputSchema: collaborationTaskStartResultSchema
   }),
   taskReturn: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.taskReturn,
@@ -263,6 +307,8 @@ const contracts = Object.freeze({
 const CONFIRMED = Object.freeze({ approval: Object.freeze({ mode: 'confirmation' as const }) })
 
 export type CollaborationRendererClient = Readonly<{
+  readTaskChats: ReturnType<typeof createTaskChatClient>
+
   readStatus(input?: CollaborationStatusReadInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<CollaborationStatusSnapshot>
   configureConnection(input: CollaborationConnectionConfigureInput): Promise<ConnectionConfigureResult>
   changeConnection(input: CollaborationConnectionConnectInput): Promise<ConnectionConnectResult>
@@ -276,13 +322,18 @@ export type CollaborationRendererClient = Readonly<{
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
   readWorkerDelivery(input: WorkerDeliveryReadInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<WorkerDeliveryResult>
   listWorkerDeliveryMaterials(input: WorkerDeliveryMaterialsInput): Promise<WorkerDeliveryMaterialsResult>
+  importWorkerDeliveryMaterial(input: WorkerDeliveryMaterialImportInput): Promise<z.infer<typeof workerDeliveryMaterialImportResultSchema>>
   saveWorkerDeliveryDraft(input: WorkerDeliveryDraftSaveInput): Promise<WorkerDeliveryResult>
+  cancelFailedWorkerDelivery(input: WorkerDeliveryCancelInput): Promise<WorkerDeliveryResult>
   submitWorkerDelivery(input: WorkerDeliverySubmitInput): Promise<WorkerDeliveryResult>
   disposeWorkerResidual(input: WorkerResidualDisposeInput): Promise<WorkerDeliveryResult>
   readTaskInteraction(input: CollaborationTaskInteractionReadInput): Promise<TaskInteractionReadResult>
   appendTaskCheckpoint(input: CollaborationTaskCheckpointAppendInput): Promise<TaskCheckpointAppendResult>
   decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<TaskOfferDecisionResult>
   returnTask(input: CollaborationTaskReturnInput): Promise<z.infer<typeof collaborationTaskReturnResultSchema>>
+  continueTaskSession(input: CollaborationTaskSessionContinueInput): Promise<CollaborationTaskSessionContinueResult>
+  pauseTask(input: z.infer<typeof collaborationTaskPauseInputSchema>): Promise<z.infer<typeof collaborationTaskPauseResultSchema>>
+  startTask(input: CollaborationTaskStartInput): Promise<z.infer<typeof collaborationTaskStartResultSchema>>
   openTaskSession(input: CollaborationTaskSessionOpenInput): Promise<TaskSessionOpenResult>
   manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
   publishComment(input: CollaborationActivityCommentInput): Promise<ActivityCommentResult>
@@ -322,10 +373,13 @@ export function createCollaborationRendererClient(
       CONFIRMED
     ),
     discoverPrivateChannels: (input) => invoker.invoke(contracts.privateChannelDiscover, input),
+    readTaskChats: createTaskChatClient(invoker),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
     readWorkerDelivery: (input, options) => invoker.invoke(contracts.workerDeliveryRead, input, options),
     listWorkerDeliveryMaterials: (input) => invoker.invoke(contracts.workerDeliveryMaterials, input),
+    importWorkerDeliveryMaterial: (input) => invoker.invoke(contracts.workerDeliveryMaterialImport, input),
     saveWorkerDeliveryDraft: (input) => invoker.invoke(contracts.workerDeliveryDraftSave, input),
+    cancelFailedWorkerDelivery: (input) => invoker.invoke(contracts.workerDeliveryCancel, input, CONFIRMED),
     submitWorkerDelivery: (input) => invoker.invoke(
       contracts.deliverySubmit,
       input,
@@ -343,7 +397,10 @@ export function createCollaborationRendererClient(
       CONFIRMED
     ),
     decideTaskOffer: (input) => invoker.invoke(contracts.taskOfferDecide, input, CONFIRMED),
+    pauseTask: (input) => invoker.invoke(contracts.taskPause, input, CONFIRMED),
+    startTask: (input) => invoker.invoke(contracts.taskStart, input, CONFIRMED),
     returnTask: (input) => invoker.invoke(contracts.taskReturn, input, CONFIRMED),
+    continueTaskSession: (input) => invoker.invoke(contracts.taskSessionContinue, input, CONFIRMED),
     openTaskSession: (input) => invoker.invoke(contracts.taskSessionOpen, input),
     manageContainer: (input) => {
       if (input.action === 'refresh-status' || input.action === 'refresh-locators') {

@@ -33,3 +33,34 @@ describe('StreamdownCode plain text fences', () => {
     expect(html).toBe('')
   })
 })
+
+describe('StreamdownCode fenced blocks without a usable language', () => {
+  it('renders an unlabeled fence with code block chrome and a copy button', () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        StreamdownCode,
+        { 'data-block': true },
+        'const answer = 42\n'
+      )
+    )
+
+    expect(html).toContain('ds-code-block')
+    expect(html).toContain('ds-code-block-header')
+    expect(html).toContain('Copy code')
+    expect(html).toContain('const answer = 42')
+  })
+
+  it('maps an unsafe fence language to the text default', () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        StreamdownCode,
+        { className: 'language-foo"bar', 'data-block': true },
+        'plain output\n'
+      )
+    )
+
+    expect(html).toContain('ds-code-block-header')
+    expect(html).toContain('Copy code')
+    expect(html).toContain('data-language="text"')
+  })
+})

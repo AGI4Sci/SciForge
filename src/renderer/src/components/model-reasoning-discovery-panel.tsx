@@ -106,14 +106,14 @@ export function ModelReasoningDiscoveryPanel({
   return (
     <div className="mt-1 rounded-lg border border-ds-border-muted bg-ds-main/20 p-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] font-semibold text-ds-muted">
+        <span className="text-ds-sm font-semibold text-ds-muted">
           {t('modelRouterReasoningDiscoveryTitle')}
         </span>
         <span className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => void load(true)}
-            className="rounded-md border border-ds-border-muted px-2 py-0.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="rounded-md border border-ds-border-muted px-2 py-0.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             {t('modelRouterReasoningDiscoveryRefresh')}
           </button>
@@ -121,7 +121,7 @@ export function ModelReasoningDiscoveryPanel({
             <button
               type="button"
               onClick={onRestoreAuto}
-              className="rounded-md border border-ds-border-muted px-2 py-0.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              className="rounded-md border border-ds-border-muted px-2 py-0.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
             >
               {t('modelRouterReasoningDiscoveryRestore')}
             </button>
@@ -130,19 +130,19 @@ export function ModelReasoningDiscoveryPanel({
       </div>
 
       {state.status === 'loading' ? (
-        <p className="mt-1 text-[11.5px] leading-4 text-ds-faint">
+        <p className="mt-1 text-ds-xs leading-4 text-ds-faint">
           {t('modelRouterReasoningDiscoveryLoading')}
         </p>
       ) : null}
       {state.status === 'error' ? (
-        <p className="mt-1 text-[11.5px] leading-4 text-amber-700 dark:text-amber-300">
+        <p className="mt-1 text-ds-xs leading-4 text-amber-700 dark:text-amber-300">
           {t('modelRouterReasoningDiscoveryError')}
         </p>
       ) : null}
 
       {outcome ? (
         <>
-          <p className="mt-1 text-[11.5px] leading-4 text-ds-faint">
+          <p className="mt-1 text-ds-xs leading-4 text-ds-faint">
             {t(stateLabelKey(outcome))}
             {sourceKey ? ` · ${t(sourceKey)}` : ''}
             {outcome.completeness === 'partial' ? ` · ${t('modelRouterReasoningDiscoveryPartial')}` : ''}
@@ -151,7 +151,7 @@ export function ModelReasoningDiscoveryPanel({
               : ''}
           </p>
           {outcome.stale ? (
-            <p className="mt-1 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            <p className="mt-1 text-ds-xs leading-4 text-amber-700 dark:text-amber-300">
               {t('modelRouterReasoningDiscoveryStaleNote', {
                 message: outcome.refreshError ?? ''
               })}
@@ -164,7 +164,7 @@ export function ModelReasoningDiscoveryPanel({
                 return (
                   <span
                     key={level}
-                    className="rounded border border-ds-border-muted bg-ds-main/40 px-1.5 py-0.5 font-mono text-[11px] text-ds-muted"
+                    className="rounded border border-ds-border-muted bg-ds-main/40 px-1.5 py-0.5 font-mono text-ds-xs text-ds-muted"
                   >
                     {labelKey ? t(labelKey) : level}
                     {level === outcome.defaultLevel
@@ -178,7 +178,7 @@ export function ModelReasoningDiscoveryPanel({
           {declaredEfforts.length > 0 ? (
             <ul className="mt-1.5 grid gap-0.5">
               {declaredEfforts.map((effort) => (
-                <li key={effort} className="font-mono text-[11.5px] leading-4 text-ds-faint">
+                <li key={effort} className="font-mono text-ds-xs leading-4 text-ds-faint">
                   {effort} — {t(declaredStatusKey(outcome, effort))}
                 </li>
               ))}
@@ -187,7 +187,7 @@ export function ModelReasoningDiscoveryPanel({
         </>
       ) : null}
 
-      <p className="mt-1.5 text-[11px] leading-4 text-ds-faint">
+      <p className="mt-1.5 text-ds-xs leading-4 text-ds-faint">
         {t('modelRouterReasoningDiscoveryPrecedence')}
       </p>
     </div>

@@ -62,7 +62,7 @@ export const createLoopCapabilityContracts = Object.freeze({
   ),
   testNode: contract(
     CREATE_LOOP_CAPABILITY_IDS.testNode,
-    'compute',
+    'external-write',
     createLoopTestNodeInputSchema,
     createLoopNodeTestResultSchema
   ),
@@ -209,7 +209,7 @@ export function createCreateLoopCapabilityClient(
       invoker.invoke(
         createLoopCapabilityContracts.testNode,
         { workflowId, nodeId, mockJson },
-        options(workspaceRoot)
+        confirmedOptions(workspaceRoot)
       ),
     checkCode: (workspaceRoot, language, code) =>
       invoker.invoke(

@@ -17,7 +17,7 @@ type SpeechToTextSettingsContext = {
 }
 
 function textInputClass(extra = ''): string {
-  return `w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 ${extra}`
+  return `w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 ${extra}`
 }
 
 export function speechToTextSettingsPatch(
@@ -101,7 +101,7 @@ export function SpeechToTextSettingsSection({ ctx }: { ctx: SpeechToTextSettings
               min={5000}
               max={600000}
               step={5000}
-              className="w-32 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+              className="w-32 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
               value={speechToText.timeoutMs}
               placeholder={String(60000)}
               onChange={(e) => updateSpeechToText({ timeoutMs: Number(e.target.value) })}

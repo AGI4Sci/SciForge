@@ -8,12 +8,13 @@ export function evidenceTraceFromArtifactEvent(
   event: DomainArtifactEvent
 ): readonly Readonly<Record<string, unknown>>[] {
   const scope = domainArtifactEventScope(event)
-  const prefix = event.kind === 'turn-completed'
+  const prefix = event.kind !== 'execution-completed'
     ? event.turnId
     : `execution:${event.executionId}:${event.runId}`
-  const eventMetadata = event.kind === 'turn-completed'
+  const eventMetadata = event.kind !== 'execution-completed'
     ? {
         eventKind: event.kind,
+        ...(event.kind === 'turn-terminated' ? { terminalState: event.terminalState } : {}),
         turnId: event.turnId,
         occurredAt: event.occurredAt,
         targetWatermark: event.targetWatermark

@@ -323,7 +323,9 @@ test('domain entry commits, reads, lists, restarts, and rejects wrong exact owne
     let terminalStatus: unknown
     let record: ResearchCheckpointRecordV1 | undefined
     let lastReadError: unknown
-    for (let attempt = 0; attempt < 100 && !record; attempt += 1) {
+    // Artifact snapshots fsync before the checkpoint receipt becomes readable.
+    const commitDeadline = Date.now() + 10_000
+    while (Date.now() < commitDeadline && !record) {
       await new Promise((resolve) => setTimeout(resolve, 10))
       terminalStatus = await runtime.turnStatus(workspaceRoot, 'codex', 'thread-1', 'turn-entry')
       try { record = await runtime.read(workspaceRoot, {}) } catch (error) { lastReadError = error }

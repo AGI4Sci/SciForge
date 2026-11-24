@@ -67,6 +67,7 @@ import {
 } from './crypto.js'
 import {
   extractCheckpointFromTurn,
+  sanitizeResearchCheckpointText,
   finalizeManifest,
   withGitCheckpoints,
   withObservedFile,
@@ -239,6 +240,7 @@ export class ResearchCheckpointRuntime {
         runtimeId: event.runtimeId,
         threadId: event.threadId,
         state: event.state === 'completed' ? 'consumed' : 'released',
+        terminalState: event.state,
         ...(event.turnId ? { turnId: event.turnId } : {})
       })
     })
@@ -589,7 +591,10 @@ export class ResearchCheckpointRuntime {
   }
 
   async consume(event: DomainArtifactEvent): Promise<void> {
-    if (event.kind !== 'turn-completed' || this.#disposed) return
+    if (event.kind === 'execution-completed' || this.#disposed) return
+    if (event.kind === 'turn-terminated' && event.terminalState !== 'failed' && event.terminalState !== 'cancelled') {
+      throw new CheckpointStoreError('content-mismatch', 'Terminated artifact event requires a failed or cancelled terminal state.')
+    }
     const workspaceRoot = event.workspaceRoot?.trim()
     if (!workspaceRoot) return
     const key = `${workspaceRoot}\0${event.runtimeId}\0${event.threadId}`
@@ -669,6 +674,7 @@ export class ResearchCheckpointRuntime {
       turn: {
         turnId: `legacy:${transcriptDigest.slice(0, 32)}`,
         targetWatermark: transcriptDigest,
+        terminalState: 'unknown',
         occurredAt
       },
       title: input.title,
@@ -795,7 +801,10 @@ export class ResearchCheckpointRuntime {
         replay.issuerEpoch !== event.issuerEpoch ||
         replay.deliveryAttemptOrdinal !== event.deliveryAttemptOrdinal ||
         replay.boundaryLeaseId !== event.boundaryLeaseId ||
-        replay.deliveryAttemptId !== event.deliveryAttemptId
+        replay.deliveryAttemptId !== event.deliveryAttemptId ||
+        (event.kind === 'turn-terminated'
+          ? replay.manifest.turn.terminalState !== event.terminalState
+          : replay.manifest.turn.terminalState !== undefined && replay.manifest.turn.terminalState !== 'completed')
       ) throw new CheckpointStoreError('content-mismatch', 'Artifact event replay changed its boundary identity.')
       if (replay.state === 'pending') {
         const locallyVerified = await this.#verifyPatchedFiles(workspaceRoot, replay)
@@ -1261,7 +1270,11 @@ export class ResearchCheckpointRuntime {
       try {
         const completed = await this.#processQueuedOperation(workspaceRoot, operation)
         if (completed.state === 'stale-conflict') return
-      } catch {
+      } catch (error) {
+        this.#context?.log({
+          level: 'warn',
+          message: `Checkpoint archive remains pending: ${sanitizeResearchCheckpointText(errorMessage(error), this.#sanitizeText)}`
+        })
         // The durable local journal owns retry after Host delivery. Never hold
         // or replay the shared DomainTurnArtifactEvent fanout for an Artifact
         // service outage or a response-loss window.
@@ -1428,6 +1441,7 @@ function checkpointMetadata(
     threadId: manifest.recording.threadId,
     turnId: manifest.turn.turnId,
     targetWatermark: manifest.turn.targetWatermark,
+    ...(manifest.turn.terminalState ? { terminalState: manifest.turn.terminalState } : {}),
     changeReason: manifest.changeReason,
     manifestDigest,
     executionOutcome: manifest.status.execution,

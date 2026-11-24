@@ -85,7 +85,9 @@ export function reviewResearchRecord(state: ResearchRecordState, input: z.infer<
           .map(field => field === 'parentId' ? `阶段归属：${state.nodes[text(after[field])]?.title ?? '整个课题'}`
             : field === 'locks' ? `固定字段：${Object.entries(object(after.locks)).filter(([, fixed]) => fixed).map(([name]) => ({ placement: '归属', title: '标题', summary: '摘要' })[name] ?? name).join('、') || '无'}`
               : `${fieldLabels[field]}：${field === 'paused' ? after[field] ? '是' : '否' : text(after[field]) || '（空）'}`)
-        const body = text(value.rejection) ? `未采纳：${text(value.rejection)}` : statements.join('\n') || (origin === 'human' ? manualChanges.join('\n') : text(after.summary)) || label
+        const body = row.kind === 'human-result-review' ? `人工复核 · ${text(value.decision)} · ${text(object(value.principal).subject)}\n${text(value.opinion)}`
+          : row.kind === 'human-review-settings' ? `项目人工复核：${after.enabled ? '开启' : '关闭'}；历史保留`
+          : text(value.rejection) ? `未采纳：${text(value.rejection)}` : statements.join('\n') || (origin === 'human' ? manualChanges.join('\n') : text(after.summary)) || label
         if (input.query?.text && ![row.nodeId, text(after.title), body].join('\n').toLowerCase().includes(input.query.text.toLowerCase())) continue
         const sourceIds = historySources(value)
         items.push({ id: `history:${i + 1}`, sequence: i + 1, nodeId: row.nodeId,

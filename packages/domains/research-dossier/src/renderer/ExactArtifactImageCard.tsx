@@ -44,8 +44,8 @@ export function ExactArtifactImageCard({ reference, client, workspaceRoot, sessi
     {state.source ? <button type="button" onClick={open} disabled={!workbench?.openResource} aria-label={t('researchDossierOpenImageSource', { defaultValue: 'Open exact image source' })}>
       <img className="max-h-48 max-w-full object-contain" src={state.source} alt="Exact artifact version" />
     </button> : null}
-    <p className="break-all text-[10px]">{reference.versionId} · {reference.contentDigest}</p>
-    {state.kind && !workbench?.canOpenResource?.(state.kind) ? <p className="text-[10px]">{t('researchDossierSourceUnbound', { defaultValue: 'No registered source viewer. This snapshot does not establish executed code.' })}</p> : null}
+    <details className="text-ds-2xs text-ds-muted"><summary>技术引用</summary><p className="break-all">{reference.versionId} · {reference.contentDigest}</p></details>
+    {state.kind && !workbench?.canOpenResource?.(state.kind) ? <p className="text-ds-2xs">{t('researchDossierSourceUnbound', { defaultValue: 'No registered source viewer. This snapshot does not establish executed code.' })}</p> : null}
     {state.issue || navigationIssue ? <p role="alert">{state.issue || navigationIssue}</p> : null}
   </div>
 }

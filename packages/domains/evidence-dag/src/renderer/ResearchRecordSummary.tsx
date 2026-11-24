@@ -65,10 +65,10 @@ export function RecordCoverage({ coverage, scopeId, presentation }: {
   const key = `coverage:${scopeId}`, open = state.expanded.has(key)
   return <div className="mb-3 record-caption text-ds-muted" data-record-coverage={scopeId}>
     <button className="flex items-start gap-1 text-left hover:text-ds-ink" aria-label="查看记录覆盖" aria-expanded={open} onClick={() => presentation.toggle(key)}>
-      {open ? <ChevronDown size={11} className="mt-0.5 shrink-0" /> : <ChevronRight size={11} className="mt-0.5 shrink-0" />}<span>{recordCoverageSummary(coverage)}</span>
+      {open ? <ChevronDown size={11} className="mt-0.5 shrink-0" /> : <ChevronRight size={11} className="mt-0.5 shrink-0" />}<span>记录详情</span>
     </button>
     {open && <div className="mt-2 space-y-2 border-l border-ds-border pl-3">
-      <dl className="grid grid-cols-2 gap-x-5 gap-y-1">{coverageLabels.map(([key, label]) => <div key={key} className="flex justify-between gap-3"><dt>{label}</dt><dd>{coverage[key]}</dd></div>)}</dl>
+      <p>{recordCoverageSummary(coverage)}</p><dl className="grid grid-cols-2 gap-x-5 gap-y-1">{coverageLabels.map(([key, label]) => <div key={key} className="flex justify-between gap-3"><dt>{label}</dt><dd>{coverage[key]}</dd></div>)}</dl>
       <p>计数来自已观察的会话快照；来源暂时不可读时仍保留，旧内容版本单独计数。“已处理”不等于已归类或科学验证；各状态可重叠，未截断节选也不代表完整会话。</p>
     </div>}
   </div>

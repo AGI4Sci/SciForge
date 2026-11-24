@@ -45,7 +45,7 @@ describe('composer attachment policy', () => {
     expect(workspaceAttachmentKind({ name: 'article.xhtml', type: 'text/html' })).toBe('unsupported')
     expect(workspaceWebDocumentMetadata({ name: 'article.xhtml' })).toBeNull()
   })
-  it.each(['csv', 'tsv', 'json', 'xlsx', 'parquet', 'txt', 'md', 'markdown', 'fasta'])(
+  it.each(['csv', 'tsv', 'json', 'xlsx', 'parquet', 'txt', 'md', 'markdown', 'fasta', 'py', 'r', 'jl', 'sh', 'bash', 'zsh', 'ps1'])(
     'offers and permits %s scientific files up to 100 MiB', extension => {
       const kind = workspaceAttachmentKind({ name: `data.${extension}`, type: 'application/octet-stream' })
       expect(kind).toBe('scientific')

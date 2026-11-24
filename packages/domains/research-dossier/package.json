@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-research-dossier",
-  "version": "1.6.0",
+  "version": "1.9.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -22,13 +22,13 @@
   },
   "dependencies": {
     "@sciforge/domain-artifact-versions": "^1.4.0",
-    "@sciforge/domain-research-checkpoints": "^1.0.0",
-    "@sciforge/domain-sdk": "^0.2.34",
+    "@sciforge/domain-research-checkpoints": "^1.1.0",
+    "@sciforge/domain-sdk": "^0.2.44",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
     "zod": "^4.4.3",
-    "@sciforge/domain-evidence-dag": "^2.13.0"
+    "@sciforge/domain-evidence-dag": "^2.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

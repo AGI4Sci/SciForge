@@ -46,6 +46,21 @@ test('only schemas made of locally enforceable keywords are accepted', () => {
   assert.throws(() => assertLocallyEnforceableJsonSchema({ type: 'string', pattern: '(' }), RangeError);
 });
 
+test('malformed supported keyword forms fail closed rather than silently losing constraints', () => {
+  for (const malformed of [
+    { type: 'unsupported' }, { type: [] }, { required: 'name' }, { minLength: '2' },
+    { maxItems: -1 }, { enum: [] }, { anyOf: [] }, { additionalProperties: [] }, { items: [] },
+  ]) assert.throws(() => assertLocallyEnforceableJsonSchema(malformed), RangeError);
+});
+
+test('numeric bounds enforce inclusive minimum and maximum without weakening integer type', () => {
+  const numericSchema = { type: 'object', properties: { count: { type: 'integer', minimum: 1, maximum: 10 } }, required: ['count'] };
+  assert.doesNotThrow(() => assertLocallyEnforceableJsonSchema(numericSchema));
+  for (const count of [1, 10]) assert.deepEqual(structuredOutputValidationIssues(JSON.stringify({ count }), numericSchema), []);
+  for (const count of [0, 11, 1.5]) assert.ok(structuredOutputValidationIssues(JSON.stringify({ count }), numericSchema).length > 0);
+  for (const bound of [{ minimum: '1' }, { maximum: null }]) assert.throws(() => assertLocallyEnforceableJsonSchema(bound), RangeError);
+});
+
 test('JSON-mode instruction names json, carries the schema, and gives an example shape', () => {
   const instruction = jsonObjectStructuredOutputInstruction({
     name: 'plan',

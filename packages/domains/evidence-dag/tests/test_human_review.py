@@ -213,6 +213,7 @@ class HumanReviewPolicyTests(unittest.TestCase):
                 rationale="Validated against the original source.",
             )
             self.assertEqual(result["reviewPacket"]["status"], "approved")
+            self.assertEqual(result["reviewPacket"]["reviewRationale"], "Validated against the original source.")
             self.assertEqual(result["decision"]["checker"]["authority"], "override")
             self.assertEqual(result["event"]["type"], "HumanReviewDecisionRecorded")
             with open(current_path, "rb") as handle:
@@ -222,6 +223,9 @@ class HumanReviewPolicyTests(unittest.TestCase):
             packet = next(item for item in graph.review_packets if item.review_packet_id == packet_id)
             self.assertEqual(packet.status, HumanReviewStatus.APPROVED)
             self.assertEqual(packet.reviewed_by, "human:reviewer")
+            self.assertEqual(packet.review_rationale, "Validated against the original source.")
+            self.assertEqual(packet.reviewed_snapshot_digest, digest)
+            self.assertEqual(packet.to_dict()["reviewRationale"], "Validated against the original source.")
             self.assertEqual(
                 compute_snapshot_digest(graph, input_watermark="turn:1"), digest,
             )
@@ -269,6 +273,33 @@ class HumanReviewPolicyTests(unittest.TestCase):
             self.assertEqual(summary["blockingCount"], 0)
             self.assertEqual(summary["level"], "none")
             self.assertEqual(summary["status"], "not_needed")
+
+    def test_changed_material_keeps_old_reason_without_approving_new_input(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            storage = os.path.join(os.path.realpath(workspace), ".edag")
+            engine, digest, packet_id = committed_engine(storage)
+            engine.record_review_decision(
+                "thread", packet_id, action="approve", expected_snapshot_digest=digest,
+                actor="human:reviewer", rationale="Only the original material was checked.",
+            )
+            graph = Engine(storage_dir=storage).require("thread")
+            target = next(iter(graph.nodes.values()))
+            target.content = "Changed processing condition with the same target ID"
+            checks, packets = attach_human_reviews(
+                graph, [assessment(target.id)],
+                delta={"new_nodes": [target.id], "new_edges": []},
+                computed_at="2026-02-02T00:00:00Z",
+            )
+            previous = next(item for item in packets if item.review_packet_id == packet_id)
+            self.assertEqual(previous.status, HumanReviewStatus.APPROVED)  # Historical approval remains true for its old snapshot.
+            self.assertEqual(previous.review_rationale, "Only the original material was checked.")
+            self.assertEqual(previous.reviewed_snapshot_digest, digest)
+            active = [item for item in packets if item.review_packet_id != packet_id]
+            self.assertTrue(active)
+            self.assertTrue(all(item.status != HumanReviewStatus.APPROVED for item in active))
+            self.assertTrue(all(item.review_rationale is None for item in active))
+            self.assertTrue(all(item.reviewed_snapshot_digest is None for item in active))
+            self.assertTrue(all(item.human_review.review_rationale is None for item in checks))
 
     def test_http_decision_route_returns_conflict_for_stale_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

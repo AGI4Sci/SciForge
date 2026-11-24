@@ -75,6 +75,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
   private state: LifecycleStateFile = emptyState()
   private loaded = false
   private enabled = false
+  private generation = 0
   private closed = false
   private closing = false
   private closeAttempt: Promise<void> | undefined
@@ -112,6 +113,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) this.generation++
     await this.load()
     this.enabled = enabled
     if (!enabled && this.timer) {
@@ -156,6 +158,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
     if (this.closed) return Promise.resolve()
     if (this.closeAttempt) return this.closeAttempt
     const retry = this.closing
+    this.generation++
     this.closing = true
     this.enabled = false
     if (this.timer) clearTimeout(this.timer)
@@ -178,6 +181,12 @@ export class EvidenceArtifactVersionLifecycleConsumer {
   }
 
   private async drain(strict: boolean, scope?: EvidenceArtifactLifecycleThreadKey): Promise<void> {
+    const generation = this.generation
+    const assertCurrent = () => {
+      if (this.closed || this.closing || generation !== this.generation || (!this.enabled && !strict)) {
+        throw new Error('Evidence lifecycle delivery interrupted; the page remains unacknowledged.')
+      }
+    }
     let discovered: readonly EvidenceArtifactLifecycleThreadKey[]
     try {
       discovered = await this.options.discoverThreads(scope)
@@ -202,7 +211,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
     const failures: unknown[] = []
     for (const [workspaceRoot, threads] of byWorkspace) {
       try {
-        await this.drainWorkspace(workspaceRoot, threads, strict)
+        await this.drainWorkspace(workspaceRoot, threads, strict, assertCurrent)
       } catch (error) {
         this.warn(`Evidence DAG ArtifactVersion lifecycle pull failed for ${workspaceRoot}.`, error)
         failures.push(error)
@@ -214,8 +223,10 @@ export class EvidenceArtifactVersionLifecycleConsumer {
   private async drainWorkspace(
     workspaceRoot: string,
     threads: readonly EvidenceArtifactLifecycleThreadKey[],
-    strict: boolean
+    strict: boolean,
+    assertCurrent: () => void
   ): Promise<void> {
+    assertCurrent()
     let cursor = this.workspaceCursor(workspaceRoot)
     let prepared: Map<string, EvidenceArtifactLifecycleThread> | undefined
     const pageSize = Math.min(512, Math.max(1, this.options.pageSize ?? DEFAULT_PAGE_SIZE))
@@ -244,7 +255,8 @@ export class EvidenceArtifactVersionLifecycleConsumer {
         lastSequence: pulled.lastSequence,
         lifecyclePending: Boolean(lookahead?.events.length)
       }
-      await this.acceptPage(workspaceRoot, cursor, page, prepared)
+      assertCurrent()
+      await this.acceptPage(workspaceRoot, cursor, page, prepared, assertCurrent)
       cursor = pulled.lastSequence
       if (!lookahead?.events.length) {
         if (lookahead && lookahead.lastSequence !== cursor) {
@@ -297,8 +309,10 @@ export class EvidenceArtifactVersionLifecycleConsumer {
     workspaceRoot: string,
     afterSequence: number,
     page: ArtifactVersionLifecyclePage,
-    prepared: ReadonlyMap<string, EvidenceArtifactLifecycleThread>
+    prepared: ReadonlyMap<string, EvidenceArtifactLifecycleThread>,
+    assertCurrent: () => void
   ): Promise<void> {
+    assertCurrent()
     const receiptId = lifecycleReceiptId(workspaceRoot, afterSequence, page.events)
     const replay = this.state.receipts.find((receipt) => receipt.receiptId === receiptId)
     if (replay) {
@@ -313,6 +327,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
       .sort((left, right) => left.key.localeCompare(right.key))
     const deltaDigests: string[] = []
     for (const thread of affected) {
+      assertCurrent()
       const live = prepared.get(thread.key)
       if (!live || !live.trace.length) {
         throw new Error(
@@ -330,9 +345,11 @@ export class EvidenceArtifactVersionLifecycleConsumer {
         trace: this.options.withLifecycle(live.trace, page),
         workspaceRoot
       })
+      assertCurrent()
       deltaDigests.push(appended.delta.deltaDigest)
     }
 
+    assertCurrent()
     const processedAt = this.nowIso()
     this.state.receipts.push({
       receiptId,

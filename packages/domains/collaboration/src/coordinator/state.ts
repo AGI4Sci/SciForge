@@ -1,3 +1,6 @@
+import { deliveryValidationRecordSchema, type DeliveryValidationRecord } from './delivery-validation-contract.js'
+import { leaderProposalSchema, type LeaderProposal, type LeaderPlanningStatus } from './leader-planning-contract.js'
+import { resultAssessmentSchema, type ResultAssessment } from './result-assessment-contract.js'
 import {
   idempotencyKeySchema,
   projectIdSchema,
@@ -92,8 +95,23 @@ const projectRequirementsCompletionAttemptRecordSchema = z.object({
   ? attempt.result !== null && attempt.result.revision === attempt.expectedRequirementsRevision + 1
   : attempt.result === null, 'Completion success requires its exact advancing Cloud result.').readonly()
 
+const leaderPlanningReceiptSchema = z.object({
+  proposal: leaderProposalSchema.nullable().default(null),
+  dismissed: z.boolean().default(false),
+  projectId: projectIdSchema,
+  key: sha256Schema,
+  state: z.enum(['running', 'completed', 'failed']),
+  failureMessage: z.string().max(1000).nullable().default(null),
+  retryOrdinal: z.number().int().min(0).default(0),
+  attempts: z.number().int().min(1).max(2),
+  leaseExpiresAt: z.string()
+}).strict()
+
 const projectCoordinatorStateSchema = z.object({
+  leaderPlanningReceipts: z.array(leaderPlanningReceiptSchema).max(10_000).default([]),
   schemaVersion: z.literal(3),
+  deliveryValidations: z.array(deliveryValidationRecordSchema).max(1000).default([]),
+  resultAssessments: z.array(resultAssessmentSchema).max(1000).default([]),
   coordinatorSessionBindings: z.array(
     projectCoordinatorCoordinatorSessionBindingRecordSchema
   ).max(10_000).default([]),
@@ -116,6 +134,9 @@ const projectCoordinatorStateSchema = z.object({
     .max(10_000)
     .default([])
 }).superRefine((state, context) => {
+  if (new Set(state.resultAssessments.map((entry) => entry.key)).size !== state.resultAssessments.length) {
+    context.addIssue({ code: 'custom', path: ['resultAssessments'], message: 'Result observation keys must be unique.' })
+  }
   const intentProjectIds = state.projectDeleteIntents.map(({ projectId }) => projectId)
   if (new Set(intentProjectIds).size !== intentProjectIds.length) {
     context.addIssue({
@@ -283,6 +304,9 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 const EMPTY_STATE: ProjectCoordinatorState = {
   schemaVersion: 3,
+  leaderPlanningReceipts: [],
+  resultAssessments: [],
+  deliveryValidations: [],
   coordinatorSessionBindings: [],
   coordinatorTransferFeedback: [],
   projectCreateIntents: [],
@@ -313,7 +337,167 @@ export type ProjectCoordinatorRequirementsCompletionAttempt = z.infer<
 >
 
 export class ProjectCoordinatorStateStore {
+  private validationWrites: Promise<void> = Promise.resolve()
   constructor(private readonly settings: DomainMainPackageSettingsHost) {}
+
+  /** CAS ownership of a bounded planning observation; replay uses the same Host directive. */
+  async claimLeaderPlanning(input: { projectId: string; key: string; at: string; leaseExpiresAt: string; retry?: boolean }): Promise<{ retryOrdinal: number } | null> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry++) {
+      const state = parseState(snapshot)
+      assertProjectWritable(state, input.projectId)
+      const previous = state.leaderPlanningReceipts.find((entry) => entry.projectId === input.projectId && entry.key === input.key)
+      if (previous && (previous.state === 'completed' || previous.state === 'running' && previous.leaseExpiresAt > input.at || !input.retry && (previous.state === 'failed' || previous.attempts >= 2))) return null
+      const receipt = leaderPlanningReceiptSchema.parse({ projectId: input.projectId, key: input.key,
+        state: 'running', retryOrdinal: (previous?.retryOrdinal ?? 0) + (input.retry ? 1 : 0),
+        attempts: input.retry ? 1 : (previous?.attempts ?? 0) + 1, leaseExpiresAt: input.leaseExpiresAt })
+      const value = projectCoordinatorStateSchema.parse({ ...state, leaderPlanningReceipts: [
+        ...state.leaderPlanningReceipts.filter((entry) => entry.projectId !== input.projectId), receipt] })
+      try { await this.settings.write(value, snapshot.revision); return { retryOrdinal: receipt.retryOrdinal } }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+    return null
+  }
+
+  async finishLeaderPlanning(projectId: string, key: string, proposal: LeaderProposal): Promise<void> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry++) {
+      const state = parseState(snapshot)
+      if (!state.leaderPlanningReceipts.some((entry) => entry.projectId === projectId && entry.key === key)) return
+      const value = projectCoordinatorStateSchema.parse({ ...state, leaderPlanningReceipts: state.leaderPlanningReceipts.map((entry) =>
+        entry.projectId === projectId && entry.key === key ? { ...entry, key: proposal.key, state: 'completed', proposal } : entry) })
+      try { await this.settings.write(value, snapshot.revision); return }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+  }
+
+  async failLeaderPlanning(projectId: string, key: string, failureMessage: string): Promise<void> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry++) {
+      const state = parseState(snapshot)
+      const value = projectCoordinatorStateSchema.parse({ ...state, leaderPlanningReceipts: state.leaderPlanningReceipts.map(entry =>
+        entry.projectId === projectId && entry.key === key && entry.state === 'running' ? { ...entry, state: 'failed', failureMessage } : entry) })
+      try { await this.settings.write(value, snapshot.revision); return }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+  }
+
+  async readLeaderPlanningStatus(projectId: string): Promise<LeaderPlanningStatus | null> {
+    const entry = (await this.read()).state.leaderPlanningReceipts.find(item => item.projectId === projectId)
+    if (!entry || entry.state === 'completed') return null
+    const failed = entry.state === 'failed' || entry.leaseExpiresAt <= new Date().toISOString()
+    return { key: entry.key, state: failed ? 'failed' : 'running', message: failed
+      ? entry.failureMessage ?? 'AI 领队建议生成中断，请重试。'
+      : 'AI 正在整理项目进展和下一步建议…' }
+  }
+
+  async readLeaderProposal(projectId: string): Promise<LeaderProposal | null> {
+    const entry = (await this.read()).state.leaderPlanningReceipts.find(item => item.projectId === projectId)
+    return entry?.state === 'completed' && !entry.dismissed ? entry.proposal : null
+  }
+
+  async deferLeaderPlanning(projectId: string, key: string): Promise<void> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry++) {
+      const state = parseState(snapshot)
+      assertProjectWritable(state, projectId)
+      if (!state.leaderPlanningReceipts.some(entry => entry.projectId === projectId && entry.key === key)) throw new Error('AI recommendation changed; refresh before deferring.')
+      const value = projectCoordinatorStateSchema.parse({ ...state, leaderPlanningReceipts: state.leaderPlanningReceipts.map(entry =>
+        entry.projectId === projectId && entry.key === key ? { ...entry, dismissed: true } : entry) })
+      try { await this.settings.write(value, snapshot.revision); return }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+  }
+
+  async readDeliveryValidation(specDigest: string, targetDigest: string, principalUserId: string): Promise<DeliveryValidationRecord | undefined> {
+    return [...(await this.read()).state.deliveryValidations].reverse().find(entry => entry.specDigest === specDigest &&
+      entry.targetDigest === targetDigest && entry.principalUserId === principalUserId)
+  }
+
+  async readDeliveryValidationHistory(projectId: string): Promise<readonly DeliveryValidationRecord[]> {
+    return (await this.read()).state.deliveryValidations.filter(entry => entry.spec.target.projectId === projectId)
+  }
+
+  persistDeliveryValidation(raw: DeliveryValidationRecord): Promise<void> {
+    const pending = this.validationWrites.then(() => this.writeDeliveryValidation(raw))
+    this.validationWrites = pending.catch(() => undefined)
+    return pending
+  }
+
+  private async writeDeliveryValidation(raw: DeliveryValidationRecord): Promise<void> {
+    const input = deliveryValidationRecordSchema.parse(raw)
+    const snapshot = await this.settings.read()
+    const state = parseState(snapshot)
+    assertProjectWritable(state, input.spec.target.projectId)
+    const previous = state.deliveryValidations.find(entry => entry.checkId === input.checkId)
+    if (!previous && input.status !== 'unknown') throw new Error('Validation attempt must start unknown.')
+    if (!previous && state.deliveryValidations.length >= 1000) throw new Error('Validation history is full (1000 attempts); no history was removed.')
+    if (previous && (previous.specDigest !== input.specDigest || previous.targetDigest !== input.targetDigest ||
+      previous.principalUserId !== input.principalUserId || JSON.stringify(previous.spec) !== JSON.stringify(input.spec) ||
+      previous.status !== 'unknown')) throw new Error('Validation attempt identity changed or already completed.')
+    const value = projectCoordinatorStateSchema.parse({ ...state, deliveryValidations: previous
+      ? state.deliveryValidations.map(entry => entry.checkId === input.checkId ? input : entry)
+      : [...state.deliveryValidations, input] })
+    await this.settings.write(value, snapshot.revision)
+  }
+
+  async readResultAssessments(projectId: string): Promise<readonly ResultAssessment[]> {
+    return (await this.read()).state.resultAssessments.filter((entry) => entry.projectId === projectId)
+  }
+
+  /** Local recovery discovery; a clean startup must not enumerate Cloud projects. */
+  async readPendingResultAssessments(): Promise<readonly ResultAssessment[]> {
+    return (await this.read()).state.resultAssessments.filter((entry) =>
+      entry.state === 'queued' || entry.state === 'running' || entry.state === 'unknown' && entry.attempt < 2)
+  }
+
+  async queueResultAssessment(input: ResultAssessment): Promise<ResultAssessment | null> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry += 1) {
+      const state = parseState(snapshot)
+      assertProjectWritable(state, input.projectId)
+      const previous = state.resultAssessments.find((entry) => entry.key === input.key)
+      if (previous && (previous.state === 'completed' || previous.state === 'stale' || previous.attempt >= 2)) return null
+      if (previous && (previous.state === 'queued' || previous.state === 'running')) return previous
+      const value = projectCoordinatorStateSchema.parse({ ...state,
+        resultAssessments: [...state.resultAssessments.filter((entry) => entry.key !== input.key), input] })
+      try { await this.settings.write(value, snapshot.revision); return input }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+    return null
+  }
+
+  /** CAS reservation; expired work reuses its exact Host directive rather than spawning another turn. */
+  async claimResultAssessment(input: ResultAssessment): Promise<boolean> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry += 1) {
+      const state = parseState(snapshot)
+      assertProjectWritable(state, input.projectId)
+      const previous = state.resultAssessments.find((entry) => entry.key === input.key)
+      if (previous && (previous.state === 'completed' || previous.state === 'stale' ||
+          previous.attempt >= 2 || (previous.state === 'running' && previous.leaseExpiresAt > input.startedAt))) return false
+      if (input.attempt !== (previous?.attempt ?? 0) + 1) return false
+      const value = projectCoordinatorStateSchema.parse({ ...state,
+        resultAssessments: [...state.resultAssessments.filter((entry) => entry.key !== input.key), input] })
+      try { await this.settings.write(value, snapshot.revision); return true }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+    return false
+  }
+
+  async finishResultAssessment(input: ResultAssessment): Promise<void> {
+    let snapshot = await this.settings.read()
+    for (let retry = 0; retry < 4; retry += 1) {
+      const state = parseState(snapshot)
+      assertProjectWritable(state, input.projectId)
+      const previous = state.resultAssessments.find((entry) => entry.key === input.key)
+      if (!previous || !['queued', 'running'].includes(previous.state) || previous.leaseId !== input.leaseId) return
+      const value = projectCoordinatorStateSchema.parse({ ...state,
+        resultAssessments: state.resultAssessments.map((entry) => entry.key === input.key ? input : entry) })
+      try { await this.settings.write(value, snapshot.revision); return }
+      catch (error) { if (retry === 3) throw error; snapshot = await this.settings.read() }
+    }
+  }
 
   async readCoordinatorSessionBindings(): Promise<
     readonly ProjectCoordinatorCoordinatorSessionBindingRecord[]
@@ -831,6 +1015,50 @@ export class ProjectCoordinatorStateStore {
     })
   }
 
+  /** Preserve the Cloud identity before local Session preparation, without claiming readiness. */
+  async persistProjectCreationReceipt(
+    principalUserId: string,
+    rawInput: ProjectCoordinatorProjectCreateInput,
+    rawReceipt: ProjectCoordinatorProjectCreateReceipt
+  ): Promise<void> {
+    const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
+    const receipt = projectCoordinatorProjectCreateReceiptSchema.parse(rawReceipt)
+    const owner = userIdSchema.parse(principalUserId)
+    const commandDigest = projectCreateCommandDigest(input)
+    if (receipt.createIntentId !== input.createIntentId) {
+      throw new Error('Project create receipt does not match its durable intent.')
+    }
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const intent = state.projectCreateIntents.find(({ createIntentId }) => createIntentId === input.createIntentId)
+      if (!intent || intent.principalUserId !== owner || intent.commandDigest !== commandDigest) {
+        throw new Error('Cloud Project receipt does not match its durable Project create intent.')
+      }
+      assertProjectWritable(state, receipt.createdProjectId)
+      if (intent.createdProjectId) {
+        if (intent.createdProjectId !== receipt.createdProjectId) {
+          throw new Error('Project create intent resolved to a different Cloud Project.')
+        }
+        return
+      }
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        projectCreateIntents: state.projectCreateIntents.map((candidate) => candidate.createIntentId === input.createIntentId
+          ? { ...candidate, createdProjectId: receipt.createdProjectId }
+          : candidate)
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to persist the Cloud Project receipt.')
+  }
+
   async persistProjectCreationPreparation(
     principalUserId: string,
     rawInput: ProjectCoordinatorProjectCreateInput,
@@ -1202,7 +1430,13 @@ function parseState(snapshot: DomainMainPackageSettingsSnapshot): ProjectCoordin
       'Project Coordinator local state is not schema version 3; clear the obsolete local state before reconnecting to Cloud.'
     )
   }
-  return projectCoordinatorStateSchema.parse(snapshot.value)
+  // Invalid derived observations must be regenerated, never prevent loading
+  // authoritative session bindings or become actionable decision cards.
+  const value = snapshot.value as Record<string, unknown>
+  const receipts = value.leaderPlanningReceipts
+  return projectCoordinatorStateSchema.parse(Array.isArray(receipts) ? { ...value,
+    leaderPlanningReceipts: receipts.filter(receipt => leaderPlanningReceiptSchema.safeParse(receipt).success)
+  } : value)
 }
 
 function withoutProjectLocalState(
@@ -1211,6 +1445,9 @@ function withoutProjectLocalState(
 ): ProjectCoordinatorState {
   return projectCoordinatorStateSchema.parse({
     ...state,
+    leaderPlanningReceipts: state.leaderPlanningReceipts.filter((entry) => entry.projectId !== projectId),
+    deliveryValidations: state.deliveryValidations.filter(entry => entry.spec.target.projectId !== projectId),
+    resultAssessments: state.resultAssessments.filter((entry) => entry.projectId !== projectId),
     requirementsCompletionAttempts: state.requirementsCompletionAttempts.filter((attempt) => (
       attempt.projectId !== projectId
     )),

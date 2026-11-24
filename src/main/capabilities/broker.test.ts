@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
   capabilityResourceChangeEventSchema,
+  capabilityJsonValueSchema,
   type CapabilityAudience,
   type CapabilityCallerContextInput,
   type CapabilityInvocationRequest,
@@ -365,6 +366,32 @@ describe('CapabilityRegistry', () => {
       audiences: ['ui', 'system'],
       principalTransition: 'host-authority'
     })).toThrow(/cannot delegate Host Principal transitions/iu)
+  })
+
+  it('allows a bounded human decision request without granting execution authority', async () => {
+    const declaration = {
+      id: 'example.request-decision', version: '1', title: 'Request a decision',
+      description: 'Persist a bounded question, without executing its subject.',
+      audiences: ['agent' as const], scope: 'global' as const,
+      effect: 'external-write' as const, approval: 'none' as const,
+      autonomousWrite: 'human-decision-request' as const,
+      concurrency: { revision: 'none' as const, idempotency: 'required' as const },
+      inputSchema: z.object({}).strict(), outputSchema: z.object({ pending: z.literal(true) }).strict(),
+      handler: async () => ({ output: { pending: true as const } })
+    }
+    const request = defineCapability(declaration)
+    const broker = new CapabilityBroker(new CapabilityRegistry([request]))
+    await expect(broker.invoke(agent, { actionId: request.descriptor.id, invocationId: 'ask-human-1', input: {} }))
+      .resolves.toMatchObject({ output: { pending: true } })
+    expect(() => defineCapability({ ...declaration, autonomousWrite: undefined })).toThrow(/require approval/iu)
+    for (const effect of ['read', 'compute', 'workspace-write', 'destructive'] as const) {
+      expect(() => defineCapability({ ...declaration, effect })).toThrow()
+    }
+    expect(() => defineCapability({ ...declaration, approval: 'confirmation' })).toThrow()
+    expect(() => defineCapability({ ...declaration, audiences: ['system'] })).toThrow()
+    expect(() => defineCapability({ ...declaration, principalTransition: 'host-authority' })).toThrow()
+    expect(() => defineCapability({ ...declaration, delegatedBatchGrant: 'example.batch' })).toThrow()
+    expect(() => defineCapability({ ...declaration, concurrency: { revision: 'none', idempotency: 'none' } })).toThrow()
   })
 
   it('allows approval-free Agent writes only under explicit resource authority', async () => {
@@ -1836,6 +1863,39 @@ describe('CapabilityBroker', () => {
     })).rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_output'))
   })
 
+  it('names the first invalid input field in the message and in redaction-safe details', async () => {
+    const nested = defineCapability({
+      id: 'knowledge-net.note-validate',
+      version: '1',
+      title: 'Validate note',
+      description: 'Read a note-shaped input.',
+      audiences: ['ui', 'agent'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({
+        paper: z.object({ doi: z.string().min(3) }).strict()
+      }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: vi.fn(async () => ({ output: { ok: true } }))
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([nested]))
+
+    await expect(broker.invoke(agent, {
+      actionId: 'knowledge-net.note-validate',
+      input: { paper: { doi: '10' } }
+    })).rejects.toMatchObject({
+      code: 'invalid_input',
+      message: expect.stringContaining('at paper.doi'),
+      // `path` is dropped by the transport redaction allowlist, so details
+      // address the failing field with a dotted `field` instead.
+      details: {
+        issues: [expect.objectContaining({ field: 'paper.doi', code: 'too_small' })]
+      }
+    })
+  })
+
   it('rejects scope mismatches with stable resource_required and unexpected_resource codes', async () => {
     const global = defineCapability({
       id: 'scope-regression.global-read',
@@ -2892,5 +2952,37 @@ describe('exact registration leases', () => {
     const broker = new CapabilityBroker(f.registry)
     await expect(broker.invoke(f.caller, f.request)).rejects.toMatchObject({ code: 'stale_capability_definition' })
     expect(f.handler).not.toHaveBeenCalled(); expect(replacement).not.toHaveBeenCalled()
+  })
+})
+
+describe('public bounded schema-proven validation diagnostics', () => {
+  it.each([
+    {schema:z.object({paper:z.object({doi:z.string().min(3)}).optional().nullable().default({doi:''})}),input:{paper:{doi:''}},field:'paper.doi'},
+    {schema:z.object({items:z.array(z.object({doi:z.string().min(3)}))}),input:{items:[{doi:''}]},field:'items.0.doi'},
+    {schema:z.object({entries:z.map(z.string(),z.string())}),input:{entries:{privateKey:'secret'}},field:'entries'},
+    {schema:z.union([z.object({left:z.string()}),z.object({right:z.string()})]),input:{secretBranch:'private'},field:'<input>'}
+  ])('proves only public object/array/wrapper locations, not map/union input keys', async ({schema,input,field}) => {
+    const declare = () => defineCapability({id:'safe.location',version:'1',title:'Validate',description:'Validate location.',audiences:['agent'],scope:'workspace',effect:'read',approval:'none',concurrency:{revision:'none',idempotency:'none'},inputSchema:schema,outputSchema:z.object({ok:z.boolean()}),handler:async()=>({output:{ok:true}})})
+    if (schema instanceof z.ZodObject && 'entries' in schema.shape && schema.shape.entries instanceof z.ZodMap) {
+      expect(declare).toThrow('Map cannot be represented in JSON Schema')
+      return // Non-JSON Map schemas are refused before any caller input exists.
+    }
+    const definition = declare()
+    const broker = new CapabilityBroker(new CapabilityRegistry([definition]))
+    const error = await broker.invoke(agent,{actionId:'safe.location',input:capabilityJsonValueSchema.parse(input)}).then(()=>null,e=>e as CapabilityBrokerError)
+    expect(error).toMatchObject({code:'invalid_input',details:{issues:[expect.objectContaining({field})]}})
+    expect(JSON.stringify(error?.details)).not.toContain('private')
+    expect(JSON.stringify(error?.details)).not.toContain('message')
+  })
+  it.each(['secret-token-key', 'x'.repeat(4096), 'control\nkey'])('does not expose dynamic record keys or custom issue text', async key => {
+    const schema = z.object({ entries: z.record(z.string(), z.string().min(2, 'CUSTOM_PRIVATE_SENTINEL')) }).strict()
+    const definition = defineCapability({ id:'safe.validate',version:'1',title:'Validate',description:'Validate bounded input.',audiences:['agent'],scope:'workspace',effect:'read',approval:'none',concurrency:{revision:'none',idempotency:'none'},inputSchema:schema,outputSchema:z.object({ok:z.boolean()}),handler:async()=>({output:{ok:true}}) })
+    const broker = new CapabilityBroker(new CapabilityRegistry([definition]))
+    const error = await broker.invoke(agent,{actionId:'safe.validate',input:{entries:{[key]:''}}}).then(()=>null, e=>e as CapabilityBrokerError)
+    expect(error).toMatchObject({code:'invalid_input',details:{issues:[{field:'entries',code:'too_small'}]}})
+    const diagnostic = JSON.stringify({message:error?.message,details:error?.details})
+    expect(diagnostic).not.toContain(key)
+    expect(diagnostic).not.toContain('CUSTOM_PRIVATE_SENTINEL')
+    expect(error?.message.length).toBeLessThan(256)
   })
 })

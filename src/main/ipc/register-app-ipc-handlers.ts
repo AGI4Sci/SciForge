@@ -349,7 +349,7 @@ export type RegisterAppIpcHandlersOptions = {
   ) => Promise<void>
   agentRuntime?: {
     completeInputRecovery: (input: SessionInputRecovery) => Promise<void>
-    acceptQueuedInput: (input: SessionQueuedInput) => Promise<SessionInputReceipt>
+    acceptQueuedInput: (input: SessionQueuedInput, source?: 'native-composer') => Promise<SessionInputReceipt>
     abandonQueuedInput: (input: SessionQueuedMutation) => Promise<void>
     readQueuedInputs: (input: SessionAdmissionRef) => Promise<readonly SessionQueuedInputSnapshot[]>
     prepareHumanSessionDecision: (input: SessionHumanInput) => Promise<PreparedHumanSessionDecision | null>
@@ -362,10 +362,10 @@ export type RegisterAppIpcHandlersOptions = {
     readThreadStatus: (input: AgentRuntimeThreadStatusInput) => Promise<AgentRuntimeThreadStatus>
     readThreadPage: (input: AgentRuntimeThreadPageInput) => Promise<AgentRuntimeThreadPage>
     readToolArtifact: (input: AgentRuntimeToolArtifactReadInput) => Promise<AgentRuntimeToolArtifact>
-    startTurn: (input: AgentRuntimeTurnStartInput) => Promise<AgentRuntimeTurnHandle>
+    startTurn: (input: AgentRuntimeTurnStartInput, source?: 'native-composer') => Promise<AgentRuntimeTurnHandle>
     resumeIncompleteWork: (workId: string) => Promise<{ turnId: string }>
     interruptTurn: (input: AgentRuntimeTurnTargetInput) => Promise<void>
-    steerTurn: (input: AgentRuntimeTurnSteerInput) => Promise<void>
+    steerTurn: (input: AgentRuntimeTurnSteerInput, source?: 'native-composer') => Promise<void>
     renameThread: (input: AgentRuntimeThreadRenameInput) => Promise<void>
     deleteThread: (input: AgentRuntimeThreadDeleteInput) => Promise<void>
     compactThread: (input: AgentRuntimeThreadCompactInput) => Promise<void>
@@ -829,7 +829,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     dshRuntimeVersion: z.string().trim().min(1).max(64).nullable(),
     plugins: z.array(dshMarketPluginSchema).max(512),
     notInstallable: z.array(dshMarketBlockedSchema).max(512),
-    error: z.string().trim().min(1).max(2_048).nullable()
+    error: z.string().trim().min(1).max(2_048).nullable(),
+    fallback: z.boolean()
   }).strict()
   const dshMarketInstallResultSchema = z.object({
     packageName: z.string().trim().min(1).max(214),
@@ -1276,7 +1277,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('agentRuntime:completeInputRecovery', async (_, payload: unknown) =>
     requireAgentRuntime().completeInputRecovery(parseIpcPayload('agentRuntime:completeInputRecovery', sessionInputRecoverySchema, payload)))
   handleInvoke('agentRuntime:acceptQueuedInput', async (_, payload: unknown) =>
-    requireAgentRuntime().acceptQueuedInput(parseIpcPayload('agentRuntime:acceptQueuedInput', sessionQueuedInputSchema, payload)))
+    requireAgentRuntime().acceptQueuedInput(parseIpcPayload('agentRuntime:acceptQueuedInput', sessionQueuedInputSchema, payload), 'native-composer'))
   handleInvoke('agentRuntime:abandonQueuedInput', async (_, payload: unknown) =>
     requireAgentRuntime().abandonQueuedInput(parseIpcPayload('agentRuntime:abandonQueuedInput', sessionQueuedMutationSchema, payload)))
   handleInvoke('agentRuntime:readQueuedInputs', async (_, payload: unknown) =>
@@ -1348,7 +1349,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       payload
     )
     return withSubmissionVisibleContext(event, request, async ({ callerId: _callerId, ...binding }) =>
-      runtime.startTurn({ ...request, ...binding }))
+      runtime.startTurn({ ...request, ...binding }, 'native-composer'))
   })
   handleInvoke('agentRuntime:resumeIncompleteWork', async (_, payload: unknown) => {
     const request = parseIpcPayload(
@@ -1372,7 +1373,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return requireAgentRuntime().steerTurn({
       ...request,
       visibleContextSurfaceId: visibleContextWindowId(event.sender)
-    })
+    }, 'native-composer')
   })
   handleInvoke('agentRuntime:renameThread', async (_, payload: unknown) =>
     requireAgentRuntime().renameThread(

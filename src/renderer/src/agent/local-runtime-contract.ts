@@ -1,4 +1,5 @@
 import { GUI_PLAN_CREATE_PLAN_TOOL_NAME } from '@shared/gui-plan'
+import type { AgentRuntimeResearchMemory } from '@shared/agent-runtime-contract'
 
 export type LocalRuntimeThreadStatus = 'idle' | 'running' | 'archived' | 'deleted'
 export type LocalRuntimeTurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'aborted'
@@ -74,6 +75,7 @@ export type LocalRuntimeAttachmentDiagnosticsJson = {
 export type LocalRuntimeMemoryRecordJson = {
   id: string
   content: string
+  research?: AgentRuntimeResearchMemory
   scope: 'user' | 'workspace' | 'project'
   workspace?: string
   project?: string

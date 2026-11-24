@@ -273,23 +273,26 @@ export async function captureDeclaredTurnFileEffects(
   declared: readonly Readonly<{ path: string; operation: 'add' | 'update' | 'delete' }>[],
   terminalOccurredAt: string,
   now: CaptureClock = () => new Date(),
-  hooks?: ExactWorkspaceFileReadHooks
+  hooks?: ExactWorkspaceFileReadHooks,
+  observation: 'live' | 'replayed' = 'live'
 ): Promise<DomainTurnFileEffectsV1> {
   const terminalCapturedAt = now().toISOString()
   const issues: DomainTurnFileEffectIssueV1[] = []
   const terminalDelay = Date.parse(terminalCapturedAt) - Date.parse(terminalOccurredAt)
-  if (Number.isFinite(terminalDelay) && terminalDelay > TURN_FILE_CAPTURE_LIMITS.delayedCaptureMs) {
+  const delayed = observation === 'replayed' || !Number.isFinite(terminalDelay) || terminalDelay < 0 ||
+    terminalDelay > TURN_FILE_CAPTURE_LIMITS.delayedCaptureMs
+  if (delayed) {
     issues.push({
       code: 'terminal-capture-delayed',
       blocking: true,
-      message: 'Declared output bytes were captured after a delayed terminal observation.'
+      message: 'Terminal bytes are unknown because the terminal observation was delayed or its time could not be verified; current files were not read.'
     })
   }
   const latestByPath = new Map<string, 'add' | 'update' | 'delete'>()
   for (const item of declared) latestByPath.set(item.path, item.operation)
   let totalSnapshotBytes = 0
   const effects: DomainTurnFileEffectsV1['effects'][number][] = []
-  for (const [path, operation] of [...latestByPath].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [path, operation] of (delayed ? [] : [...latestByPath]).sort(([left], [right]) => left.localeCompare(right))) {
     if (isSensitiveWorkspacePath(path)) {
       issues.push({
         code: 'sensitive-file-quarantined', blocking: true,

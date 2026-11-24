@@ -1,8 +1,3 @@
-import { posix as pathPosix } from 'node:path'
-
-import { XMLParser } from 'fast-xml-parser'
-import JSZip from 'jszip'
-
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   WORKSPACE_TABULAR_ACTIONS,
@@ -25,12 +20,10 @@ import {
   workspaceTabularSelectionSummaryInputSchema,
   workspaceTabularSelectionSummarySchema,
   workspaceTabularUpdateCellInputSchema,
-  workspaceTabularXlsxPreviewInputSchema,
   type NormalizedWorkspaceTabularPreviewInput,
   type NormalizedWorkspaceTabularQueryInput,
   type NormalizedWorkspaceTabularSelectionRequest,
   type NormalizedWorkspaceTabularSelectionSummaryInput,
-  type NormalizedWorkspaceTabularXlsxPreviewInput,
   type WorkspaceTabularColumnSummary,
   type WorkspaceTabularColumnType,
   type WorkspaceTabularComparisonMode,
@@ -51,7 +44,6 @@ import {
   type WorkspaceTabularUpdateCellInput
 } from './contract.js'
 
-type XmlRecord = Record<string, unknown>
 type WorkspaceTabularTextResolvedFormat = Exclude<WorkspaceTabularResolvedFormat, 'xlsx'>
 
 type ParsedDelimitedText = {
@@ -138,25 +130,6 @@ type WorkspaceTabularObservationSourceInput = Pick<
   'path' | 'workspaceRoot' | 'mimeType' | 'size' | 'mtimeMs'
 >
 
-type XlsxRelationship = {
-  id: string
-  type: string
-  targetPath: string
-}
-
-type XlsxSheetReference = {
-  name: string
-  path: string
-}
-
-type ParsedXlsxSheet = {
-  sheetName: string
-  rows: string[][]
-  rowCount: number
-  columnCount: number
-  warnings: string[]
-}
-
 type PreviewRowFilterRule = NormalizedWorkspaceTabularQueryInput['filters'][number]
 type PreviewRowSortRule = NormalizedWorkspaceTabularQueryInput['sorts'][number]
 
@@ -225,13 +198,6 @@ const JSONL_EXT_PATTERN = /\.(?:jsonl|ndjson)$/i
 const JSONL_PARSEABLE_PREFIX_PATTERN = /^[\s\ufeff]*(?:\{|\[|"|-?\d|true\b|false\b|null\b)/
 const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
-const xmlParser = new XMLParser({
-  ignoreAttributes: false,
-  parseAttributeValue: false,
-  parseTagValue: false,
-  trimValues: false
-})
-
 export function createWorkspaceTabularPreview(
   input: NormalizedWorkspaceTabularPreviewInput
 ): WorkspaceTabularPreviewResult {
@@ -242,64 +208,6 @@ export function createWorkspaceTabularPreview(
 
   const delimiter = delimiterForResolvedFormat(format)
   return createDelimitedPreview(input, format, delimiter)
-}
-
-export async function createWorkspaceTabularXlsxPreview(
-  input: NormalizedWorkspaceTabularXlsxPreviewInput
-): Promise<WorkspaceTabularPreviewResult> {
-  const normalized = workspaceTabularXlsxPreviewInputSchema.parse(input)
-  const parsed = await parseXlsxFirstSheet(normalized.bytes)
-  const rows = parsed.rows
-  const dataRows = normalized.hasHeader ? rows.slice(1) : rows
-  const columnCount = parsed.columnCount
-  const boundedColumnCount = Math.min(columnCount, normalized.maxColumns)
-  const header = normalizeHeader(normalized.hasHeader ? rows[0] ?? [] : [], columnCount).slice(0, boundedColumnCount)
-  const previewRows = dataRows.slice(0, normalized.maxPreviewRows).map((row, index) => ({
-    index,
-    values: valuesForDelimitedRow(row, boundedColumnCount)
-  }))
-  const columns = summarizeDelimitedColumns(dataRows, header, boundedColumnCount)
-  const truncatedRows = dataRows.length > normalized.maxPreviewRows
-  const truncatedColumns = columnCount > normalized.maxColumns
-  const warnings = boundedWarnings([
-    ...parsed.warnings,
-    ...(truncatedRows ? [`Preview includes ${previewRows.length} of ${dataRows.length} data rows from the first XLSX sheet.`] : []),
-    ...(truncatedColumns ? [`Preview includes ${boundedColumnCount} of ${columnCount} columns from the first XLSX sheet.`] : [])
-  ])
-
-  return workspaceTabularPreviewResultSchema.parse({
-    ok: true,
-    contractVersion: WORKSPACE_TABULAR_CONTRACT_VERSION,
-    format: 'xlsx',
-    rowCount: dataRows.length,
-    rowCountIsEstimate: false,
-    columnCount,
-    header,
-    previewRows,
-    columns,
-    truncatedRows,
-    truncatedColumns,
-    warnings,
-    ...(normalized.includeObservation
-      ? {
-          observation: buildWorkspaceObservation({
-            input: normalized,
-            format: 'xlsx',
-            sheetName: parsed.sheetName,
-            rowCount: dataRows.length,
-            rowCountIsEstimate: false,
-            columnCount,
-            header,
-            columns,
-            previewRows,
-            truncatedRows,
-            truncatedColumns,
-            warnings,
-            actions: WORKSPACE_TABULAR_READONLY_ACTIONS
-          })
-        }
-      : {})
-  })
 }
 
 export function parseDelimitedText(text: string, delimiter: WorkspaceTabularDelimiter): ParsedDelimitedText {
@@ -370,6 +278,96 @@ export function parseDelimitedText(text: string, delimiter: WorkspaceTabularDeli
   }
 }
 
+/** Count CSV/TSV records with the same quoting rules as parseDelimitedText, without storing cells. */
+export function countDelimitedRecords(text: string, delimiter: WorkspaceTabularDelimiter): number | undefined {
+  if (text.length === 0) return 0
+
+  let recordCount = 0
+  let fieldLength = 0
+  let rowFieldCount = 0
+  let inQuotes = false
+  let endedWithRecordSeparator = false
+  let hasContent = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    const next = text[index + 1]
+
+    if (inQuotes) {
+      if (char === '"' && next === '"') {
+        fieldLength += 1
+        index += 1
+      } else if (char === '"') {
+        inQuotes = false
+      } else {
+        fieldLength += 1
+      }
+      endedWithRecordSeparator = false
+      hasContent = true
+      continue
+    }
+
+    if (char === '"' && fieldLength === 0) {
+      inQuotes = true
+      endedWithRecordSeparator = false
+      hasContent = true
+      continue
+    }
+
+    if (char === delimiter) {
+      rowFieldCount += 1
+      fieldLength = 0
+      endedWithRecordSeparator = false
+      hasContent = true
+      continue
+    }
+
+    if (char === '\n' || char === '\r') {
+      recordCount += 1
+      rowFieldCount = 0
+      fieldLength = 0
+      endedWithRecordSeparator = true
+      if (char === '\r' && next === '\n') {
+        index += 1
+      }
+      continue
+    }
+
+    fieldLength += 1
+    endedWithRecordSeparator = false
+    hasContent = true
+  }
+
+  if (!endedWithRecordSeparator && (hasContent || rowFieldCount > 0 || fieldLength > 0)) {
+    recordCount += 1
+  }
+
+  return inQuotes ? undefined : recordCount
+}
+
+export function countDelimitedDataRows(
+  text: string,
+  delimiter: WorkspaceTabularDelimiter,
+  hasHeader = true
+): number | undefined {
+  const records = countDelimitedRecords(text, delimiter)
+  if (records === undefined) return undefined
+  if (records === 0) return 0
+  return hasHeader ? Math.max(0, records - 1) : records
+}
+
+export function countJsonlDataRows(text: string): number | undefined {
+  let count = 0
+  for (const [index, rawLine] of splitJsonlLines(text).entries()) {
+    const line = stripLineBom(rawLine, index).trim()
+    if (line) {
+      try { JSON.parse(line) } catch { return undefined }
+      count += 1
+    }
+  }
+  return count
+}
+
 export function parseJsonlText(text: string, options: JsonlParseOptions): ParsedJsonlText {
   const lines = splitJsonlLines(text)
   const records: JsonlRecord[] = []
@@ -399,7 +397,7 @@ export function parseJsonlText(text: string, options: JsonlParseOptions): Parsed
     }
   }
 
-  const estimate = estimateJsonlRowCount(nonEmptyLineCount, text, options.size)
+  const estimate = estimateSampledRowCount(nonEmptyLineCount, text, options.size)
   const warnings = [
     ...(invalidLineCount > 0
       ? [`Skipped ${invalidLineCount} malformed JSONL line${invalidLineCount === 1 ? '' : 's'} in the sampled window (${formatLineNumberList(invalidLineNumbers)}).`]
@@ -688,11 +686,24 @@ function createDelimitedPreview(
     values: valuesForDelimitedRow(row, boundedColumnCount)
   }))
   const columns = summarizeDelimitedColumns(dataRows, header, boundedColumnCount)
-  const truncatedRows = dataRows.length > input.maxPreviewRows
+  const exactDataRowCount = input.exactDataRowCount
+  const estimate = exactDataRowCount === undefined
+    ? estimateSampledRowCount(dataRows.length, input.text, input.size)
+    : { rowCount: exactDataRowCount, rowCountIsEstimate: false }
+  const truncatedByPreviewWindow = dataRows.length > input.maxPreviewRows
+  const truncatedByUnreadSuffix = exactDataRowCount !== undefined
+    ? exactDataRowCount > previewRows.length
+    : estimate.rowCountIsEstimate
+  const truncatedRows = truncatedByPreviewWindow || truncatedByUnreadSuffix
   const truncatedColumns = columnCount > input.maxColumns
   const warnings = boundedWarnings([
     ...parsed.warnings,
-    ...(truncatedRows ? [`Preview includes ${previewRows.length} of ${dataRows.length} data rows.`] : []),
+    ...(truncatedRows
+      ? [`Preview includes ${previewRows.length} of ${formatRowCount(estimate.rowCount, estimate.rowCountIsEstimate)} data rows.`]
+      : []),
+    ...(estimate.rowCountIsEstimate
+      ? [`Row count is estimated from ${dataRows.length} parsed data row${dataRows.length === 1 ? '' : 's'} and the provided file size; export or open the full file for an exact count.`]
+      : []),
     ...(truncatedColumns ? [`Preview includes ${boundedColumnCount} of ${columnCount} columns.`] : [])
   ])
 
@@ -701,8 +712,8 @@ function createDelimitedPreview(
     contractVersion: WORKSPACE_TABULAR_CONTRACT_VERSION,
     format,
     delimiter,
-    rowCount: dataRows.length,
-    rowCountIsEstimate: false,
+    rowCount: estimate.rowCount,
+    rowCountIsEstimate: estimate.rowCountIsEstimate,
     columnCount,
     header,
     previewRows,
@@ -716,8 +727,8 @@ function createDelimitedPreview(
             input,
             format,
             delimiter,
-            rowCount: dataRows.length,
-            rowCountIsEstimate: false,
+            rowCount: estimate.rowCount,
+            rowCountIsEstimate: estimate.rowCountIsEstimate,
             columnCount,
             header,
             columns,
@@ -737,8 +748,11 @@ function createJsonlPreview(
 ): WorkspaceTabularPreviewResult {
   const parsed = parseJsonlText(input.text, {
     maxDiscoveryRows: input.maxDiscoveryRows,
-    ...(input.size !== undefined ? { size: input.size } : {})
+    // Prefer an exact full-file count when the host already counted rows.
+    ...(input.exactDataRowCount === undefined && input.size !== undefined ? { size: input.size } : {})
   })
+  const rowCount = input.exactDataRowCount ?? parsed.rowCount
+  const rowCountIsEstimate = input.exactDataRowCount === undefined ? parsed.rowCountIsEstimate : false
   const fields = discoverJsonlFields(parsed.records)
   const columnCount = fields.length
   const boundedFields = fields.slice(0, input.maxColumns)
@@ -748,11 +762,11 @@ function createJsonlPreview(
     values: valuesForJsonlRecord(record.value, boundedFields)
   }))
   const columns = summarizeJsonlColumns(parsed.records, boundedFields)
-  const truncatedRows = parsed.rowCount > previewRows.length
+  const truncatedRows = rowCount > previewRows.length
   const truncatedColumns = columnCount > input.maxColumns
   const warnings = boundedWarnings([
-    ...parsed.warnings,
-    ...(truncatedRows ? [`Preview includes ${previewRows.length} of ${formatRowCount(parsed.rowCount, parsed.rowCountIsEstimate)} JSONL rows.`] : []),
+    ...parsed.warnings.filter((warning) => input.exactDataRowCount === undefined || !warning.includes('estimated from')),
+    ...(truncatedRows ? [`Preview includes ${previewRows.length} of ${formatRowCount(rowCount, rowCountIsEstimate)} JSONL rows.`] : []),
     ...(truncatedColumns ? [`Preview includes ${boundedFields.length} of ${columnCount} discovered JSONL fields.`] : [])
   ])
 
@@ -760,8 +774,8 @@ function createJsonlPreview(
     ok: true,
     contractVersion: WORKSPACE_TABULAR_CONTRACT_VERSION,
     format,
-    rowCount: parsed.rowCount,
-    rowCountIsEstimate: parsed.rowCountIsEstimate,
+    rowCount,
+    rowCountIsEstimate,
     columnCount,
     header,
     previewRows,
@@ -774,8 +788,8 @@ function createJsonlPreview(
           observation: buildWorkspaceObservation({
             input,
             format,
-            rowCount: parsed.rowCount,
-            rowCountIsEstimate: parsed.rowCountIsEstimate,
+            rowCount,
+            rowCountIsEstimate,
             columnCount,
             header,
             columns,
@@ -788,305 +802,6 @@ function createJsonlPreview(
         }
       : {})
   })
-}
-
-async function parseXlsxFirstSheet(bytes: Uint8Array): Promise<ParsedXlsxSheet> {
-  const zip = await JSZip.loadAsync(bytes)
-  const warnings: string[] = []
-  const sheetReferences = await readXlsxSheetReferences(zip, warnings)
-  const firstSheet = sheetReferences[0]
-  if (!firstSheet) {
-    throw new Error('XLSX workbook has no worksheets.')
-  }
-
-  const sharedStrings = await readXlsxSharedStrings(zip, warnings)
-  const worksheet = await readXmlEntry(zip, firstSheet.path, warnings, true)
-  if (!worksheet) {
-    throw new Error(`XLSX is missing first worksheet part: ${firstSheet.path}`)
-  }
-
-  const rows = parseXlsxWorksheetRows(worksheet, sharedStrings)
-  if (sheetReferences.length > 1) {
-    warnings.push(`Workbook has ${sheetReferences.length} sheets; preview uses the first sheet "${firstSheet.name}".`)
-  }
-
-  return {
-    sheetName: firstSheet.name,
-    rows: rows.rows,
-    rowCount: rows.rows.length,
-    columnCount: rows.columnCount,
-    warnings: boundedWarnings(warnings)
-  }
-}
-
-async function readXlsxSheetReferences(zip: JSZip, warnings: string[]): Promise<XlsxSheetReference[]> {
-  const workbook = await readXmlEntry(zip, 'xl/workbook.xml', warnings, false)
-  if (!workbook) return fallbackXlsxSheetReferences(zip)
-
-  const workbookRelationships = await readXmlEntry(zip, 'xl/_rels/workbook.xml.rels', warnings, false)
-  const relationships = new Map(
-    (workbookRelationships ? parseXlsxRelationships(workbookRelationships, 'xl/workbook.xml') : [])
-      .map((relationship) => [relationship.id, relationship])
-  )
-  const workbookSheets = extractWorkbookSheets(workbook)
-  const sheets = workbookSheets
-    .map((sheet, index) => {
-      const relationship = sheet.relationshipId ? relationships.get(sheet.relationshipId) : undefined
-      const fallbackPath = `xl/worksheets/sheet${index + 1}.xml`
-      const path = relationship?.targetPath ?? fallbackPath
-      if (!zip.file(path)) {
-        warnings.push(`Missing XLSX worksheet part for "${sheet.name}": ${path}`)
-        return undefined
-      }
-      return {
-        name: sheet.name,
-        path
-      }
-    })
-    .filter((sheet): sheet is XlsxSheetReference => Boolean(sheet))
-
-  return sheets.length > 0 ? sheets : fallbackXlsxSheetReferences(zip)
-}
-
-function fallbackXlsxSheetReferences(zip: JSZip): XlsxSheetReference[] {
-  return listWorksheetPaths(zip).map((path, index) => ({
-    name: `Sheet ${index + 1}`,
-    path
-  }))
-}
-
-function extractWorkbookSheets(root: unknown): Array<{ name: string; relationshipId?: string }> {
-  const workbook = firstChildByLocalName(root, 'workbook') ?? root
-  const sheetsRoot = firstChildByLocalName(workbook, 'sheets')
-  return childrenByLocalName(sheetsRoot, 'sheet').map((sheet, index) => ({
-    name: truncateHeader(attributeValue(sheet, 'name') ?? `Sheet ${index + 1}`),
-    ...(attributeValue(sheet, 'r:id') ? { relationshipId: attributeValue(sheet, 'r:id') } : {})
-  }))
-}
-
-async function readXlsxSharedStrings(zip: JSZip, warnings: string[]): Promise<string[]> {
-  const sharedStrings = await readXmlEntry(zip, 'xl/sharedStrings.xml', warnings, false)
-  if (!sharedStrings) return []
-
-  const sharedStringTable = firstChildByLocalName(sharedStrings, 'sst') ?? sharedStrings
-  return childrenByLocalName(sharedStringTable, 'si').map((entry) => truncateCell(extractXlsxText(entry)))
-}
-
-function parseXlsxWorksheetRows(
-  root: unknown,
-  sharedStrings: readonly string[]
-): { rows: string[][]; columnCount: number } {
-  const worksheet = firstChildByLocalName(root, 'worksheet') ?? root
-  const sheetData = firstChildByLocalName(worksheet, 'sheetData')
-  const rows: string[][] = []
-  let columnCount = 0
-
-  for (const row of childrenByLocalName(sheetData, 'row')) {
-    const rowValues: string[] = []
-    let nextColumnIndex = 0
-
-    for (const cell of childrenByLocalName(row, 'c')) {
-      const explicitColumn = columnIndexFromCellReference(attributeValue(cell, 'r'))
-      const columnIndex = explicitColumn ?? nextColumnIndex
-      while (rowValues.length < columnIndex) {
-        rowValues.push('')
-      }
-      rowValues[columnIndex] = readXlsxCellValue(cell, sharedStrings)
-      nextColumnIndex = columnIndex + 1
-    }
-
-    if (rowValues.some((value) => value.trim().length > 0)) {
-      rows.push(rowValues)
-      columnCount = Math.max(columnCount, rowValues.length)
-    }
-  }
-
-  return { rows, columnCount }
-}
-
-function readXlsxCellValue(cell: unknown, sharedStrings: readonly string[]): string {
-  const type = attributeValue(cell, 't')
-
-  if (type === 'inlineStr') {
-    const inlineString = firstChildByLocalName(cell, 'is') ?? cell
-    return truncateCell(extractXlsxText(inlineString))
-  }
-
-  const rawValue = normalizeCellText(extractXlsxValue(cell))
-  if (type === 's') {
-    const sharedStringIndex = Number.parseInt(rawValue, 10)
-    return Number.isInteger(sharedStringIndex) ? sharedStrings[sharedStringIndex] ?? '' : ''
-  }
-  if (type === 'b') {
-    if (rawValue === '1') return 'true'
-    if (rawValue === '0') return 'false'
-  }
-
-  return truncateCell(rawValue)
-}
-
-function extractXlsxValue(cell: unknown): string {
-  const valueNode = firstChildByLocalName(cell, 'v')
-  if (valueNode !== undefined) return textValueRaw(valueNode) ?? ''
-  const textNode = firstChildByLocalName(cell, 't')
-  return textNode !== undefined ? textValueRaw(textNode) ?? '' : ''
-}
-
-function extractXlsxText(root: unknown): string {
-  const texts: string[] = []
-
-  function visit(value: unknown, tagName?: string): void {
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item, tagName)
-      return
-    }
-
-    if (tagName && localName(tagName) === 't') {
-      const text = textValueRaw(value)
-      if (text !== undefined) texts.push(text)
-      return
-    }
-
-    if (!isRecord(value)) return
-    for (const [key, child] of Object.entries(value)) {
-      if (isAttributeKey(key)) continue
-      visit(child, key)
-    }
-  }
-
-  visit(root)
-  return texts.join('')
-}
-
-async function readXmlEntry(
-  zip: JSZip,
-  path: string,
-  warnings: string[],
-  required: boolean
-): Promise<unknown | undefined> {
-  const entry = zip.file(path)
-  if (!entry) {
-    if (required) warnings.push(`Missing XLSX part: ${path}`)
-    return undefined
-  }
-
-  try {
-    return xmlParser.parse(await entry.async('string')) as unknown
-  } catch (error) {
-    warnings.push(`Could not parse XLSX XML part ${path}: ${errorMessage(error)}`)
-    return undefined
-  }
-}
-
-function parseXlsxRelationships(root: unknown, sourcePath: string): XlsxRelationship[] {
-  const relationshipsRoot = firstChildByLocalName(root, 'Relationships') ?? root
-  return childrenByLocalName(relationshipsRoot, 'Relationship')
-    .map((relationship) => {
-      const id = attributeValue(relationship, 'Id')
-      const type = attributeValue(relationship, 'Type')
-      const target = attributeValue(relationship, 'Target')
-      if (!id || !type || !target) return undefined
-      return {
-        id,
-        type,
-        targetPath: resolveZipTarget(sourcePath, target)
-      }
-    })
-    .filter((relationship): relationship is XlsxRelationship => Boolean(relationship))
-}
-
-function listWorksheetPaths(zip: JSZip): string[] {
-  return Object.values(zip.files)
-    .filter((entry) => !entry.dir)
-    .map((entry) => normalizeZipPath(entry.name))
-    .filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path))
-    .sort(compareWorksheetPaths)
-}
-
-function compareWorksheetPaths(left: string, right: string): number {
-  return worksheetNumberForPath(left) - worksheetNumberForPath(right) || left.localeCompare(right)
-}
-
-function worksheetNumberForPath(path: string): number {
-  const match = /\/sheet(\d+)\.xml$/i.exec(path)
-  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER
-}
-
-function resolveZipTarget(sourcePath: string, target: string): string {
-  const normalizedTarget = target.replace(/\\/g, '/')
-  if (normalizedTarget.startsWith('/')) return normalizeZipPath(normalizedTarget.slice(1))
-  return normalizeZipPath(pathPosix.join(pathPosix.dirname(sourcePath), normalizedTarget))
-}
-
-function normalizeZipPath(path: string): string {
-  return pathPosix.normalize(path.replace(/\\/g, '/')).replace(/^\.\//, '')
-}
-
-function columnIndexFromCellReference(reference: string | undefined): number | undefined {
-  const match = /^([A-Z]+)\d+$/i.exec(reference ?? '')
-  if (!match) return undefined
-
-  let index = 0
-  for (const letter of match[1]?.toUpperCase() ?? '') {
-    index = index * 26 + (letter.charCodeAt(0) - 64)
-  }
-  return index > 0 ? index - 1 : undefined
-}
-
-function childrenByLocalName(value: unknown, name: string): unknown[] {
-  if (!isRecord(value)) return []
-  return Object.entries(value).flatMap(([key, child]) => {
-    if (isAttributeKey(key) || localName(key) !== name) return []
-    return Array.isArray(child) ? child : [child]
-  })
-}
-
-function firstChildByLocalName(value: unknown, name: string): unknown | undefined {
-  return childrenByLocalName(value, name)[0]
-}
-
-function attributeValue(value: unknown, name: string): string | undefined {
-  if (!isRecord(value)) return undefined
-  const exact = value[`@_${name}`]
-  if (typeof exact === 'string') return exact
-  if (typeof exact === 'number' || typeof exact === 'boolean') return String(exact)
-  if (name.includes(':')) return undefined
-
-  const match = Object.entries(value).find(([key]) => isAttributeKey(key) && localName(key) === name)
-  if (typeof match?.[1] === 'string') return match[1]
-  if (typeof match?.[1] === 'number' || typeof match?.[1] === 'boolean') return String(match[1])
-  return undefined
-}
-
-function textValueRaw(value: unknown): string | undefined {
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  if (!isRecord(value)) return undefined
-
-  const textNode = value['#text']
-  if (typeof textNode === 'string') return textNode
-  if (typeof textNode === 'number' || typeof textNode === 'boolean') return String(textNode)
-  return undefined
-}
-
-function normalizeCellText(value: string): string {
-  return value.replace(/\r\n|\r/g, '\n')
-}
-
-function localName(name: string): string {
-  return name.replace(/^@_/, '').split(':').at(-1) ?? name
-}
-
-function isAttributeKey(key: string): boolean {
-  return key.startsWith('@_')
-}
-
-function isRecord(value: unknown): value is XmlRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function resolveTextFormat(input: NormalizedWorkspaceTabularPreviewInput): WorkspaceTabularTextResolvedFormat {
@@ -1396,22 +1111,23 @@ function stripLineBom(line: string, index: number): string {
   return index === 0 && line.startsWith('\ufeff') ? line.slice(1) : line
 }
 
-function estimateJsonlRowCount(
-  nonEmptyLineCount: number,
+/** When preview text is a size-bounded prefix, scale sampled rows by file bytes. */
+function estimateSampledRowCount(
+  sampledRowCount: number,
   text: string,
   size: number | undefined
 ): { rowCount: number; rowCountIsEstimate: boolean } {
-  const textBytes = Buffer.byteLength(text, 'utf8')
-  if (size !== undefined && textBytes > 0 && nonEmptyLineCount > 0 && size > textBytes) {
-    const estimated = Math.max(nonEmptyLineCount, Math.ceil((nonEmptyLineCount * size) / textBytes))
+  const textBytes = new TextEncoder().encode(text).byteLength
+  if (size !== undefined && textBytes > 0 && sampledRowCount > 0 && size > textBytes) {
+    const estimated = Math.max(sampledRowCount, Math.ceil((sampledRowCount * size) / textBytes))
     return {
       rowCount: estimated,
-      rowCountIsEstimate: estimated > nonEmptyLineCount
+      rowCountIsEstimate: true
     }
   }
 
   return {
-    rowCount: nonEmptyLineCount,
+    rowCount: sampledRowCount,
     rowCountIsEstimate: false
   }
 }
@@ -1576,7 +1292,7 @@ function countColumns(rows: string[][]): number {
   return rows.reduce((max, row) => Math.max(max, row.length), 0)
 }
 
-function normalizeHeader(rawHeader: string[], columnCount: number): string[] {
+export function normalizeHeader(rawHeader: string[], columnCount: number): string[] {
   const names: string[] = []
   const seen = new Map<string, number>()
 
@@ -1593,11 +1309,11 @@ function normalizeHeader(rawHeader: string[], columnCount: number): string[] {
   return names
 }
 
-function valuesForDelimitedRow(row: string[], columnCount: number): string[] {
+export function valuesForDelimitedRow(row: string[], columnCount: number): string[] {
   return Array.from({ length: columnCount }, (_unused, index) => truncateCell(row[index] ?? ''))
 }
 
-function summarizeDelimitedColumns(
+export function summarizeDelimitedColumns(
   rows: string[][],
   header: string[],
   columnCount: number
@@ -1825,7 +1541,7 @@ function buildQueryVisibleText(input: QueryVisibleTextInput): string {
   return truncateText(lines.join('\n'), WORKSPACE_TABULAR_MAX_VISIBLE_TEXT_CHARS)
 }
 
-function buildWorkspaceObservation(input: ObservationBuildInput): WorkspaceTabularObservation {
+export function buildWorkspaceObservation(input: ObservationBuildInput): WorkspaceTabularObservation {
   const title = titleForPath(input.input.path)
   const visibleText = buildVisibleText(input)
   const selection = buildSelection(input.previewRows, input.header.length, input.sheetName)
@@ -1856,6 +1572,7 @@ function buildWorkspaceObservation(input: ObservationBuildInput): WorkspaceTabul
       id: 'table-1',
       name: input.sheetName ?? title,
       rowCount: input.rowCount,
+      rowCountIsEstimate: input.rowCountIsEstimate,
       columnCount: input.columnCount
     }],
     ...(annotations.length > 0 ? { annotations } : {}),
@@ -1920,8 +1637,8 @@ function buildVisibleText(input: ObservationBuildInput): string {
     }
   }
 
-  if (input.truncatedRows || input.truncatedColumns) {
-    lines.push('Preview is bounded; use the full file for complete data.')
+  if (input.truncatedRows || input.truncatedColumns || input.rowCountIsEstimate) {
+    lines.push('Preview is bounded; export or open the full file for complete data.')
   }
 
   return truncateText(lines.join('\n'), WORKSPACE_TABULAR_MAX_VISIBLE_TEXT_CHARS)
@@ -1995,15 +1712,15 @@ function endsWithLineBreak(value: string): boolean {
   return value.endsWith('\n') || value.endsWith('\r')
 }
 
-function boundedWarnings(warnings: string[]): string[] {
+export function boundedWarnings(warnings: string[]): string[] {
   return warnings.map((warning) => truncateText(warning.trim(), 1000)).filter(Boolean).slice(0, WORKSPACE_TABULAR_MAX_WARNINGS)
 }
 
-function truncateHeader(value: string): string {
+export function truncateHeader(value: string): string {
   return truncateText(value.trim() || 'Column', WORKSPACE_TABULAR_MAX_HEADER_CHARS)
 }
 
-function truncateCell(value: string): string {
+export function truncateCell(value: string): string {
   return truncateText(value, WORKSPACE_TABULAR_MAX_CELL_CHARS)
 }
 

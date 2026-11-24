@@ -458,3 +458,118 @@ describe('retained surface visibility', () => {
     dispose()
   })
 })
+
+describe('question-time domain context refresh', () => {
+  async function fixture() {
+    vi.resetModules()
+    let refresh: (() => void) | undefined
+    const publish = vi.fn(async (_snapshot: VisibleContextPublishInput) => undefined)
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: {
+        publish,
+        onRefreshRequested: (handler: () => void) => { refresh = handler; return () => undefined }
+      } },
+      setTimeout: vi.fn(), clearTimeout: vi.fn()
+    })
+    const context = await import('./visible-context')
+    context.ensureVisibleContextRefreshListener()
+    return { context, publish, refresh: () => refresh?.() }
+  }
+
+  const component = (id: string) => ({
+    id, component: 'document', region: 'main', visible: true,
+    summary: id, updatedAt: new Date().toISOString()
+  })
+
+  it('publishes refreshed components only after callbacks settle and unregisters callbacks', async () => {
+    const { context, publish, refresh } = await fixture()
+    let finish!: () => void
+    const callback = vi.fn(async () => {
+      context.registerVisibleContextComponent(component('intermediate'))
+      context.publishVisibleContextNow()
+      await new Promise<void>(resolve => { finish = resolve })
+      context.registerVisibleContextComponent(component('fresh'))
+    })
+    const dispose = context.registerVisibleContextRefresh(callback)
+    refresh()
+    await Promise.resolve()
+    expect(publish).not.toHaveBeenCalled()
+    finish()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1))
+    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
+      components: expect.arrayContaining([expect.objectContaining({ id: 'fresh' })])
+    }))
+    dispose()
+    refresh()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2))
+    expect(callback).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts a hung refresh within the main process budget and still publishes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { context, publish, refresh } = await fixture()
+      let signal: AbortSignal | undefined
+      context.registerVisibleContextRefresh(async received => {
+        signal = received
+        await new Promise<void>(() => undefined)
+      })
+      refresh()
+      await vi.advanceTimersByTimeAsync(749)
+      expect(publish).not.toHaveBeenCalled()
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(signal?.aborted).toBe(true)
+      expect(publish).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('isolates session-owned components, including late old-session registrations', async () => {
+    const { context, publish, refresh } = await fixture()
+    context.setVisibleContextShell({ activeThreadId: 'chat-a' })
+    await Promise.resolve()
+    context.registerVisibleContextComponent(component('a'), undefined, { sessionId: 'chat-a' })
+    context.registerVisibleContextComponent(component('b'), undefined, { sessionId: 'chat-b' })
+    context.registerVisibleContextComponent(component('global'))
+    let finish!: () => void
+    let signal: AbortSignal | undefined
+    context.registerVisibleContextRefresh(async received => {
+      signal = received
+      await new Promise<void>(resolve => { finish = resolve })
+      context.registerVisibleContextComponent(component('late-a'), undefined, { sessionId: 'chat-a' })
+    })
+    refresh()
+    await Promise.resolve()
+    context.setVisibleContextShell({ activeThreadId: 'chat-b' })
+    expect(signal?.aborted).toBe(true)
+    finish()
+    await vi.waitFor(() => expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
+      activeThreadId: 'chat-b',
+      components: [expect.objectContaining({ id: 'b' }), expect.objectContaining({ id: 'global' })]
+    })))
+    context.publishVisibleContextNow()
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0]).not.toHaveProperty('sessionId'))
+    expect(publish.mock.calls.at(-1)?.[0].components.map((item: { id: string }) => item.id)).toEqual(['b', 'global'])
+  })
+
+  it('aborts superseded refreshes and tolerates a rejecting callback', async () => {
+    const { context, publish, refresh } = await fixture()
+    const signals: AbortSignal[] = []
+    let finish!: () => void
+    context.registerVisibleContextRefresh(async signal => {
+      signals.push(signal)
+      if (signals.length === 1) await new Promise<void>(() => undefined)
+      else await new Promise<void>(resolve => { finish = resolve })
+    })
+    context.registerVisibleContextRefresh(async () => { throw new Error('Unavailable') })
+    refresh()
+    await Promise.resolve()
+    refresh()
+    await Promise.resolve()
+    expect(signals[0].aborted).toBe(true)
+    expect(signals[1].aborted).toBe(false)
+    expect(publish).not.toHaveBeenCalled()
+    finish()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1))
+  })
+})

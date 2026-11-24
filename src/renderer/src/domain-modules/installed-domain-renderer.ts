@@ -5,17 +5,16 @@ import { createDomainRendererEntry as createDomainRendererEntry0 } from '@scifor
 import { createDomainRendererEntry as createDomainRendererEntry1 } from '@sciforge/domain-biology-workbench/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry2 } from '@sciforge/domain-browser-preview/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry3 } from '@sciforge/domain-collaboration/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry4 } from '@sciforge/domain-content-space/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry5 } from '@sciforge/domain-create-loop/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry6 } from '@sciforge/domain-evidence-dag/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry7 } from '@sciforge/domain-git-checkpoints/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry8 } from '@sciforge/domain-identity-access/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry9 } from '@sciforge/domain-project-dag/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry10 } from '@sciforge/domain-research-checkpoints/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry11 } from '@sciforge/domain-research-dossier/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry12 } from '@sciforge/domain-siyuan-content-space-provider/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry13 } from '@sciforge/domain-terminal/renderer'
-import { createDomainRendererEntry as createDomainRendererEntry14 } from '@sciforge/domain-user-decisions/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry4 } from '@sciforge/domain-create-loop/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry5 } from '@sciforge/domain-evidence-dag/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry6 } from '@sciforge/domain-git-checkpoints/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry7 } from '@sciforge/domain-identity-access/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry8 } from '@sciforge/domain-project-dag/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry9 } from '@sciforge/domain-research-checkpoints/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry10 } from '@sciforge/domain-research-dossier/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry11 } from '@sciforge/domain-siyuan-content-space-provider/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry12 } from '@sciforge/domain-terminal/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry13 } from '@sciforge/domain-user-decisions/renderer'
 import { installedDomainPackages } from '@shared/installed-domain-packages'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import { rendererCapabilityClient } from '../lib/capability-client'
@@ -27,6 +26,7 @@ import {
   inspectRegisteredVisibleContextTargetAt,
   inspectRegisteredVisibleContextTextSelection,
   registerVisibleContextComponent,
+  registerVisibleContextRefresh,
   registerVisibleContextVisualTarget
 } from '../lib/visible-context'
 import { domainRendererNavigationHost } from './domain-renderer-navigation'
@@ -59,9 +59,10 @@ const domainHostFor = (packageName: string): DomainRendererHost => {
     },
     ...domainRendererNavigationHost,
     visibleContext: {
-      registerComponent: (component) => registerVisibleContextComponent(
-        component as VisibleContextComponentSnapshot
+      registerComponent: (component, options) => registerVisibleContextComponent(
+        component as VisibleContextComponentSnapshot, undefined, options
       ),
+      registerRefresh: registerVisibleContextRefresh,
       registerVisualTarget: ({ element, ...input }) => registerVisibleContextVisualTarget({
         ...input,
         ...(element ? { element: element as () => Element | null } : {})
@@ -79,17 +80,16 @@ export const installedRendererDomainEntrySet = defineInstalledRendererDomainEntr
     createDomainRendererEntry1(domainHostFor("@sciforge/domain-biology-workbench")),
     createDomainRendererEntry2(domainHostFor("@sciforge/domain-browser-preview")),
     createDomainRendererEntry3(domainHostFor("@sciforge/domain-collaboration")),
-    createDomainRendererEntry4(domainHostFor("@sciforge/domain-content-space")),
-    createDomainRendererEntry5(domainHostFor("@sciforge/domain-create-loop")),
-    createDomainRendererEntry6(domainHostFor("@sciforge/domain-evidence-dag")),
-    createDomainRendererEntry7(domainHostFor("@sciforge/domain-git-checkpoints")),
-    createDomainRendererEntry8(domainHostFor("@sciforge/domain-identity-access")),
-    createDomainRendererEntry9(domainHostFor("@sciforge/domain-project-dag")),
-    createDomainRendererEntry10(domainHostFor("@sciforge/domain-research-checkpoints")),
-    createDomainRendererEntry11(domainHostFor("@sciforge/domain-research-dossier")),
-    createDomainRendererEntry12(domainHostFor("@sciforge/domain-siyuan-content-space-provider")),
-    createDomainRendererEntry13(domainHostFor("@sciforge/domain-terminal")),
-    createDomainRendererEntry14(domainHostFor("@sciforge/domain-user-decisions"))
+    createDomainRendererEntry4(domainHostFor("@sciforge/domain-create-loop")),
+    createDomainRendererEntry5(domainHostFor("@sciforge/domain-evidence-dag")),
+    createDomainRendererEntry6(domainHostFor("@sciforge/domain-git-checkpoints")),
+    createDomainRendererEntry7(domainHostFor("@sciforge/domain-identity-access")),
+    createDomainRendererEntry8(domainHostFor("@sciforge/domain-project-dag")),
+    createDomainRendererEntry9(domainHostFor("@sciforge/domain-research-checkpoints")),
+    createDomainRendererEntry10(domainHostFor("@sciforge/domain-research-dossier")),
+    createDomainRendererEntry11(domainHostFor("@sciforge/domain-siyuan-content-space-provider")),
+    createDomainRendererEntry12(domainHostFor("@sciforge/domain-terminal")),
+    createDomainRendererEntry13(domainHostFor("@sciforge/domain-user-decisions"))
   ]
 )
 rendererContributions = Object.freeze(installedRendererDomainEntrySet.contributions.map((contribution) => Object.freeze({

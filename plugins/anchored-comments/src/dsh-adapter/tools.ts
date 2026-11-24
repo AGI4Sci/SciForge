@@ -9,6 +9,16 @@
 import { z } from 'zod'
 import {
   ANCHORED_COMMENT_CAPABILITY_IDS,
+  proseTranslationInputSchema,
+  reconcileCodeAnchorInputSchema,
+  sharedConversationProjectInputSchema,
+  sharedConversationDiscardInputSchema,
+  sharedConversationProjectsInputSchema,
+  sharedConversationSubmitInputSchema,
+  sharedConversationPublishInputSchema,
+  anchoredCommentForkInputSchema,
+  anchoredCommentReplyInputSchema,
+  anchoredCommentCancelInputSchema,
   anchoredCommentCaptureRequestSchema,
   anchoredCommentListInputSchema,
   anchoredCommentReadAssetInputSchema,
@@ -22,6 +32,17 @@ import type { VisualCapturePort } from '../ports/visual-capture.js'
 
 /** Host-side grant table this plugin expects. Configured by the host, not the plugin. */
 export const EXPECTED_HOST_GRANTS = Object.freeze({
+  anchored_comments_shared_discard: { id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard, scope: 'workspace', effect: 'workspace-write' },
+  anchored_comments_prose_translate: { id: ANCHORED_COMMENT_CAPABILITY_IDS.translate, scope: 'workspace', effect: 'workspace-write' },
+  anchored_comments_anchor_reconcile: { id: ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, scope: 'workspace', effect: 'workspace-write' },
+  anchored_comments_shared_projects: { id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects, scope: 'workspace', effect: 'read' },
+  anchored_comments_shared_pull: { id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull, scope: 'workspace', effect: 'read' },
+  anchored_comments_shared_submit: { id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit, scope: 'workspace', effect: 'external-write', approval: 'confirmation' },
+  anchored_comments_shared_publish: { id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish, scope: 'workspace', effect: 'external-write', approval: 'confirmation' },
+  anchored_comments_shared_retry: { id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry, scope: 'workspace', effect: 'external-write', approval: 'confirmation' },
+  anchored_comments_reply: { id: ANCHORED_COMMENT_CAPABILITY_IDS.reply, scope: 'workspace', effect: 'workspace-write' },
+  anchored_comments_cancel: { id: ANCHORED_COMMENT_CAPABILITY_IDS.cancel, scope: 'workspace', effect: 'workspace-write' },
+  anchored_comments_fork: { id: ANCHORED_COMMENT_CAPABILITY_IDS.fork, scope: 'workspace', effect: 'workspace-write' },
   anchored_comments_list: {
     id: ANCHORED_COMMENT_CAPABILITY_IDS.list,
     effect: 'read',
@@ -153,6 +174,46 @@ export function anchoredCommentsTools(
     return operations.invoke(ANCHORED_COMMENT_CAPABILITY_IDS.capture, captureInput, workspaceRoot)
   }
   return [
+    { name: 'anchored_comments_shared_discard', description: 'Discards a rejected local Project command by idempotency key without external dispatch.',
+      parameters: { projectId: THREAD_ID, idempotencyKey: THREAD_ID, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard) },
+    { name: 'anchored_comments_prose_translate', description: 'Translates prose with the selected runtime; original text and code/path/command evidence are preserved.',
+      parameters: { text: THREAD_ID, targetLanguage: THREAD_ID, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.translate) },
+    { name: 'anchored_comments_anchor_reconcile', description: 'Marks a code conversation as needing retargeting when its explicit current file/side snapshot differs. Never replaces saved evidence.',
+      parameters: { threadId: THREAD_ID, current: { type: 'json', required: true }, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor) },
+    { name: 'anchored_comments_shared_projects', description: 'Lists Projects visible to the authenticated user.',
+      parameters: { cursor: { type: 'string' }, workspaceRoot: WORKSPACE_ROOT }, output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects) },
+    { name: 'anchored_comments_shared_pull', description: 'Refreshes shared code conversations in the selected Project without sending pending writes.',
+      parameters: { projectId: THREAD_ID, workspaceRoot: WORKSPACE_ROOT }, output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull) },
+    { name: 'anchored_comments_shared_retry', description: 'Retries pending explicitly approved Project publications using their saved identities.',
+      parameters: { projectId: THREAD_ID, workspaceRoot: WORKSPACE_ROOT }, output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry) },
+    { name: 'anchored_comments_shared_publish', description: 'Publishes selected saved local code messages and portable frozen code anchor to a Project after confirmation.',
+      parameters: { projectId: THREAD_ID, threadId: THREAD_ID, requestId: THREAD_ID, idempotencyKey: THREAD_ID,
+        messageIds: { type: 'array', items: { type: 'string' }, required: true }, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish) },
+    { name: 'anchored_comments_shared_submit', description: 'Appends a message, forks at a shared message or changes shared status after confirmation.',
+      parameters: { projectId: THREAD_ID, command: { type: 'json', required: true }, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit) },
+    {
+      name: 'anchored_comments_reply', description: 'Requests a code conversation reply from the selected runtime.',
+      parameters: { threadId: THREAD_ID, requestId: THREAD_ID, body: { type: 'string' }, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.reply)
+    },
+    {
+      name: 'anchored_comments_cancel', description: 'Cancels the matching code conversation reply.',
+      parameters: { threadId: THREAD_ID, requestId: THREAD_ID, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render }, execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.cancel)
+    },
+    {
+      name: 'anchored_comments_fork',
+      description: 'Forks a saved code conversation at one message with frozen inherited context.',
+      parameters: { threadId: THREAD_ID, messageId: THREAD_ID, childId: THREAD_ID,
+        body: { type: 'string', required: true }, workspaceRoot: WORKSPACE_ROOT },
+      output: { schema: OBJECT_OUTPUT, render },
+      execute: invoke(ANCHORED_COMMENT_CAPABILITY_IDS.fork)
+    },
     {
       name: 'anchored_comments_list',
       description:
@@ -172,7 +233,7 @@ export function anchoredCommentsTools(
     {
       name: 'anchored_comments_upsert',
       description:
-        'Persists a validated thread. Required fields: schemaVersion=1, id, workspaceKey (caller workspace), purpose=research, anchor={targetKey,targetLabel,canonical:{kind:research,resourceKind:document,resourceId:relative path,selection:{quote:exact paragraph,lineStart,lineEnd},contentDigest:optional opaque preview snapshot or digest identifier (not necessarily raw file SHA-256; omit if unsure)},bounds:{x:0,y:0,width:1,height:1}}, capture={capturedAt:ISO,appVersion,platform,viewport:{width:1,height:1,scaleFactor:1},targetLabel,targetBounds:{x:0,y:0,width:1,height:1},unavailableReason:not yet captured}, messages=[{id,authorKind:ai,body,createdAt:ISO,updatedAt:ISO}], status=open, anchorResolution=resolved, feedback={state:local}, createdAt:ISO, updatedAt:ISO. For updates read the existing thread first and preserve canonical target, createdAt and evidence. Use capture with threadId to attach real evidence; never invent image bytes or source.',
+        'Persists a validated thread. Required fields: schemaVersion=2, id, workspaceKey (caller workspace), purpose=research, anchor={targetKey,targetLabel,canonical:{kind:research,resourceKind:document,resourceId:relative path,selection:{quote:exact paragraph,lineStart,lineEnd},contentDigest:optional opaque preview snapshot or digest identifier (not necessarily raw file SHA-256; omit if unsure)},bounds:{x:0,y:0,width:1,height:1}}, capture={capturedAt:ISO,appVersion,platform,viewport:{width:1,height:1,scaleFactor:1},targetLabel,targetBounds:{x:0,y:0,width:1,height:1},unavailableReason:not yet captured}, messages=[{id,authorKind:ai,body,createdAt:ISO,updatedAt:ISO}], status=open, anchorResolution=resolved, feedback={state:local}, createdAt:ISO, updatedAt:ISO. For updates read the existing thread first and preserve canonical target, createdAt and evidence. Use capture with threadId to attach real evidence; never invent image bytes or source.',
       parameters: {
         thread: { type: 'json', required: true },
         workspaceRoot: WORKSPACE_ROOT
@@ -241,6 +302,17 @@ export function anchoredCommentsTools(
 
 /** Contract schemas each capability parses (kept for the parity/forge tests). */
 export const CAPABILITY_INPUT_SCHEMAS = Object.freeze({
+  [ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard]: sharedConversationDiscardInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.translate]: proseTranslationInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor]: reconcileCodeAnchorInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects]: sharedConversationProjectsInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull]: sharedConversationProjectInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry]: sharedConversationProjectInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit]: sharedConversationSubmitInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish]: sharedConversationPublishInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.reply]: anchoredCommentReplyInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.cancel]: anchoredCommentCancelInputSchema,
+  [ANCHORED_COMMENT_CAPABILITY_IDS.fork]: anchoredCommentForkInputSchema,
   [ANCHORED_COMMENT_CAPABILITY_IDS.list]: anchoredCommentListInputSchema,
   [ANCHORED_COMMENT_CAPABILITY_IDS.get]: anchoredCommentThreadIdInputSchema,
   [ANCHORED_COMMENT_CAPABILITY_IDS.upsert]: anchoredCommentUpsertInputSchema,

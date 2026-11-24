@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/plugin-sdk",
-  "version": "0.1.10",
+  "version": "0.1.22",
   "private": false,
   "license": "Apache-2.0",
   "type": "module",
@@ -23,7 +23,7 @@
     "semver": "7.8.5",
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/schemastery": "3.18.4",
-    "@sciforge/domain-sdk": "0.2.35",
+    "@sciforge/domain-sdk": "0.2.47",
     "zod": "4.4.3",
     "@deepseek-ai/cosmokit": "1.8.5",
     "@deepseek-ai/dsh-agent": "0.2.1-rc.4",

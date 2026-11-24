@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { DomainMainWakeupsHost } from '@sciforge/domain-sdk/host'
+import { validateWorkerFollowupTime, workerFollowupView, type WorkerFollowup } from '../task-followup.js'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
@@ -51,10 +53,14 @@ import type { AgentCloudRuntimeError } from '@sciforge/domain-identity-access/ag
 import type { DeviceFactAttestationSigningService } from '@sciforge/domain-identity-access/device-fact-attestation-signing'
 import { resolveSafeWorkspaceWriteTarget, writeSafeWorkspaceFile } from '@sciforge/domain-sdk/node/workspace-paths'
 import { truncateWellFormedUnicode } from '@sciforge/domain-sdk/unicode'
+import { validateDeliveryMaterialBytes, deliveryMaterialKind, deliveryMaterialMaxBytes, deliveryMaterialMediaType } from '../delivery-material-policy.js'
 import { capabilityRequirementsSatisfied } from '../capability-requirements.js'
 import {
   collaborationTaskReturnInputSchema,
   type CollaborationTaskReturnInput,
+  collaborationTaskSessionContinueInputSchema,
+  type CollaborationTaskSessionContinueInput,
+  type CollaborationTaskSessionContinueResult,
   type CollaborationOfferAvailability
 } from '../contract.js'
 import { collaborationRequestId } from './request-id.js'
@@ -62,8 +68,12 @@ import type { CollaborationConnection } from './connection.js'
 import { DurableCloudOutbox } from './outbox.js'
 import { ensurePrivateWorkspaceRoot } from './private-workspace-root.js'
 import { restoreWorkerDeliveryCheckpoint } from './worker-delivery-checkpoint.js'
+import { workerSessionContinuationContext } from './worker-session-continuation-context.js'
 import {
   CollaborationLocalStore,
+  isObjectUploadLimit,
+  isDeliveryCandidateValidationFailure,
+  type CollaborationOutboxEntry,
   enforceWorkerOutboxAuthorityFence,
   type CollaborationPendingTaskOffer,
   type CollaborationProjectUnavailableFence,
@@ -88,8 +98,11 @@ import {
 } from './task-interaction-controller.js'
 import type { TaskCheckpointCreate } from './task-interaction-journal.js'
 import {
+  workerDeliveryCancelInputSchema, type WorkerDeliveryCancelInput,
   workerDeliverySubmitInputSchema,
   workerDeliveryDraftSaveInputSchema,
+  workerDeliveryMaterialImportInputSchema,
+  type WorkerDeliveryMaterialImportInput,
   workerResidualDisposeInputSchema,
   type WorkerDeliveryView,
   type WorkerDeliveryDraft,
@@ -107,6 +120,7 @@ type SessionAdmissionEvent = Parameters<Parameters<NonNullable<DomainMainTurnLif
 type SessionOutputEvent = Parameters<Parameters<NonNullable<DomainMainTurnLifecycleEventsHost['subscribeRequiredOutput']>>[0]>[0]
 
 export type CollaborationTaskAdapterOptions = Readonly<{
+  wakeups?: DomainMainWakeupsHost
   store: CollaborationLocalStore
   connection: CollaborationConnection
   outbox: DurableCloudOutbox
@@ -162,6 +176,7 @@ export function collaborationWorkerSessionTitle(title: string): string {
 
 /** Canonical durable Worker runner for inbox, HCI, Runtime, transfer, and Cloud state. */
 export class CollaborationTaskAdapter {
+  private readonly followupWakeups = new Map<string, () => void>()
   private readonly now: () => Date
   private readonly running = new Map<string, Promise<void>>()
   private readonly delivering = new Map<string, 'preparing' | 'signing'>()
@@ -169,6 +184,7 @@ export class CollaborationTaskAdapter {
   private readonly activeAgentTurns = new Set<string>()
   private readonly interactionDispatchWindows = new Set<string>()
   private readonly retryDispatchGates = new Map<string, { key: string; owners: number }>()
+  private readonly continuingExecutions = new Map<string, Promise<CollaborationTaskSessionContinueResult>>()
   private readonly finalizingExecutions = new Set<string>()
   private readonly returningExecutions = new Map<string, Promise<void>>()
   private readonly interactions: TaskInteractionController
@@ -179,6 +195,7 @@ export class CollaborationTaskAdapter {
     this.interactions = new TaskInteractionController({
       store: options.store,
       now: this.now,
+      sanitizeText: options.sanitizeText,
       canDispatch: (executionId) => (
         (this.interactionDispatchWindows.has(executionId) || this.retryDispatchGates.has(executionId)) &&
         !this.activeAgentTurns.has(executionId)
@@ -219,7 +236,13 @@ export class CollaborationTaskAdapter {
       }
     }
     for (const run of this.options.store.snapshot().taskRuns) {
+      this.armFollowup(run)
       if (run.authorityFencedAt) continue
+      const continuation = this.pendingContinuation(run)
+      if (continuation) {
+        this.scheduleContinuation(run.offer.executionId, continuation.operationId)
+        continue
+      }
       if (run.externalJournal.some((entry) => entry.state === 'effect_dispatched')) {
         this.schedule(run.offer.executionId)
       } else if (!TERMINAL_RUN_STATES.has(run.state) || this.hasDeliveryRecovery(run)) {
@@ -229,6 +252,8 @@ export class CollaborationTaskAdapter {
   }
 
   stop(): void {
+    for (const cancel of this.followupWakeups.values()) cancel()
+    this.followupWakeups.clear()
     this.stopped = true
     for (const controller of this.controllers.values()) controller.abort()
     this.interactions.stop()
@@ -239,6 +264,71 @@ export class CollaborationTaskAdapter {
     else {
       while (this.running.size > 0) await Promise.all([...this.running.values()])
     }
+  }
+
+  private armFollowup(run: CollaborationTaskRun): void {
+    const active = run.followups?.find((item) => item.state === 'waiting' || item.state === 'dispatching')
+    const key = run.offer.executionId
+    if (this.followupWakeups.has(key) || !active || this.stopped || !this.options.wakeups ||
+        TERMINAL_RUN_STATES.has(run.state) || run.authorityFencedAt) return
+    if (Date.parse(active.at) <= this.now().getTime()) return
+    this.followupWakeups.set(key, this.options.wakeups.schedule(active.at, () => {
+      this.followupWakeups.delete(key)
+      if (!this.stopped) this.scheduleAfterCurrent(key)
+    }))
+  }
+
+  private async settleFollowup(executionId: string, id: string, state: WorkerFollowup['state'], reason: string | null = null): Promise<void> {
+    await this.options.store.transact((draft) => {
+      const run = requireDraftRun(draft.taskRuns, executionId)
+      const followup = run.followups.find((item) => item.id === id)
+      if (followup && ['waiting', 'dispatching'].includes(followup.state)) {
+        followup.state = state
+        followup.reason = reason
+      }
+    })
+    if (state !== 'dispatching') {
+      this.followupWakeups.get(executionId)?.()
+      this.followupWakeups.delete(executionId)
+    }
+  }
+
+  /** Persist the intent from the exact observed turn before releasing its model slot. */
+  private async deferWorkerResult(run: CollaborationTaskRun, result: Extract<WorkerRuntimeResult, { outcome: 'deferred' }>): Promise<void> {
+    run = this.requireRun(run.offer.executionId)
+    const source = run.agentJournal.at(-1)
+    if (!source || source.state !== 'observed_success' || !source.turnId || !source.observedAt ||
+        !run.runtimeId || !run.threadId || !source.safeResultText ||
+        JSON.stringify(parseWorkerRuntimeResult(source.safeResultText)) !== JSON.stringify(result)) {
+      throw new Error('复查缺少当前执行轮次的完整回执，未安排自动续办。')
+    }
+    if (run.followups.some((item) => item.sourceInvocationId === source.logicalInvocationId)) return
+    validateWorkerFollowupTime(result.followup.at, new Date(source.observedAt))
+    if (run.followups.length >= 8) throw new Error('本任务已达到八次复查上限，请由成员查看后继续。')
+    if (!this.options.wakeups) throw new Error('当前宿主不支持任务复查，未安排自动续办。')
+    const contractDigest = requireTask(run).contractDigest ?? requireExecution(run).contractDigest
+    if (!contractDigest) throw new Error('任务缺少精确要求版本，未安排自动续办。')
+    const followup: WorkerFollowup = {
+      ...result.followup, id: `followup-${digest(source.logicalInvocationId).slice(0, 48)}`,
+      sourceInvocationId: source.logicalInvocationId, sourceTurnId: source.turnId,
+      runtimeId: run.runtimeId, threadId: run.threadId, contractDigest,
+      inputResources: run.resources,
+      createdAt: source.observedAt, state: 'waiting', reason: null
+    }
+    await this.options.store.transact((draft) => {
+      const current = requireDraftRun(draft.taskRuns, run.offer.executionId)
+      if (!['running', 'waiting-result-confirm'].includes(current.state) || current.executionMode !== 'ai' || current.authorityFencedAt || current.agentJournal.at(-1)?.logicalInvocationId !== source.logicalInvocationId) return
+      for (const previous of current.followups) {
+        if (['waiting', 'dispatching'].includes(previous.state)) previous.state = 'completed'
+      }
+      current.followups.push(followup)
+      current.state = 'running'
+      current.resultSummary = null
+      current.error = null
+    })
+    this.followupWakeups.get(run.offer.executionId)?.()
+    this.followupWakeups.delete(run.offer.executionId)
+    this.armFollowup(this.requireRun(run.offer.executionId))
   }
 
   private acquireRetryDispatch(executionId: string, key: string): void {
@@ -256,6 +346,59 @@ export class CollaborationTaskAdapter {
     if (!gate || gate.key !== key) return
     gate.owners -= 1
     if (gate.owners === 0) this.retryDispatchGates.delete(executionId)
+  }
+
+  private readonly openingTaskSessions = new Map<string, Promise<Readonly<{ runtimeId: string; threadId: string }>>>()
+
+  async ensureTaskSession(input: Readonly<{ projectId: string; taskId: string; executionId: string }>, userId: string): Promise<Readonly<{ runtimeId: string; threadId: string }>> {
+    const run = this.requireRun(input.executionId)
+    if (run.offer.projectId !== input.projectId || run.offer.taskId !== input.taskId ||
+        run.execution?.assigneeUserId !== userId || run.execution.assigneeAgentId !== this.options.localAgentId()) {
+      throw new Error('只有当前电脑上的任务执行人可以打开任务会话。')
+    }
+    if (run.runtimeId || run.threadId) return requireRunSession(run)
+    this.assertDraftEditable(run, input)
+    const pending = this.openingTaskSessions.get(input.executionId)
+    if (pending) return pending
+    const operation = (async () => {
+      const session = await this.options.agentExecution.prepareSession({ workspaceRoot: run.workspaceRoot,
+        title: collaborationWorkerSessionTitle(requireTask(run).title), interaction: 'reviewable', mode: 'agent' })
+      return this.options.store.transact((state) => {
+        const current = requireDraftRun(state.taskRuns, input.executionId)
+        this.assertDraftEditable(current, input)
+        if (state.user?.userId !== userId || current.execution?.assigneeAgentId !== this.options.localAgentId()) {
+          throw new Error('会话准备期间协作身份已变化，请重新打开任务。')
+        }
+        if (current.runtimeId || current.threadId) return requireRunSession(current)
+        current.runtimeId = session.runtimeId
+        current.threadId = session.threadId
+        current.updatedAt = this.now().toISOString()
+        return session
+      })
+    })().finally(() => this.openingTaskSessions.delete(input.executionId))
+    this.openingTaskSessions.set(input.executionId, operation)
+    return operation
+  }
+
+  /** Acceptance records responsibility; only a subsequent human choice starts work. */
+  async startTask(input: Readonly<{ projectId: string; taskId: string; executionId: string; mode: 'manual' | 'ai' }>, userId: string): Promise<void> {
+    const run = this.requireRun(input.executionId)
+    if (run.offer.projectId !== input.projectId || run.offer.taskId !== input.taskId ||
+        run.execution?.assigneeUserId !== userId || run.execution.assigneeAgentId !== this.options.localAgentId()) {
+      throw new Error('只有这台电脑上的任务执行人可以选择执行方式。')
+    }
+    this.assertDraftEditable(run, input)
+    if (this.delivering.has(input.executionId) || this.activeAgentTurns.has(input.executionId)) throw new Error('请等待当前操作完成。')
+    if (run.executionMode === input.mode) return
+    if (this.running.has(input.executionId) || this.openingTaskSessions.has(input.executionId)) throw new Error('请等待当前操作完成。')
+    await this.options.store.transact((state) => {
+      const current = requireDraftRun(state.taskRuns, input.executionId)
+      this.assertDraftEditable(current, input)
+      if (current.executionMode !== run.executionMode) throw new Error('执行方式已有更新，请刷新后重试。')
+      current.executionMode = input.mode
+      if (current.execution?.state === 'running') current.state = input.mode === 'ai' ? 'running' : 'waiting-result-confirm'
+    })
+    this.schedule(input.executionId)
   }
 
   /** Local control-plane APIs consumed by the Collaboration Runtime. */
@@ -362,6 +505,184 @@ export class CollaborationTaskAdapter {
       if (run) this.schedule(run.offer.executionId)
     }
     return interaction
+  }
+
+  /** Explicit human handoff, never an automatic retry of the predecessor's work. */
+  async continueTaskSession(raw: CollaborationTaskSessionContinueInput, userId: string): Promise<CollaborationTaskSessionContinueResult> {
+    const parsed = collaborationTaskSessionContinueInputSchema.parse(raw)
+    const input = { ...parsed, reason: truncateWellFormedUnicode(this.options.sanitizeText?.(parsed.reason) ?? parsed.reason, 1_000).trim() || '接续原因已脱敏' }
+    const run = this.requireRun(input.executionId)
+    if (run.offer.projectId !== input.projectId || run.offer.taskId !== input.taskId ||
+        run.execution?.assigneeUserId !== userId || run.execution.assigneeAgentId !== this.options.localAgentId()) {
+      throw new Error('Only this Device assigned Worker may continue its exact Task Session.')
+    }
+    const alreadyContinued = run.sessionContinuations?.some((item) => item.predecessorRuntimeId === input.predecessorRuntimeId && item.predecessorThreadId === input.predecessorThreadId)
+    if (!alreadyContinued && (this.activeAgentTurns.has(input.executionId) ||
+        this.returningExecutions.has(input.executionId) || this.finalizingExecutions.has(input.executionId))) {
+      throw new Error('Wait for the current execution activity to settle before continuing the Session.')
+    }
+    const active = this.continuingExecutions.get(input.executionId)
+    if (active) return active.then(() => this.continueTaskSession(input, userId))
+    // Reserve continuation before joining a heartbeat/preflight job so another
+    // wake cannot reclaim the execution between settlement and verification.
+    const scheduled = this.running.get(input.executionId)
+    const operation = Promise.resolve().then(async () => {
+      await scheduled
+      const current = this.requireRun(input.executionId)
+      if (current.offer.projectId !== input.projectId || current.offer.taskId !== input.taskId ||
+          current.execution?.assigneeUserId !== userId || current.execution.assigneeAgentId !== this.options.localAgentId()) {
+        throw new Error('Only this Device assigned Worker may continue its exact Task Session.')
+      }
+      return this.prepareTaskContinuation(input)
+    }).finally(() => this.continuingExecutions.delete(input.executionId))
+    this.continuingExecutions.set(input.executionId, operation)
+    const result = await operation
+    this.scheduleContinuation(input.executionId, result.clientDirectiveId)
+    return result
+  }
+
+  private pendingContinuation(run: CollaborationTaskRun) {
+    const continuation = run.sessionContinuations?.at(-1)
+    if (!continuation || continuation.runtimeId !== run.runtimeId || continuation.threadId !== run.threadId ||
+        TERMINAL_RUN_STATES.has(run.state) || run.state === 'needs-human') return undefined
+    const index = run.agentJournal.findIndex((entry) => entry.continuationOperationId === continuation.operationId)
+    if (index < 0) return continuation
+    // A later ordinary input supersedes this turn's local draft application;
+    // never replay an older handoff over a newer human or Agent result.
+    if (index !== run.agentJournal.length - 1) return undefined
+    const invocation = run.agentJournal[index]!
+    if (['observed_failure', 'late_outcome'].includes(invocation.state) ||
+        run.followups.some((item) => item.sourceInvocationId === invocation.logicalInvocationId) ||
+        invocation.state === 'observed_success' && run.deliveryDraft?.sourceTurnId === invocation.turnId) return undefined
+    return continuation
+  }
+
+  private scheduleContinuation(executionId: string, operationId: string): void {
+    if (this.stopped || this.running.has(executionId) || this.pendingContinuation(this.requireRun(executionId))?.operationId !== operationId) return
+    const work = this.executeContinuation(executionId, operationId).catch(async (error) => {
+      if (!this.stopped) await this.updateRun(executionId, { error: safeError(error, this.options.sanitizeText) })
+    }).finally(() => { if (this.running.get(executionId) === work) this.running.delete(executionId) })
+    this.running.set(executionId, work)
+  }
+
+  private async executeContinuation(executionId: string, operationId: string): Promise<void> {
+    const controller = new AbortController()
+    this.controllers.set(executionId, controller)
+    try {
+      const run = this.requireRun(executionId)
+      if (this.pendingContinuation(run)?.operationId !== operationId) return
+      const control = this.interactions.view(run.offer.projectId, run.offer.taskId, executionId)
+      if (control.pending.length > 0 || control.state === 'paused_local' || control.latestInteraction?.kind === 'cancel') throw new Error('The execution is paused or cancelled locally; resolve that control before continuing.')
+      const previous = run.agentJournal.find((entry) => entry.continuationOperationId === operationId)
+      if (previous && ['observed_failure', 'late_outcome'].includes(previous.state)) return
+      const authorized = await this.authorizeExecution(run, controller.signal)
+      if (!authorized || this.pendingContinuation(this.requireRun(executionId))?.operationId !== operationId) return
+      if (previous?.state !== 'observed_success') await this.updateRun(executionId, { state: 'running', error: null })
+      const result = previous?.state === 'observed_success'
+        ? parseWorkerRuntimeResult(previous.safeResultText ?? '')
+        : await this.runAgent(authorized, controller.signal, false, undefined, operationId)
+      if (!result || this.pendingContinuation(this.requireRun(executionId))?.operationId !== operationId) return
+      const latest = this.requireRun(executionId)
+      const invocation = latest.agentJournal.at(-1)!
+      if (invocation.continuationOperationId !== operationId) return
+      if (result.outcome === 'deferred') await this.deferWorkerResult(latest, result)
+      else if (result.outcome === 'needs_human') await this.createHumanNeeded(latest, result.question, result.requiredAssurance, controller.signal)
+      else await this.updateDeliveryDraft(latest, result.summary, invocation.turnId, false, invocation.logicalInvocationId)
+    } finally {
+      if (this.controllers.get(executionId) === controller) this.controllers.delete(executionId)
+    }
+  }
+
+  private assertContinuationSettled(run: CollaborationTaskRun): void {
+    if (this.stopped || run.authorityFencedAt || TERMINAL_RUN_STATES.has(run.state) ||
+        ['needs-human', 'submitting', 'accepting'].includes(run.state) || run.deliverySaga || run.frozenCandidate ||
+        this.activeAgentTurns.has(run.offer.executionId)) throw new Error('Execution cannot accept a Session continuation.')
+    if (run.agentJournal.some((entry) => ['prepared', 'dispatched'].includes(entry.state)) ||
+        run.externalJournal.some((entry) => !['observed_success', 'observed_failure'].includes(entry.state))) {
+      throw new Error('Reconcile pending directives and external outcomes before continuing; blind replay is forbidden.')
+    }
+    const snapshot = this.options.store.snapshot()
+    if (this.interactions.view(run.offer.projectId, run.offer.taskId, run.offer.executionId).state === 'paused_local') throw new Error('Resume the local execution before requesting continuation.')
+    if (snapshot.taskInteractions.some((entry) => entry.executionId === run.offer.executionId &&
+        ['queued', 'dispatching', 'awaiting_cloud'].includes(entry.state)) ||
+        snapshot.outbox.some((entry) => (entry.body.executionId === run.offer.executionId || entry.body.taskId === run.offer.taskId ||
+          entry.body.context && typeof entry.body.context === 'object' && !Array.isArray(entry.body.context) &&
+          entry.body.context.executionId === run.offer.executionId) && entry.state !== 'delivered' &&
+          !this.isSettledCancelledDeliveryRow(run, entry))) {
+      throw new Error('Reconcile pending Task interactions and Cloud receipts before continuing.')
+    }
+  }
+
+  private async prepareTaskContinuation(input: CollaborationTaskSessionContinueInput): Promise<CollaborationTaskSessionContinueResult> {
+    let run = this.requireRun(input.executionId)
+    const authorized = await this.authorizeExecution(run, new AbortController().signal)
+    if (!authorized) throw new Error('Current Cloud authority does not allow Session continuation.')
+    run = authorized
+    const prior = run.sessionContinuations?.find((item) => item.predecessorRuntimeId === input.predecessorRuntimeId &&
+      item.predecessorThreadId === input.predecessorThreadId)
+    if (prior) {
+      if (run.runtimeId !== prior.runtimeId || run.threadId !== prior.threadId) throw new Error('This continuation has already been superseded.')
+      return { opened: true, sessionId: prior.threadId, runtimeId: prior.runtimeId, threadId: prior.threadId,
+        context: prior.context, clientDirectiveId: prior.operationId }
+    }
+    this.assertContinuationSettled(run)
+    if (run.runtimeId !== input.predecessorRuntimeId || run.threadId !== input.predecessorThreadId) {
+      throw new Error('Continuation predecessor does not match the current exact Session binding.')
+    }
+    const host = this.options.agentExecution
+    if (!host.inspectSession || !host.readAdmission || !host.acquireSubmission || !host.releaseSubmission) throw new Error('Runtime cannot safely inspect and fence a Session continuation.')
+    const predecessor = { runtimeId: run.runtimeId, threadId: run.threadId }
+    const admission = await host.readAdmission(predecessor)
+    if (admission.recovery !== 'ready' || admission.receipts.some((receipt) =>
+      !(['rejected', 'abandoned'].includes(receipt.delivery) || receipt.delivery === 'delivered' &&
+        ['completed', 'failed', 'cancelled'].includes(receipt.execution)))) {
+      throw new Error('Resolve the predecessor Session input and output receipts before continuing.')
+    }
+    const operationId = `continuation-${digest(`${input.executionId}\0${predecessor.runtimeId}\0${predecessor.threadId}`).slice(0, 48)}`
+    const targetDigest = digest(JSON.stringify({ executionId: input.executionId, predecessor }))
+    // Fence the canonical input ledger across native inspection and binding.
+    // Failed/unknown preparation releases only this operation's exact fence;
+    // a committed successor keeps the predecessor fenced permanently.
+    await host.acquireSubmission({ ...predecessor, operationId, targetDigest, expectedRevision: admission.revision })
+    let committed = false
+    try {
+      const inspection = await host.inspectSession(predecessor)
+      if (inspection.state !== 'missing' && inspection.state !== 'quiescent') {
+        throw new Error('The predecessor Runtime is active or unknown; investigate before continuing.')
+      }
+      const before = this.requireRun(input.executionId)
+      this.assertContinuationSettled(before)
+      const context = workerSessionContinuationContext({ run: before,
+        checkpoints: this.options.store.snapshot().taskCheckpoints,
+        predecessor, reason: input.reason, sanitizeText: this.options.sanitizeText })
+      const session = await host.prepareSession({ runtimeId: predecessor.runtimeId, workspaceRoot: before.workspaceRoot,
+        title: collaborationWorkerSessionTitle(`${before.task?.title ?? 'Task'} · 接续`), interaction: 'reviewable', mode: 'agent' })
+      if (session.runtimeId !== predecessor.runtimeId || session.threadId === predecessor.threadId) throw new Error('Runtime did not create a distinct successor on the same Runtime.')
+      const current = await this.authorizeExecution(this.requireRun(input.executionId), new AbortController().signal)
+      if (!current || current.expectedTaskRevision !== before.expectedTaskRevision ||
+          current.expectedExecutionRevision !== before.expectedExecutionRevision ||
+          current.task?.contractDigest !== before.task?.contractDigest ||
+          JSON.stringify(current.resources) !== JSON.stringify(before.resources)) throw new Error('Cloud facts changed while preparing continuation; refresh and retry.')
+      this.assertContinuationSettled(current)
+      await this.options.store.transact((draft) => {
+        const latest = requireDraftRun(draft.taskRuns, input.executionId)
+        if (latest.authorityFencedAt || latest.runtimeId !== predecessor.runtimeId || latest.threadId !== predecessor.threadId ||
+            latest.expectedTaskRevision !== current.expectedTaskRevision || latest.expectedExecutionRevision !== current.expectedExecutionRevision ||
+            latest.task?.contractDigest !== current.task?.contractDigest || JSON.stringify(latest.resources) !== JSON.stringify(current.resources) ||
+            latest.execution?.fence.status !== 'open') throw new Error('Session binding or authority changed during continuation.')
+        latest.sessionContinuations ??= []
+        latest.sessionContinuations.push({ predecessorRuntimeId: predecessor.runtimeId, predecessorThreadId: predecessor.threadId,
+          ...session, operationId, targetDigest, reason: input.reason, context, admissionRevision: admission.revision,
+          taskRevision: current.expectedTaskRevision, executionRevision: current.expectedExecutionRevision,
+          contractDigest: requireTask(current).contractDigest, inputResources: current.resources, createdAt: this.now().toISOString() })
+        latest.runtimeId = session.runtimeId; latest.threadId = session.threadId
+        latest.updatedAt = this.now().toISOString()
+      })
+      committed = true
+      return { opened: true, sessionId: session.threadId, ...session, context, clientDirectiveId: operationId }
+    } finally {
+      if (!committed && host.releaseSubmission) await host.releaseSubmission({ ...predecessor, operationId, targetDigest })
+    }
   }
 
   appendTaskCheckpoint(input: TaskCheckpointCreate): Promise<CollaborationTaskCheckpoint> {
@@ -701,10 +1022,11 @@ export class CollaborationTaskAdapter {
         facts.manifest.bundleDigest !== run.frozenCandidate.bundleDigest) return
     await this.updateRun(payload.executionId, {
       offer: { ...run.offer, revisionInstruction: facts.revisionRequest.instruction },
-      state: 'running',
+      executionMode: 'unselected',
+      state: 'waiting-result-confirm',
       resultSummary: null,
       deliveryDraft: { ...newDeliveryDraft(run, this.now().toISOString()), summary: run.frozenCandidate.bundle.summary,
-        selectedMaterials: run.deliveryDraft?.selectedMaterials ?? [], outputs: run.frozenCandidate.bundle.schemaVersion === 2 ? run.frozenCandidate.bundle.outputs : [] },
+        selectedMaterials: run.deliveryDraft?.selectedMaterials ?? [], ...(run.deliveryDraft?.declaredMaterial !== undefined ? { declaredMaterial: run.deliveryDraft.declaredMaterial } : {}), outputs: run.frozenCandidate.bundle.schemaVersion === 2 ? run.frozenCandidate.bundle.outputs : [] },
       frozenCandidate: { ...run.frozenCandidate, dirty: true },
       deliverySaga: null,
       completedAt: null,
@@ -717,7 +1039,7 @@ export class CollaborationTaskAdapter {
   /** New ordinary Session input invalidates the displayed snapshot before dispatch. */
   async acceptSessionAdmission(event: SessionAdmissionEvent): Promise<void> {
     if (!['queue', 'direct', 'steer'].includes(event.kind)) return
-    const run = this.runForSession(event)
+    let run = this.runForSession(event)
     if (!run || TERMINAL_RUN_STATES.has(run.state)) return
     if (this.delivering.has(run.offer.executionId) || run.state === 'submitting') {
       throw new Error('Worker Delivery submission is in progress; the Session cannot accept new input.')
@@ -729,6 +1051,15 @@ export class CollaborationTaskAdapter {
     const receipt = admission?.receipts.find((entry) => entry.clientDirectiveId === clientDirectiveId)
     if (receipt?.delivery === 'abandoned' || receipt?.delivery === 'delivered' &&
         ['completed', 'failed', 'cancelled'].includes(receipt.execution)) return
+    // The first ordinary user input authorizes this conversational work only.
+    // Starting Cloud execution must never schedule the autonomous whole-task turn.
+    if (run.execution?.state === 'accepted') {
+      run = await this.updateRun(run.offer.executionId, { executionMode: 'manual' })
+      const preflight = await this.refreshPreflight(run, true, new AbortController().signal)
+      if (preflight.outcome !== 'allowed') throw new Error('当前任务执行权限不可用，请处理任务变更或刷新后再发送。')
+      await this.acceptAndStart(this.requireRun(run.offer.executionId))
+      run = this.requireRun(run.offer.executionId)
+    }
     // Host admission can arrive before the new queue receipt is written, or
     // again while it is delivering/started/output_pending. Persist Session
     // ownership and the dirty draft in ONE transaction before any wake can see
@@ -876,6 +1207,14 @@ export class CollaborationTaskAdapter {
       Object.assign(entry, outcome, { admissionRevision,
         observedAt: outcome.state === 'dispatched' ? null : now })
       if (admittedInput) {
+        for (const followup of current.followups) {
+          if (['waiting', 'dispatching'].includes(followup.state)) {
+            followup.state = 'cancelled'
+            followup.reason = '成员已在原会话输入新指令，旧复查已取消。'
+          }
+        }
+        this.followupWakeups.get(run.offer.executionId)?.()
+        this.followupWakeups.delete(run.offer.executionId)
         current.state = 'running'
         current.resultSummary = null
         current.error = null
@@ -926,6 +1265,14 @@ export class CollaborationTaskAdapter {
       for (const run of draft.taskRuns) {
         if (run.offer.recipientAgentId !== agentId) continue
         run.authorityFencedAt ??= now
+        for (const followup of run.followups) {
+          if (['waiting', 'dispatching'].includes(followup.state)) {
+            followup.state = 'cancelled'
+            followup.reason = '执行权限已撤销，旧复查已取消。'
+          }
+        }
+        this.followupWakeups.get(run.offer.executionId)?.()
+        this.followupWakeups.delete(run.offer.executionId)
         if (TERMINAL_RUN_STATES.has(run.state)) continue
         run.state = 'fenced'
         run.completedAt = now
@@ -1075,7 +1422,7 @@ export class CollaborationTaskAdapter {
   }
 
   private schedule(identifier: string): void {
-    if (this.stopped || this.running.has(identifier)) return
+    if (this.stopped || this.running.has(identifier) || this.continuingExecutions.has(identifier)) return
     const promise = this.process(identifier).catch(async (error) => {
       if (this.stopped) return
       const pending = this.findPendingOffer(identifier)
@@ -1127,8 +1474,13 @@ export class CollaborationTaskAdapter {
     }
     const executionId = identifier
     let run = this.requireRun(executionId)
-    if (run.authorityFencedAt) return
+    if (this.hasParkedDeliveryValidationFailure(run)) return
+    if (run.authorityFencedAt || run.executionMode === 'unselected' || !run.executionMode && run.agentJournal.length === 0) return
     if (this.delivering.has(executionId)) return
+    if (run.deliverySaga && this.options.store.snapshot().outbox.some((entry) =>
+      entry.body.executionId === executionId &&
+      entry.idempotencyKey.startsWith(`idem_object.stage.${run.deliverySaga!.operationId}.`) &&
+      isObjectUploadLimit(entry))) return
     if (this.hasDeliveryRecovery(run)) {
       const controller = new AbortController()
       this.controllers.set(executionId, controller)
@@ -1523,6 +1875,7 @@ export class CollaborationTaskAdapter {
           expectedTaskRevision: task.revision,
           expectedExecutionRevision: execution.revision,
           state: 'accepting',
+          executionMode: 'unselected',
           workspaceRoot,
           runtimeId: null,
           threadId: null,
@@ -1530,6 +1883,7 @@ export class CollaborationTaskAdapter {
           humanAnswer: null,
           resources: [],
           agentJournal: [],
+          followups: [],
           externalJournal: [],
           outputs: [],
           recoveryJournalEntryIds: [],
@@ -1537,6 +1891,7 @@ export class CollaborationTaskAdapter {
           frozenCandidate: null,
           deliveryDraft: null,
           deliveryHistory: [],
+      cancelledDeliveryAttempts: [],
           deliverySaga: null,
           lateOutcomes: [],
           startedAt: null,
@@ -1544,6 +1899,8 @@ export class CollaborationTaskAdapter {
           completedAt: null,
           error: null
         })
+        const acceptedRun = requireDraftRun(draft.taskRuns, execution.executionId)
+        acceptedRun.deliveryDraft = newDeliveryDraft(acceptedRun, acceptedAt)
         draft.tasks = [...draft.tasks.filter(({ taskId }) => taskId !== task.taskId), task]
       })
     } catch (error) {
@@ -1612,6 +1969,10 @@ export class CollaborationTaskAdapter {
       await this.applyTerminalExecution(run, execution)
       return
     }
+    if (run.executionMode === 'manual') {
+      await this.updateRun(run.offer.executionId, { state: 'waiting-result-confirm' })
+      return
+    }
     await this.executeRunning(run)
   }
 
@@ -1633,6 +1994,33 @@ export class CollaborationTaskAdapter {
         (controlView.latestInteraction?.kind === 'cancel' &&
           controlView.latestInteraction.state === 'applied')
       ) return
+      // The owner restores the timer from its durable intent. Heartbeats do not
+      // start another model turn before the due time or after an unknown outcome.
+      const followup = run.followups.find((item) => ['waiting', 'dispatching'].includes(item.state))
+      if (followup) {
+        if (followup.runtimeId !== run.runtimeId || followup.threadId !== run.threadId ||
+            followup.contractDigest !== (requireTask(run).contractDigest ?? requireExecution(run).contractDigest) || digest(JSON.stringify(followup.inputResources)) !== digest(JSON.stringify(run.resources)) || run.state === 'needs-human') {
+          await this.settleFollowup(run.offer.executionId, followup.id, 'cancelled', '任务、会话或等待状态已改变；旧复查不再续办。')
+          return
+        }
+        if (Date.parse(followup.at) > this.now().getTime()) { this.armFollowup(run); return }
+        if (this.now().getTime() - Date.parse(followup.at) > 24 * 60 * 60_000) {
+          await this.settleFollowup(run.offer.executionId, followup.id, 'unknown', '复查已错过超过一天，请核实当前情况后手动继续。')
+          return
+        }
+        await this.settleFollowup(run.offer.executionId, followup.id, 'dispatching')
+      } else {
+        // Recover a successful deferral whose turn was saved before its intent.
+        const last = run.agentJournal.at(-1)
+        if (last?.origin !== 'session' && last?.state === 'observed_success' && last.safeResultText) {
+          let recovered: WorkerRuntimeResult | undefined
+          try { recovered = parseWorkerRuntimeResult(last.safeResultText) } catch { /* Ordinary member output. */ }
+          if (recovered?.outcome === 'deferred') {
+            await this.deferWorkerResult(run, recovered)
+            return
+          }
+        }
+      }
       if (await this.recoverInterruptedRetryOutcome(run, controller.signal) === 'parked') return
       run = this.requireRun(run.offer.executionId)
       if (TERMINAL_RUN_STATES.has(run.state)) return
@@ -1652,8 +2040,23 @@ export class CollaborationTaskAdapter {
       }
       const initialRuntimeResult: WorkerRuntimeResult | null = run.resultSummary
         ? { schemaVersion: 1, outcome: 'completed', summary: run.resultSummary }
-        : await this.runAgent(run, controller.signal)
-      if (!initialRuntimeResult) return
+        : await this.runAgent(run, controller.signal, false, undefined, undefined, followup?.id)
+      if (!initialRuntimeResult) {
+        if (followup && latestAgentFailure(this.requireRun(run.offer.executionId))) {
+          await this.settleFollowup(run.offer.executionId, followup.id, 'unknown', '复查轮次未完成；保留原回执，等待成员核实，不自动重做。')
+        }
+        return
+      }
+      if (initialRuntimeResult.outcome === 'deferred') {
+        try {
+          await this.deferWorkerResult(this.requireRun(run.offer.executionId), initialRuntimeResult)
+        } catch (error) {
+          if (followup) await this.settleFollowup(run.offer.executionId, followup.id, 'unknown', safeError(error, this.options.sanitizeText).slice(0, 2_000))
+          throw error
+        }
+        return
+      }
+      if (followup) await this.settleFollowup(run.offer.executionId, followup.id, 'completed')
       if (initialRuntimeResult.outcome === 'completed' && !run.resultSummary) {
         await this.updateRun(run.offer.executionId, {
           resultSummary: initialRuntimeResult.summary,
@@ -1767,7 +2170,9 @@ export class CollaborationTaskAdapter {
           'Worker Runtime retry failed.'
         )
       }
-      if (result.outcome === 'needs_human') {
+      if (result.outcome === 'deferred') {
+        await this.deferWorkerResult(this.requireRun(run.offer.executionId), result)
+      } else if (result.outcome === 'needs_human') {
         await this.createHumanNeeded(
           this.requireRun(run.offer.executionId),
           result.question,
@@ -1821,6 +2226,10 @@ export class CollaborationTaskAdapter {
       )
       return 'parked'
     }
+    if (result.outcome === 'deferred') {
+      await this.deferWorkerResult(this.requireRun(run.offer.executionId), result)
+      return 'parked'
+    }
     if (result.outcome === 'needs_human') {
       await this.createHumanNeeded(
         this.requireRun(run.offer.executionId),
@@ -1842,8 +2251,11 @@ export class CollaborationTaskAdapter {
     run: CollaborationTaskRun,
     preflight: CollaborationWorkerPreflight
   ): Promise<boolean> {
+    const pendingChange = preflight.cloud.decision.reasons.length > 0 &&
+      preflight.cloud.decision.reasons.every((reason) => reason === 'task_change_pending')
     if (!preflight.reasons.length || !preflight.reasons.every((reason) =>
-      ['runtime_not_ready', 'capability_unavailable', 'provider_not_ready'].includes(reason))) return false
+      ['runtime_not_ready', 'capability_unavailable', 'provider_not_ready'].includes(reason) ||
+      reason === 'cloud_denied' && pendingChange)) return false
     await this.updateRun(run.offer.executionId, {
       ...(requireExecution(run).state === 'accepted' ? { state: 'waiting-runtime' as const } : {}),
       error: `Waiting for execution readiness: ${preflight.reasons.join(', ')}`
@@ -1873,23 +2285,29 @@ export class CollaborationTaskAdapter {
     run: CollaborationTaskRun,
     signal: AbortSignal,
     repairAttempt = false,
-    retryInteractionId?: string
+    retryInteractionId?: string,
+    continuationOperationId?: string,
+    followupId?: string
   ): Promise<WorkerRuntimeResult | null> {
     // Every owned Runtime turn, including retries and repair, uses current Cloud authority.
     const authorized = await this.authorizeExecution(run, signal)
     if (!authorized) return null
     run = authorized
+    if (followupId) {
+      const observed = [...run.agentJournal].reverse().find((entry) => entry.followupId === followupId && entry.state === 'observed_success')
+      if (observed?.safeResultText) return parseWorkerRuntimeResult(observed.safeResultText)
+    }
     const latestInvocation = run.agentJournal.at(-1)
-    if (latestInvocation?.origin === 'session' && latestInvocation.state !== 'observed_success') return null
+    if (!continuationOperationId && latestInvocation?.origin === 'session' && latestInvocation.state !== 'observed_success') return null
     const existing = [...run.agentJournal].reverse().find((entry) => (
       entry.origin !== 'session' && (entry.state === 'prepared' || entry.state === 'dispatched') &&
-      (retryInteractionId
+      (followupId ? entry.followupId === followupId : continuationOperationId ? entry.continuationOperationId === continuationOperationId : retryInteractionId
         ? entry.retryInteractionId === retryInteractionId
-        : !entry.retryInteractionId)
+        : !entry.retryInteractionId && !entry.continuationOperationId && !entry.followupId)
     ))
     const ordinal = run.agentJournal.length + (existing ? 0 : 1)
     const logicalInvocationId = existing?.logicalInvocationId ?? `agent.${run.offer.executionId}.${ordinal}`
-    const clientDirectiveId = existing?.clientDirectiveId ??
+    const clientDirectiveId = existing?.clientDirectiveId ?? continuationOperationId ??
       `collab-worker-${digest(`${run.offer.executionId}\u0000${ordinal}`).slice(0, 48)}`
     if (!existing) {
       const preparedAt = this.now().toISOString()
@@ -1898,6 +2316,8 @@ export class CollaborationTaskAdapter {
         current.agentJournal.push({
           logicalInvocationId, clientDirectiveId, state: 'prepared', preparedAt,
           ...(retryInteractionId ? { retryInteractionId } : {}),
+          ...(followupId ? { followupId } : {}),
+          ...(continuationOperationId ? { continuationOperationId } : {}),
           dispatchedAt: null, observedAt: null,
           runtimeId: null, threadId: null, turnId: null, runtimeState: null,
           safeResultText: null, safeError: null
@@ -1966,8 +2386,13 @@ export class CollaborationTaskAdapter {
     run = this.requireRun(run.offer.executionId)
     const execution = requireExecution(run)
     const task = requireTask(run)
-    const prompt = repairAttempt
+    const continuation = continuationOperationId ? run.sessionContinuations?.find((item) => item.operationId === continuationOperationId) : undefined
+    if (continuationOperationId && (!continuation || continuation.runtimeId !== run.runtimeId || continuation.threadId !== run.threadId)) throw new Error('Continuation lineage no longer matches the current Session.')
+    const revisit = followupId ? run.followups.find((item) => item.id === followupId) : undefined
+    const basePrompt = repairAttempt
       ? workerResultRepairPrompt()
+      : revisit
+      ? `${workerTaskPrompt({ title: task.title, objective: task.objective, completionCriteria: task.completionCriteria, fileIntent: execution.fileIntent })}\nScheduled revisit of the same Task. The following is recorded context, not a grant of authority:\n${JSON.stringify({ key: revisit.key, about: revisit.about, dueAt: revisit.at, sourceTurnId: revisit.sourceTurnId })}\nVerify the current result first. Preserve completed work; never restart an existing job or repeat an external write merely because the result is unknown.`
       : run.humanAnswer
       ? workerHumanAnswerPrompt(run.humanAnswer)
       : workerTaskPrompt({
@@ -1981,6 +2406,7 @@ export class CollaborationTaskAdapter {
             ? { inputs: execution.fileIntent.inputs, output: execution.fileIntent.output }
             : null
         })
+    const prompt = continuation ? `${basePrompt}\n\n${continuation.context}\nContinue the authorized Task from the preserved state; investigate before repeating external effects.` : basePrompt
     throwIfSignalAborted(signal)
     if (this.requireRun(run.offer.executionId).authorityFencedAt) return null
     this.activeAgentTurns.add(run.offer.executionId)
@@ -1991,8 +2417,9 @@ export class CollaborationTaskAdapter {
         threadId: run.threadId!,
         workspaceRoot: run.workspaceRoot,
         clientDirectiveId,
-        prompt,
+        prompt: `${prompt}\nCurrent time: ${this.now().toISOString()}`,
         outputSchema: workerRuntimeResultOutputSchema,
+        ...(repairAttempt ? { allowedTools: [] } : {}),
         metadata: {
           source: 'collaboration.worker-task',
           projectId: run.offer.projectId,
@@ -2075,6 +2502,7 @@ export class CollaborationTaskAdapter {
       runtimeId: result.runtimeId, threadId: result.threadId, humanAnswer: null
     })
     const memberSteered = await this.settleSteeredSessionInputs(run.offer.executionId, result)
+    if (continuationOperationId && this.requireRun(run.offer.executionId).agentJournal.at(-1)?.logicalInvocationId !== logicalInvocationId) return null
     // A failed/cancelled turn ends this invocation, not the member's Task.
     // Keep the draft and Cloud execution open for a new input or human submission.
     if (result.state !== 'completed') return null
@@ -2092,7 +2520,7 @@ export class CollaborationTaskAdapter {
         state: 'observed_failure',
         safeError: safeError(error, this.options.sanitizeText)
       })
-      if (!repairAttempt && !retryInteractionId) {
+      if (!repairAttempt && !retryInteractionId && !continuationOperationId && !followupId) {
         return this.runAgent(
           this.requireRun(run.offer.executionId),
           signal,
@@ -2180,13 +2608,14 @@ export class CollaborationTaskAdapter {
     await readDeliveryWorkspaceIdentity(run.workspaceRoot, workspace)
     await chmod(bundleTarget.path, 0o400)
     const candidate: FrozenWorkerCandidate = {
+      ...(run.deliveryDraft?.sourceChat ? { sourceChat: run.deliveryDraft.sourceChat } : {}),
       candidateId, sourceTurnId: run.deliveryDraft?.sourceTurnId ?? latestObservedTurnId(run) ?? `member-r${bundle.resultRevision}`,
       admissionRevision, frozenAt: this.now().toISOString(), bundle, bundleDigest: frozenDeliveryBundleDigest(bundle),
       contract,
       bundleFile: { path: bundleTarget.path, sha256: createHash('sha256').update(bundleBytes).digest('hex'),
         byteCount: bundleBytes.byteLength, mediaType: 'application/json' }, outputFiles, dirty: false
     }
-    const currentAdmission = await this.readSessionAdmission(requireRunSession(run))
+    const currentAdmission = await this.deliveryAdmission(run)
     await readDeliveryWorkspaceIdentity(run.workspaceRoot, workspace)
     if (currentAdmission?.revision !== admissionRevision) throw new Error('会话有新输入，请等待本轮完成后再提交。')
     await this.options.store.transact((state) => {
@@ -2223,6 +2652,13 @@ export class CollaborationTaskAdapter {
     return accepted.data
   }
 
+  private async deliveryAdmission(run: CollaborationTaskRun) {
+    if (run.executionMode === 'manual' && !run.runtimeId && !run.threadId) {
+      return { revision: 0, recovery: 'ready' as const, receipts: [] }
+    }
+    return this.readSessionAdmission(requireRunSession(run))
+  }
+
   private async readSessionAdmission(
     ref: Readonly<{ runtimeId: string; threadId: string }>
   ) {
@@ -2231,10 +2667,11 @@ export class CollaborationTaskAdapter {
   }
 
   private async updateDeliveryDraft(run: CollaborationTaskRun, summary: string | null,
-    turnId = latestObservedTurnId(run), ordinaryTurn = false): Promise<void> {
+    turnId = latestObservedTurnId(run), ordinaryTurn = false, expectedInvocationId?: string): Promise<void> {
     await this.options.store.transact((state) => {
       const current = requireDraftRun(state.taskRuns, run.offer.executionId)
       if (TERMINAL_RUN_STATES.has(current.state) || current.state === 'submitting') return
+      if (expectedInvocationId && current.agentJournal.at(-1)?.logicalInvocationId !== expectedInvocationId) return
       const previous = current.deliveryDraft ?? newDeliveryDraft(current, this.now().toISOString())
       if (turnId && previous.sourceTurnId === turnId) return
       const aiSummary = summary === null ? null : truncateDeliveryBundleSummary(summary)
@@ -2254,13 +2691,18 @@ export class CollaborationTaskAdapter {
     })
   }
 
-  async saveWorkerDeliveryDraft(raw: WorkerDeliveryDraftSaveInput): Promise<WorkerDeliveryView> {
+  async saveWorkerDeliveryDraft(raw: WorkerDeliveryDraftSaveInput, sourceChat?: Readonly<{ runtimeId: string; threadId: string; turnId: string }>): Promise<WorkerDeliveryView> {
     const input = workerDeliveryDraftSaveInputSchema.parse(raw)
     if (this.delivering.has(input.executionId)) throw new Error('交付正在封存，草稿只读。')
     const observed = this.requireRun(input.executionId)
     this.assertDraftEditable(observed, input)
-    if (input.selectedMaterials) {
-      await readDeliveryMaterials({ ...deliveryMaterialContext(observed), selectedMaterials: input.selectedMaterials })
+    if (input.declaredMaterial) {
+      await readDeliveryMaterials({ ...deliveryMaterialContext(observed), declaredMaterial: input.declaredMaterial,
+        selectedMaterials: input.selectedMaterials ?? observed.deliveryDraft?.selectedMaterials ?? [] })
+    } else if (input.selectedMaterials) {
+      // Missing mandatory output must not prevent saving additional materials or a summary.
+      await readDeliveryMaterials({ ...deliveryMaterialContext(observed), declared: null, declaredMaterial: null,
+        selectedMaterials: input.selectedMaterials })
     }
     await this.options.store.transact((state) => {
       if (this.delivering.has(input.executionId)) throw new Error('交付正在封存，草稿只读。')
@@ -2269,11 +2711,20 @@ export class CollaborationTaskAdapter {
       const previous = run.deliveryDraft ?? newDeliveryDraft(run, this.now().toISOString())
       if (previous.revision !== input.expectedDraftRevision) throw new Error('草稿已有更新，请刷新后保留你的修改。')
       const summary = input.aiSummaryDecision === 'replace' ? previous.aiSummary ?? input.summary : input.summary
-      run.deliveryDraft = { ...previous, revision: previous.revision + 1, summary,
+      const { sourceChat: previousSourceChat, declaredMaterial: previousDeclaredMaterial, ...previousDraft } = previous
+      const draftSourceChat = sourceChat ?? (summary === previous.summary ? previousSourceChat : undefined)
+      const declaredMaterial = input.declaredMaterial === undefined ? previousDeclaredMaterial
+        : input.declaredMaterial && sourceChat && !input.declaredMaterial.relativePath.startsWith('.sciforge/uploads/')
+          ? { ...input.declaredMaterial, source: 'ai' as const } : input.declaredMaterial
+      run.deliveryDraft = { ...previousDraft, revision: previous.revision + 1, summary,
+        ...(draftSourceChat ? { sourceChat: draftSourceChat } : {}),
+        ...(declaredMaterial !== undefined ? { declaredMaterial } : {}),
         summaryEdited: input.aiSummaryDecision !== 'replace',
         aiSummary: input.aiSummaryDecision ? null : previous.aiSummary,
         selectedMaterials: input.selectedMaterials ?? previous.selectedMaterials,
-        changed: previous.changed || input.selectedMaterials !== undefined && JSON.stringify(input.selectedMaterials) !== JSON.stringify(previous.selectedMaterials),
+        changed: previous.changed ||
+          input.declaredMaterial !== undefined && JSON.stringify(input.declaredMaterial) !== JSON.stringify(previous.declaredMaterial) ||
+          input.selectedMaterials !== undefined && JSON.stringify(input.selectedMaterials) !== JSON.stringify(previous.selectedMaterials),
         materialError: null,
         updatedAt: this.now().toISOString() }
       run.updatedAt = this.now().toISOString()
@@ -2294,6 +2745,40 @@ export class CollaborationTaskAdapter {
     const run = this.requireRun(input.executionId)
     this.assertDraftEditable(run, input)
     return listDeliveryMaterials(deliveryMaterialContext(run), input)
+  }
+
+  async importWorkerDeliveryMaterial(raw: WorkerDeliveryMaterialImportInput) {
+    const input = workerDeliveryMaterialImportInputSchema.parse(raw)
+    const run = this.requireRun(input.executionId)
+    const assertCurrent = () => {
+      const current = this.requireRun(input.executionId)
+      this.assertDraftEditable(current, input)
+      if (this.delivering.has(input.executionId) || current.workspaceRoot !== run.workspaceRoot ||
+          this.options.store.snapshot().user?.userId !== current.execution?.assigneeUserId ||
+          current.execution?.assigneeAgentId !== this.options.localAgentId()) {
+        throw new Error('只有当前电脑上的任务执行人可以导入交付文件。')
+      }
+    }
+    assertCurrent()
+    const kind = deliveryMaterialKind({ name: input.fileName })
+    if (kind === 'unsupported') throw new Error('文件类型暂不支持，请选择支持的资料格式。')
+    const limit = deliveryMaterialMaxBytes(kind)
+    if (input.contentBase64.length > Math.ceil(limit / 3) * 4) throw new Error('文件超过资料大小限制。')
+    const bytes = Buffer.from(input.contentBase64, 'base64')
+    if (bytes.length > limit || bytes.toString('base64') !== input.contentBase64) throw new Error('文件内容或大小不符合要求。')
+    validateDeliveryMaterialBytes({ name: input.fileName }, bytes)
+    const identity = await readDeliveryWorkspaceIdentity(run.workspaceRoot)
+    // A unique directory preserves the original name without overwriting a
+    // previous upload. Human materials belong to the execution, not an AI chat.
+    const relativePath = `materials/${randomUUID()}/${input.fileName}`
+    const target = await resolveSafeWorkspaceWriteTarget(relativePath, run.workspaceRoot, { createParentDirectories: true })
+    await readDeliveryWorkspaceIdentity(run.workspaceRoot, identity)
+    assertCurrent()
+    await writeSafeWorkspaceFile(target, bytes, { exclusive: true })
+    await readDeliveryWorkspaceIdentity(run.workspaceRoot, identity)
+    assertCurrent()
+    return { file: { relativePath, fileName: input.fileName, byteCount: bytes.length,
+      mediaType: deliveryMaterialMediaType({ name: input.fileName }), source: 'member' as const } }
   }
 
   async refreshWorkerDelivery(input: WorkerDeliveryReadInput): Promise<WorkerDeliveryView> {
@@ -2324,11 +2809,13 @@ export class CollaborationTaskAdapter {
     }
     const view = workerDeliveryViewForRun(run, this.interactions.listInteractions(input.projectId, input.taskId))
     const preparing = this.delivering.get(input.executionId)
+    const followup = workerFollowupView(run.followups.at(-1), run.agentJournal.at(-1))
     const phase = run.deliverySaga?.state
     const submissionProgress = phase === 'staging' || phase === 'candidate' || phase === 'review' || phase === 'seal'
       ? phase : preparing
-    return { ...view, ...(submissionProgress && view.state !== 'sealed'
-      ? { state: view.state === 'blocked' ? 'blocked' : 'submitting', submissionProgress } : {}) }
+    return { ...view, ...(followup ? { followup } : {}), canCancelFailedSubmission: this.canCancelFailedSubmission(run), ...(submissionProgress && view.state !== 'sealed'
+      ? { state: view.state === 'blocked' ? 'blocked' : 'submitting', submissionProgress } : {}),
+      ...(this.hasParkedDeliveryValidationFailure(run) ? { error: '云端已拒绝这份交付的内容要求，重复重试不会解决。请撤回失败提交并继续编辑，修正文件类型或大小后重新确认提交。' } : {}) }
   }
 
   /** Disposes one preserved residual instruction; content is never auto-replayed. */
@@ -2356,6 +2843,147 @@ export class CollaborationTaskAdapter {
     return this.workerDeliveryView(parsed)
   }
 
+  private hasParkedDeliveryValidationFailure(run: CollaborationTaskRun): boolean {
+    return this.options.store.snapshot().outbox.some(entry =>
+      entry.idempotencyKey === `idem_delivery.candidate.create.${run.deliverySaga?.operationId}` &&
+      entry.body.candidateId === run.deliverySaga?.candidateId && isDeliveryCandidateValidationFailure(entry))
+  }
+
+  private cancellableDeliveryRows(run: CollaborationTaskRun, outbox: readonly CollaborationOutboxEntry[]): boolean {
+    const saga = run.deliverySaga
+    if (!saga || saga.manifest) return false
+    const stages = outbox.filter(entry => entry.idempotencyKey.startsWith(`idem_object.stage.${saga.operationId}.`))
+    const commands = outbox.filter(entry => entry.kind === 'delivery.command' &&
+      (entry.body.candidateId === saga.candidateId || entry.body.operationId === saga.operationId))
+    if (saga.state === 'staging') return stages.some(entry => entry.state === 'failed' && isObjectUploadLimit(entry)) &&
+      stages.every(entry => entry.state === 'delivered' || entry.state === 'failed' && isObjectUploadLimit(entry)) && commands.length === 0
+    return saga.state === 'candidate' && stages.length > 0 && stages.every(entry => entry.state === 'delivered') &&
+      commands.length === 1 && commands.every(entry => entry.body.candidateId === saga.candidateId &&
+        entry.idempotencyKey === `idem_delivery.candidate.create.${saga.operationId}` && isDeliveryCandidateValidationFailure(entry))
+  }
+
+  /** A cancellation settles only the exact definitive failure retained with its signed snapshot. */
+  private isSettledCancelledDeliveryRow(run: CollaborationTaskRun, entry: CollaborationOutboxEntry): boolean {
+    if (entry.state !== 'failed') return false
+    return run.cancelledDeliveryAttempts.some(({ candidate, saga }) => {
+      if (!this.matchesDeliveryAttempt(run, candidate, saga) || saga.manifest) return false
+      if (entry.body.projectId !== run.offer.projectId || entry.body.taskId !== run.offer.taskId ||
+          entry.body.executionId !== run.offer.executionId) return false
+      if (entry.kind === 'delivery.stage' && entry.body.type === 'object.stage' &&
+          saga.state === 'staging' && isObjectUploadLimit(entry)) {
+        const files = [candidate.bundleFile, ...candidate.outputFiles]
+        return files.some((file, index) => entry.idempotencyKey ===
+          `idem_object.stage.${saga.operationId}.${index === 0 ? 'bundle' : `output.${index - 1}`}` &&
+          entry.body.sha256 === file.sha256 && entry.body.byteCount === file.byteCount &&
+          entry.body.mediaType === file.mediaType && entry.stageFile?.path === file.path &&
+          entry.stageFile.sha256 === file.sha256 && entry.stageFile.byteCount === file.byteCount)
+      }
+      return saga.state === 'candidate' && isDeliveryCandidateValidationFailure(entry) &&
+        entry.idempotencyKey === `idem_delivery.candidate.create.${saga.operationId}` &&
+        entry.body.candidateId === candidate.candidateId && entry.body.bundleDigest === candidate.bundleDigest &&
+        entry.body.contractRevision === candidate.bundle.contractRevision &&
+        entry.body.resultRevision === candidate.bundle.resultRevision && entry.body.workerUserId === run.execution?.assigneeUserId
+    })
+  }
+
+  private matchesDeliveryAttempt(run: CollaborationTaskRun, candidate: FrozenWorkerCandidate, saga: WorkerDeliverySaga): boolean {
+    const bundle = candidate.bundle
+    const target = { projectId: bundle.projectId, taskId: bundle.taskId, executionId: bundle.executionId,
+      contractRevision: bundle.contractRevision, resultRevision: bundle.resultRevision,
+      bundleDigest: candidate.bundleDigest, decision: 'approved' as const }
+    const { deviceSignature, ...action } = saga.proof
+    return bundle.schemaVersion === 2 && bundle.projectId === run.offer.projectId && bundle.taskId === run.offer.taskId &&
+      bundle.executionId === run.offer.executionId && saga.candidateId === candidate.candidateId &&
+      candidate.bundleDigest === frozenDeliveryBundleDigest(bundle) &&
+      saga.operationId === `dop_${createHash('sha256').update(saga.proof.actionId).digest('hex').slice(0, 32)}` &&
+      saga.proof.deviceSignature.userId === run.execution?.assigneeUserId &&
+      saga.proof.deviceSignature.deviceId === run.execution?.assigneeDeviceId &&
+      deviceSignature.purpose === 'worker-delivery-review' && deviceSignature.factRevision === bundle.resultRevision &&
+      saga.proof.confirmedInputDigest === workerDeliveryConfirmationDigest(target) &&
+      deviceSignature.canonicalPayloadDigest === workerDeliveryHumanActionFactDigest(target, action)
+  }
+
+  private assertUnregisteredDeliveryAttempt(run: CollaborationTaskRun, facts: TaskDeliveryFacts): void {
+    const candidate = run.frozenCandidate
+    const saga = run.deliverySaga
+    const fail = () => { throw new Error('云端已登记交付或执行阶段已改变，不能撤回。') }
+    if (!candidate || !saga || !this.matchesDeliveryAttempt(run, candidate, saga) ||
+        requireExecution(run).state !== 'running' || facts.taskId !== run.offer.taskId) return fail()
+    if (!facts.candidate && !facts.manifest) return
+    // The latest Task facts retain r1 while a revision attempt r2 is still unregistered.
+    // Accept only the exact locally sealed history targeted by the Cloud revision request.
+    const history = run.deliveryHistory.find(({ manifest }) => manifest.deliveryManifestId === facts.manifest?.deliveryManifestId)
+    const previous = facts.candidate
+    const manifest = facts.manifest
+    const revision = facts.revisionRequest
+    if (!history || !previous || !manifest || !revision || previous.status !== 'sealed' ||
+        previous.projectId !== run.offer.projectId || previous.taskId !== run.offer.taskId ||
+        previous.executionId !== run.offer.executionId || manifest.projectId !== run.offer.projectId ||
+        manifest.taskId !== run.offer.taskId || manifest.executionId !== run.offer.executionId ||
+        previous.resultRevision >= candidate.bundle.resultRevision || manifest.resultRevision !== previous.resultRevision ||
+        previous.candidateId !== history.candidate.candidateId || previous.candidateId === candidate.candidateId ||
+        previous.resultRevision !== history.candidate.bundle.resultRevision ||
+        previous.contractRevision !== history.candidate.bundle.contractRevision ||
+        previous.workerUserId !== requireExecution(run).assigneeUserId ||
+        previous.bundleDigest !== history.candidate.bundleDigest || manifest.bundleDigest !== previous.bundleDigest ||
+        previous.bundleObjectId !== manifest.bundleObjectId ||
+        JSON.stringify(previous.outputObjectIds) !== JSON.stringify(manifest.outputObjectIds) ||
+        manifest.operationId === saga.operationId || JSON.stringify(manifest) !== JSON.stringify(history.manifest) ||
+        revision.projectId !== run.offer.projectId || revision.taskId !== run.offer.taskId ||
+        revision.executionId !== run.offer.executionId || revision.deliveryManifestId !== manifest.deliveryManifestId ||
+        revision.executionRevision > requireExecution(run).revision) fail()
+  }
+
+  private canCancelFailedSubmission(run: CollaborationTaskRun): boolean {
+    const saga = run.deliverySaga
+    if (this.delivering.has(run.offer.executionId) || this.returningExecutions.has(run.offer.executionId) ||
+        run.authorityFencedAt || run.state !== 'submitting' || !run.deliveryDraft || !run.frozenCandidate ||
+        !saga || saga.manifest) return false
+    return this.cancellableDeliveryRows(run, this.options.store.snapshot().outbox)
+  }
+
+  /** Cancels only an unregistered, parked upload; original bytes, proof and outbox remain evidence. */
+  async cancelFailedWorkerDelivery(raw: WorkerDeliveryCancelInput): Promise<WorkerDeliveryView> {
+    const input = workerDeliveryCancelInputSchema.parse(raw)
+    let run = this.requireRun(input.executionId)
+    if (run.offer.projectId !== input.projectId || run.offer.taskId !== input.taskId) throw new Error('交付与当前任务执行不匹配。')
+    if (run.cancelledDeliveryAttempts.some(entry => entry.saga.operationId === input.operationId)) return this.workerDeliveryView(input)
+    if (!this.canCancelFailedSubmission(run) || run.deliverySaga?.operationId !== input.operationId) throw new Error('仅可撤回已确定失败且云端尚未登记的上传限制或内容校验失败提交。')
+    this.delivering.set(input.executionId, 'preparing')
+    try {
+      run = await this.restoreDeliverySaga(run, new AbortController().signal)
+      const facts = await this.readTaskDeliveryFacts(input.taskId)
+      this.assertUnregisteredDeliveryAttempt(run, facts)
+      if (run.runtimeId && run.threadId) await this.options.agentExecution.releaseSubmission?.({
+        runtimeId: run.runtimeId, threadId: run.threadId, operationId: input.operationId,
+        targetDigest: run.frozenCandidate!.bundleDigest
+      })
+      await this.options.store.transact(state => {
+        const current = requireDraftRun(state.taskRuns, input.executionId)
+        const saga = current.deliverySaga
+        const candidate = current.frozenCandidate
+        if (current.state !== 'submitting' || current.authorityFencedAt || !saga || saga.operationId !== input.operationId ||
+            saga.manifest || !candidate || !current.deliveryDraft ||
+            requireExecution(current).state !== 'running' || state.projectUnavailableFences.some(f => f.projectId === input.projectId) ||
+            !this.cancellableDeliveryRows(current, state.outbox)) {
+          throw new Error('提交状态已变化，请刷新后重试。')
+        }
+        const now = this.now().toISOString()
+        current.cancelledDeliveryAttempts.push({ candidate: structuredClone(candidate), saga: structuredClone(saga), cancelledAt: now })
+        current.deliveryDraft = { ...current.deliveryDraft, revision: current.deliveryDraft.revision + 1,
+          resultRevision: Math.max(current.deliveryDraft.resultRevision, candidate.bundle.resultRevision) + 1,
+          basedOnResultRevision: candidate.bundle.resultRevision, changed: true, updatedAt: now }
+        current.frozenCandidate = null
+        current.deliverySaga = null
+        current.state = 'waiting-result-confirm'
+        current.error = null
+        current.completedAt = null
+        current.updatedAt = now
+      })
+      return this.workerDeliveryView(input)
+    } finally { this.delivering.delete(input.executionId) }
+  }
+
   /**
    * The one canonical Worker result path: barrier, exact human proof, then the
    * durable stage -> candidate -> review -> seal saga keyed by the human action.
@@ -2379,7 +3007,7 @@ export class CollaborationTaskAdapter {
       if (!run.frozenCandidate || workerDeliveryConfirmationDigest(target) !== workerDeliveryConfirmationDigest(
         confirmationTargetForBundle(run.frozenCandidate.bundle, run.frozenCandidate.bundleDigest))) throw new Error('交付已经封存为快照，不能更改本次提交内容。')
       if (run.deliverySaga.state === 'sealed') return this.workerDeliveryView(target)
-      await this.continueDeliverySaga(run, this.deliveryDecision(run))
+      await this.continueDeliverySaga(run, this.deliveryDecision(run), true)
       return this.workerDeliveryView(target)
     }
     this.assertDraftEditable(run, target)
@@ -2388,9 +3016,17 @@ export class CollaborationTaskAdapter {
     if (!frozenDeliveryBundleSchema.shape.summary.safeParse(summary).success) throw new Error('结果说明不符合交付要求，请控制在 8000 字以内并移除私有会话信息。')
     if (target.decision !== 'approved') throw new Error('提交后内容不能更改，请使用任务的返修流程。')
     if (run.state === 'needs-human') throw new Error('请先回答任务需要补充的问题，再提交交付。')
+    if (run.executionMode === 'unselected' || run.executionMode === 'manual' && requireExecution(run).state === 'accepted') {
+      run = await this.updateRun(run.offer.executionId, { executionMode: 'manual' })
+      const preflight = await this.refreshPreflight(run, true, new AbortController().signal)
+      if (preflight.outcome !== 'allowed') throw new Error('当前任务执行权限不可用，请刷新后重试。')
+      run = this.requireRun(run.offer.executionId)
+      await this.acceptAndStart(run)
+      run = this.requireRun(run.offer.executionId)
+    }
     if (requireExecution(run).state !== 'running') throw new Error('任务尚未开始执行，暂时不能提交。')
     if (this.activeAgentTurns.has(target.executionId)) throw new Error('AI 正在修改，请等待完成后再提交。')
-    const admission = await this.readSessionAdmission(requireRunSession(run))
+    const admission = await this.deliveryAdmission(run)
     if (!admission || admission.recovery !== 'ready') throw new Error('会话状态尚未恢复，暂时不能提交。')
     if (admission.receipts.some((receipt) => !(receipt.delivery === 'abandoned' ||
         receipt.delivery === 'delivered' && ['completed', 'failed', 'cancelled'].includes(receipt.execution)))) {
@@ -2417,10 +3053,11 @@ export class CollaborationTaskAdapter {
 
   private async continueDeliverySaga(
     run: CollaborationTaskRun,
-    decision: WorkerDeliveryConfirmationTarget['decision']
+    decision: WorkerDeliveryConfirmationTarget['decision'],
+    explicitRetry = false
   ): Promise<void> {
     try {
-      await this.runDeliverySaga(run, decision)
+      await this.runDeliverySaga(run, decision, explicitRetry)
     } catch (error) {
       const safe = safeError(error, this.options.sanitizeText)
       try {
@@ -2506,7 +3143,8 @@ export class CollaborationTaskAdapter {
   /** Drives the durable saga; every step is idempotent under the human-action operation. */
   private async runDeliverySaga(
     initial: CollaborationTaskRun,
-    decision: WorkerDeliveryConfirmationTarget['decision']
+    decision: WorkerDeliveryConfirmationTarget['decision'],
+    explicitRetry: boolean
   ): Promise<void> {
     let run = initial
     const saga = run.deliverySaga
@@ -2530,7 +3168,7 @@ export class CollaborationTaskAdapter {
         throw new Error('Cloud Delivery facts conflict with the exact frozen candidate.')
       }
     }
-    if (!cloudCandidate || cloudCandidate.status === 'private') {
+    if ((!cloudCandidate || cloudCandidate.status === 'private') && (run.runtimeId || run.threadId)) {
       await this.options.agentExecution.acquireSubmission?.({
         ...requireRunSession(run), operationId,
         expectedRevision: candidate.admissionRevision, targetDigest: candidate.bundleDigest
@@ -2547,7 +3185,7 @@ export class CollaborationTaskAdapter {
           projectId: run.offer.projectId, taskId: run.offer.taskId, executionId: run.offer.executionId,
           mediaType: file.mediaType, sha256: file.sha256, byteCount: file.byteCount,
           idempotencyKey: `idem_object.stage.${operationId}.${index === 0 ? 'bundle' : `output.${index - 1}`}`
-        }, file.path)
+        }, file.path, { explicitRetry })
         objectIds.push(staged.object.objectId)
       }
       run = await this.updateSagaState(run.offer.executionId, 'candidate')
@@ -2582,8 +3220,8 @@ export class CollaborationTaskAdapter {
     }
     this.assertDeliveryActive(run.offer.executionId, operationId)
     if (decision === 'returned') {
-      await this.options.agentExecution.releaseSubmission?.({
-        runtimeId: run.runtimeId!,
+      if (run.runtimeId && run.threadId) await this.options.agentExecution.releaseSubmission?.({
+        runtimeId: run.runtimeId,
         threadId: run.threadId!,
         operationId,
         targetDigest: candidate.bundleDigest
@@ -2615,8 +3253,8 @@ export class CollaborationTaskAdapter {
         JSON.stringify(manifest.outputs?.map(({ objectId: _objectId, ...descriptor }) => descriptor)) !== JSON.stringify(candidate.bundle.outputs)) {
       throw new Error('Cloud did not seal the exact reviewed Delivery candidate.')
     }
-    await this.options.agentExecution.releaseSubmission?.({
-      runtimeId: run.runtimeId!,
+    if (run.runtimeId && run.threadId) await this.options.agentExecution.releaseSubmission?.({
+      runtimeId: run.runtimeId,
       threadId: run.threadId!,
       operationId,
       targetDigest: candidate.bundleDigest
@@ -2732,6 +3370,7 @@ export class CollaborationTaskAdapter {
       },
       requiredAssurance,
       prompt: question,
+      interaction: { kind: 'clarification' as const },
       confirmableAction: null,
       expiresAt
     }
@@ -2900,9 +3539,9 @@ export class CollaborationTaskAdapter {
       agent.agentId === run.offer.recipientAgentId
     ))
     if (!localAgent || localAgent.lifecycleStatus !== 'active') reasons.push('agent_inactive')
-    const runtime = await this.options.agentExecution.runtimeReadiness?.().catch(() => null)
-    if (runtime?.state !== 'ready') reasons.push('runtime_not_ready')
-    else if (!capabilityRequirementsSatisfied(
+    const runtime = run.executionMode === 'manual' ? null : await this.options.agentExecution.runtimeReadiness?.().catch(() => null)
+    if (run.executionMode !== 'manual' && runtime?.state !== 'ready') reasons.push('runtime_not_ready')
+    else if (runtime?.state === 'ready' && !capabilityRequirementsSatisfied(
       task.requiredCapabilityTags,
       runtime.capabilityTags
     )) {
@@ -3149,9 +3788,19 @@ export class CollaborationTaskAdapter {
           update.state === 'completed' || update.state === 'fenced'
         )) &&
         // An Owner Delivery revision request reopens the same sealed Execution.
-        !(run.state === 'completed' && update.state === 'running')
+        !(run.state === 'completed' && update.state === 'waiting-result-confirm' && update.executionMode === 'unselected')
       ) return structuredClone(run)
       Object.assign(run, update, { updatedAt: this.now().toISOString() })
+      if (TERMINAL_RUN_STATES.has(run.state) || run.state === 'needs-human' || run.executionMode === 'manual') {
+        for (const followup of run.followups) {
+          if (['waiting', 'dispatching'].includes(followup.state)) {
+            followup.state = 'cancelled'
+            followup.reason = '任务已停止、转为人工处理或等待本人回答；旧复查不再执行。'
+          }
+        }
+        this.followupWakeups.get(executionId)?.()
+        this.followupWakeups.delete(executionId)
+      }
       if (run.task) {
         draft.tasks = [...draft.tasks.filter((task) => task.taskId !== run.task!.taskId), run.task]
       }
@@ -3271,7 +3920,7 @@ function computedDraftTarget(run: CollaborationTaskRun): WorkerDeliveryConfirmat
 }
 
 function nextDeliveryRevision(run: CollaborationTaskRun): number {
-  return Math.max(0, ...run.deliveryHistory.map(({ candidate }) => candidate.bundle.resultRevision),
+  return Math.max(0, ...run.cancelledDeliveryAttempts.map(({ candidate }) => candidate.bundle.resultRevision), ...run.deliveryHistory.map(({ candidate }) => candidate.bundle.resultRevision),
     run.deliverySaga?.manifest?.resultRevision ?? 0) + 1
 }
 
@@ -3286,6 +3935,7 @@ function newDeliveryDraft(run: CollaborationTaskRun, now: string): WorkerDeliver
 function deliveryMaterialContext(run: CollaborationTaskRun) {
   return { workspaceRoot: run.workspaceRoot, threadId: run.threadId,
     selectedMaterials: run.deliveryDraft?.selectedMaterials ?? [],
+    declaredMaterial: run.deliveryDraft?.declaredMaterial,
     declared: requireExecution(run).fileIntent?.output ?? null }
 }
 
@@ -3300,11 +3950,13 @@ function workerDeliveryViewForRun(
     else if (saga.state === 'returned') state = 'returned'
     else if (saga.error || saga.state === 'blocked' || saga.state === 'unknown') state = 'blocked'
     else state = 'submitting'
-  } else if (run.state === 'waiting-result-confirm' && run.deliveryDraft) state = 'waiting_confirmation'
+  } else if ((run.state === 'waiting-result-confirm' || run.executionMode === 'unselected' || run.executionMode === 'manual') && run.deliveryDraft) state = 'waiting_confirmation'
   else if (TERMINAL_RUN_STATES.has(run.state)) state = 'blocked'
+  else if (workerFollowupView(run.followups.at(-1), run.agentJournal.at(-1))?.state === 'cancelled' && run.deliveryDraft) state = 'waiting_confirmation'
   else state = 'executing'
   const candidate = run.frozenCandidate
   return {
+    declaredOutput: requireExecution(run).fileIntent?.output ?? null,
     projectId: run.offer.projectId,
     taskId: run.offer.taskId,
     executionId: run.offer.executionId,
@@ -3312,6 +3964,7 @@ function workerDeliveryViewForRun(
     draft: run.deliveryDraft,
     confirmationTarget: run.deliverySaga && candidate ? confirmationTargetForBundle(candidate.bundle, candidate.bundleDigest) : computedDraftTarget(run),
     history: run.deliveryHistory.map(({ candidate: snapshot, manifest }) => ({
+      ...(snapshot.sourceChat ? { sourceChat: snapshot.sourceChat } : {}),
       bundle: snapshot.bundle, sourceTurnId: snapshot.sourceTurnId, frozenAt: snapshot.frozenAt, manifest,
       deliveryManifestId: manifest.deliveryManifestId, submittedByUserId: requireExecution(run).assigneeUserId,
       submittedAt: manifest.sealedAt
@@ -3327,6 +3980,7 @@ function workerDeliveryViewForRun(
             bundleDigest: candidate.bundleDigest,
             decision: 'approved'
           },
+          ...(candidate.sourceChat ? { sourceChat: candidate.sourceChat } : {}),
           bundle: candidate.bundle,
           sourceTurnId: candidate.sourceTurnId,
           frozenAt: candidate.frozenAt,

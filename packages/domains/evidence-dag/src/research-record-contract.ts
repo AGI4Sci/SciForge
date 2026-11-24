@@ -1,7 +1,32 @@
 import { z } from 'zod'
 import { artifactVersionRefV1Schema } from '@sciforge/domain-artifact-versions/contract'
+import { principalSnapshotSchema } from '@sciforge/domain-sdk/principal'
 
 const id = z.string().min(1).max(512)
+export const researchResultBindingSchema = z.object({
+  id, nodeId: id, title: z.string().trim().min(1).max(300), result: artifactVersionRefV1Schema,
+  inputs: z.array(artifactVersionRefV1Schema).min(1).max(16),
+  presentations: z.array(z.object({ id, artifact: artifactVersionRefV1Schema,
+    location: z.string().trim().min(1).max(1000), label: z.string().trim().min(1).max(300) }).strict()).max(32)
+}).strict().superRefine((binding, context) => {
+  if (new Set(binding.presentations.map(item => item.id)).size !== binding.presentations.length)
+    context.addIssue({ code: 'custom', path: ['presentations'], message: 'Presentation IDs must be unique.' })
+})
+const resultImpactStatus = z.enum(['requires-review', 'no-recorded-impact', 'unknown'])
+export const researchHumanReviewReceiptSchema = z.object({
+  requestId: id, binding: researchResultBindingSchema,
+  decision: z.enum(['approved', 'changes-requested', 'unable-to-judge', 'skipped']),
+  opinion: z.string().trim().max(4000), principal: principalSnapshotSchema,
+  at: z.string(), action: z.object({ actionId: id, interaction: z.enum(['explicit_click', 'explicit_keyboard_action', 'session_message']),
+    occurredAt: z.string(), confirmedInputDigest: z.string(), sourceMessageDigest: z.string().nullable() }).strict()
+}).strict()
+export const researchResultImpactSchema = researchResultBindingSchema.safeExtend({
+  status: resultImpactStatus, reasons: z.array(z.string().max(1000)).max(64),
+  humanReview: z.object({ latest: researchHumanReviewReceiptSchema.nullable(),
+    applicability: z.enum(['none', 'current', 'stale', 'unknown']), total: z.number().int(),
+    history: z.array(researchHumanReviewReceiptSchema).max(10), limited: z.boolean() }).strict().optional(),
+  presentations: z.array(researchResultBindingSchema.shape.presentations.element.extend({ status: resultImpactStatus })).max(32)
+})
 export const researchRecordScopeSchema = z.object({
   runtimeId: id, threadId: id, workspaceRoot: z.string().min(1).max(4096)
 }).strict()
@@ -105,6 +130,7 @@ export const researchRecordViewInputSchema = researchRecordScopeSchema.extend({
   includeDiscussionContext: z.boolean().optional()
 })
 export const researchRecordViewOutputSchema = z.object({
+  humanReview: z.object({ enabled: z.boolean() }).strict().optional(),
   sourceRetention: researchSourceRetentionSchema.optional(),
   sourceExport: researchSourceExportSchema.optional(),
   revision: z.number().int(), node: researchRecordNodeSchema.nullable(),
@@ -120,6 +146,7 @@ export const researchRecordViewOutputSchema = z.object({
   raw: z.unknown().optional(), sourceStatus: z.enum(['current', 'changed', 'unavailable']).optional(),
   auditReferences: z.object({ refs: z.array(artifactVersionRefV1Schema).max(8), limited: z.boolean() }).optional(),
   synthesisImpact: z.array(z.object({ id, title: z.string().max(300), status: z.enum(['requires-review', 'no-recorded-impact', 'unknown']), sourceIds: z.array(id).max(48) }).strict()).max(80).optional(),
+  resultImpact: z.array(researchResultImpactSchema).max(64).optional(),
   discussionContext: z.object({
     evidence: z.array(z.object({ id, ref: researchRecordSourceSchema, excerpt: z.string().max(3000), truncated: z.boolean(), origin: z.enum(['retained', 'live']).optional(), liveStatus: z.enum(['current', 'changed', 'unavailable']).optional() })).max(48),
     summaries: z.array(z.object({ id, title: z.string(), summary: z.string().max(500) })).max(12),
@@ -138,6 +165,8 @@ export const researchRecordViewOutputSchema = z.object({
 export const researchRecordEditInputSchema = researchRecordScopeSchema.extend({
   requestId: id, expectedRevision: z.number().int(),
   change: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('human-review-settings'), enabled: z.boolean() }).strict(),
+    z.object({ kind: z.literal('result-binding'), binding: researchResultBindingSchema }).strict(),
     z.object({ kind: z.literal('phase'), nodeId: id.optional(), parentId: id, title: z.string().trim().min(1).max(512), summary: z.string().max(8000).default('') }).strict(),
     z.object({ kind: z.literal('move'), nodeId: id, parentId: id }).strict(),
     z.object({ kind: z.literal('fields'), nodeId: id, title: z.string().trim().min(1).max(512).optional(),
@@ -148,6 +177,14 @@ export const researchRecordEditInputSchema = researchRecordScopeSchema.extend({
 })
 export type ResearchRecordView = z.infer<typeof researchRecordViewOutputSchema>
 export type ResearchRecordEdit = z.infer<typeof researchRecordEditInputSchema>
+export const researchHumanReviewInputSchema = z.object({ target: researchRecordScopeSchema.extend({
+  requestId: id, expectedRevision: z.number().int(), binding: researchResultBindingSchema,
+  decision: researchHumanReviewReceiptSchema.shape.decision, opinion: z.string().trim().max(4000)
+}).strict().superRefine((value, context) => {
+  if (value.decision !== 'skipped' && !value.opinion) context.addIssue({ code: 'custom', path: ['opinion'], message: '请填写复核意见。' })
+}) }).strict()
+export const researchHumanReviewContract = { actionId: 'evidence-dag.record.human-review', effect: 'compute' as const,
+  inputSchema: researchHumanReviewInputSchema, outputSchema: z.object({ revision: z.number().int() }).strict() }
 
 export const researchRecordReviewInputSchema = researchRecordScopeSchema.extend({
   nodeId: id.default('root'), mode: z.enum(['changes', 'attention', 'history']).default('changes'),

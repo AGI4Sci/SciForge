@@ -68,7 +68,10 @@ function domainMainNativeAddonStaging(): Plugin {
       await stageDomainMainNativeAddons({
         repositoryRoot,
         mainOutputDirectory: resolve(repositoryRoot, outputOptions.dir),
-        platform: process.platform
+        platform: process.platform,
+        onSkipPackageDirectory: (packageDirectory) => {
+          this.warn(`Archived license-only domain directory: packages/domains/${packageDirectory}`)
+        }
       })
     }
   }

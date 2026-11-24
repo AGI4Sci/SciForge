@@ -188,13 +188,6 @@ export function probeCodexRuntimeCandidate(
   return probe('codex', command)
 }
 
-export function probeDshRuntimeCandidate(
-  probe: (runtimeId?: AgentRuntimeId, command?: string) => Promise<AgentRuntimeDiscoveryResult>,
-  command: string
-): Promise<AgentRuntimeDiscoveryResult> {
-  return probe('dsh', command)
-}
-
 async function runLatestRuntimeProbe<T>(
   probe: (runtimeId?: AgentRuntimeId, command?: string) => Promise<T>,
   runtimeId: AgentRuntimeId,
@@ -219,26 +212,6 @@ export function runLatestCodexRuntimeProbe<T>(
   sequence: { current: number }
 ): Promise<{ status: 'current'; result: T } | { status: 'stale' }> {
   return runLatestRuntimeProbe(probe, 'codex', command, sequence)
-}
-
-export function runLatestDshRuntimeProbe<T>(
-  probe: (runtimeId?: AgentRuntimeId, command?: string) => Promise<T>,
-  command: string,
-  sequence: { current: number }
-): Promise<{ status: 'current'; result: T } | { status: 'stale' }> {
-  return runLatestRuntimeProbe(probe, 'dsh', command, sequence)
-}
-
-export async function chooseDshRuntimeExecutable(
-  pickFile: () => Promise<{ canceled: boolean; path: string | null }>,
-  update: (patch: DshRuntimeSettingsPatchV1) => void,
-  normalize: (path: string) => string = (path) => path
-): Promise<string | null> {
-  const selection = await pickFile()
-  if (selection.canceled || !selection.path) return null
-  const selectedPath = normalize(selection.path)
-  update({ executablePath: selectedPath })
-  return selectedPath
 }
 
 export function selectedCodexCatalogModel(
@@ -329,7 +302,6 @@ export function AgentsSettingsSection({
   const codexDiscoveryRequestSeq = useRef(0)
   const runtimeProvider = getProvider()
   const codexRecoveryOptions = runtimeProvider.getRecoveryOptions('codex')
-  const dshRecoveryOptions = runtimeProvider.getRecoveryOptions('dsh')
   const updateCodexRuntime = (patch: CodexRuntimeSettingsPatchV1): void => {
     if (typeof updateCodex === 'function') {
       updateCodex(patch)
@@ -391,12 +363,6 @@ export function AgentsSettingsSection({
     }
     update(claudeRuntimeSettingsPatch(patch))
   }
-  const injectedDshDiscovery = ctx.dshDiscovery as AgentRuntimeDiscoveryResult | undefined
-  const [dshDiscovery, setDshDiscovery] = useState<AgentRuntimeDiscoveryResult | null>(
-    injectedDshDiscovery ?? null
-  )
-  const [dshDiscoveryChecking, setDshDiscoveryChecking] = useState(false)
-  const dshDiscoveryRequestSeq = useRef(0)
   const updateDshRuntime = (patch: DshRuntimeSettingsPatchV1): void => {
     if (typeof updateDsh === 'function') {
       updateDsh(patch)
@@ -404,46 +370,10 @@ export function AgentsSettingsSection({
     }
     update(dshRuntimeSettingsPatch(patch))
   }
-  const detectDsh = useCallback(async (): Promise<void> => {
-    if (typeof window === 'undefined') return
-    setDshDiscoveryChecking(true)
-    try {
-      const outcome = await runLatestDshRuntimeProbe(
-        (runtimeId, command) => runtimeProvider.probe(runtimeId, command),
-        dsh.executablePath,
-        dshDiscoveryRequestSeq
-      )
-      if (outcome.status === 'stale') return
-      setDshDiscovery(outcome.result)
-      setDshDiscoveryChecking(false)
-    } catch {
-      setDshDiscovery({
-        runtimeId: 'dsh',
-        available: false,
-        executablePath: null,
-        source: null,
-        version: null,
-        protocol: null,
-        failure: {
-          code: 'runtime_probe_failed'
-        }
-      })
-      setDshDiscoveryChecking(false)
-    }
-  }, [dsh.executablePath, runtimeProvider])
-  useEffect(() => {
-    if (injectedDshDiscovery) {
-      dshDiscoveryRequestSeq.current += 1
-      setDshDiscovery(injectedDshDiscovery)
-      setDshDiscoveryChecking(false)
-      return
-    }
-    void detectDsh()
-  }, [detectDsh, injectedDshDiscovery])
   const textInputClass =
-    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
   const textareaClass =
-    'min-h-24 w-full min-w-0 resize-y rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[12.5px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    'min-h-24 w-full min-w-0 resize-y rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-ds-sm font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
   const catalogModels = codexModelCatalog?.models ?? []
   const selectedCatalogModel = selectedCodexCatalogModel(codex.model, codexModelCatalog)
   const reasoningOptions = discoveredReasoningEfforts(catalogModels)
@@ -473,12 +403,71 @@ export function AgentsSettingsSection({
       <div ref={agentsSectionRef}>
         <SettingsCard title={t('agents')}>
           <RuntimeSettingsCard runtimeId="dsh"
-            command={form ? getDshRuntimeSettings(form).command : 'dsh'}
+            command={dsh.command}
             selected={form ? getActiveAgentRuntime(form) === 'dsh' : false}
             onSelect={() => update({ activeAgentRuntime: 'dsh' })}
-            onCommand={(command) => update({ agents: { dsh: { command } } })}
+            onCommand={(command) => updateDshRuntime({ command })}
+            discovery={ctx.dshDiscovery}
             t={t} tCommon={tCommon}
-          />
+            details={<p>{t('dshManagedConfigDesc')}</p>}
+          >
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
+                {t('dshSelectedModel')}
+                <select
+                  className={selectControlClass}
+                  value={dsh.selectedModel}
+                  onChange={(event) =>
+                    updateDshRuntime({ selectedModel: event.target.value })
+                  }
+                >
+                  <option value="">{t('dshModelAuto')}</option>
+                  {dsh.selectedModel && !DSH_MODEL_OPTIONS.some((id) => id === dsh.selectedModel) ? (
+                    <option value={dsh.selectedModel} disabled>{dsh.selectedModel}</option>
+                  ) : null}
+                  {DSH_MODEL_OPTIONS.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
+                {t('dshReasoningEffort')}
+                <select
+                  className={selectControlClass}
+                  value={dsh.reasoningEffort}
+                  onChange={(event) =>
+                    updateDshRuntime({ reasoningEffort: event.target.value })
+                  }
+                >
+                  <option value="">{t('dshReasoningAuto')}</option>
+                  {dsh.reasoningEffort && !DSH_REASONING_EFFORT_OPTIONS.some((id) => id === dsh.reasoningEffort) ? (
+                    <option value={dsh.reasoningEffort} disabled>{dsh.reasoningEffort}</option>
+                  ) : null}
+                  {DSH_REASONING_EFFORT_OPTIONS.map((effort) => (
+                    <option key={effort} value={effort}>{effort}</option>
+                  ))}
+                </select>
+              </label>
+              <RuntimePermissionFields
+                t={t}
+                selectControlClass={selectControlClass}
+                approvalPolicy="on-request"
+                sandboxMode={dsh.sandboxMode}
+                onChange={(patch) => patch.sandboxMode && updateDshRuntime({ sandboxMode: patch.sandboxMode === 'external-sandbox' ? 'read-only' : patch.sandboxMode })}
+                sandboxOnly
+              />
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-ds-sm font-semibold text-ds-muted">
+                <span className="grid gap-0.5">
+                  {t('dshCommandExecution')}
+                  <span className="text-ds-xs font-normal">{t('dshCommandExecutionDesc')}</span>
+                </span>
+                <Toggle
+                  checked={dsh.commandExecution}
+                  onChange={(commandExecution) => updateDshRuntime({ commandExecution })}
+                />
+              </label>
+            </div>
+          </RuntimeSettingsCard>
           <RuntimeSettingsCard runtimeId="pi"
             command={form ? getPiRuntimeSettings(form).command : 'pi'}
             selected={form ? getActiveAgentRuntime(form) === 'pi' : false}
@@ -493,7 +482,7 @@ export function AgentsSettingsSection({
               <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-main/35 p-3">
                 <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-card/70 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className={`inline-flex rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${
+                    <span className={`inline-flex rounded-lg border px-2.5 py-1 text-ds-sm font-semibold ${
                       codexDiscovery?.available
                         ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
                         : 'border-amber-400/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
@@ -507,7 +496,7 @@ export function AgentsSettingsSection({
                         type="button"
                         disabled={codexDiscoveryChecking}
                         onClick={() => void detectCodex()}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-55"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-sm font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-55"
                       >
                         <RefreshCw className={`h-3.5 w-3.5 ${codexDiscoveryChecking ? 'animate-spin' : ''}`} />
                         {t('codexDiscoveryRedetect')}
@@ -525,7 +514,7 @@ export function AgentsSettingsSection({
                           updateCodexRuntime,
                           (path) => runtimeProvider.normalizeExecutablePath('codex', path)
                         )}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-sm font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
                       >
                         <FolderOpen className="h-3.5 w-3.5" />
                         {t('codexDiscoveryChoose')}
@@ -534,7 +523,7 @@ export function AgentsSettingsSection({
                         <button
                           type="button"
                           onClick={() => void window.sciforge.openExternal(codexRecoveryOptions.installGuideUrl!)}
-                          className="rounded-xl px-3 py-2 text-[12.5px] font-medium text-accent transition hover:bg-ds-hover"
+                          className="rounded-xl px-3 py-2 text-ds-sm font-medium text-accent transition hover:bg-ds-hover"
                         >
                           {t('codexDiscoveryInstall')}
                         </button>
@@ -542,7 +531,7 @@ export function AgentsSettingsSection({
                     </div>
                   </div>
                   <details
-                    className="rounded-lg border border-ds-border-muted bg-ds-main/35 px-3 py-2 text-[12px] text-ds-muted"
+                    className="rounded-lg border border-ds-border-muted bg-ds-main/35 px-3 py-2 text-ds-sm text-ds-muted"
                     data-runtime-details="codex"
                   >
                     <summary className="cursor-pointer font-medium text-ds-ink">{t('runtimeDetails')}</summary>
@@ -562,7 +551,7 @@ export function AgentsSettingsSection({
                               : t('codexDiscoveryUnsupported')
                           }</span></div>
                           {codexDiscovery.executablePath ? (
-                            <code className="break-all text-[11px] text-ds-faint sm:col-span-2">{codexDiscovery.executablePath}</code>
+                            <code className="break-all text-ds-xs text-ds-faint sm:col-span-2">{codexDiscovery.executablePath}</code>
                           ) : null}
                           {codexDiscovery.failure ? (
                             <div className="text-amber-800 dark:text-amber-200 sm:col-span-2">{
@@ -575,7 +564,7 @@ export function AgentsSettingsSection({
                   </details>
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                  <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                     {t('codexCommand')}
                     <input
                       className={textInputClass}
@@ -586,7 +575,7 @@ export function AgentsSettingsSection({
                       }
                     />
                   </label>
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                  <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                     {t('codexDefaultModel')}
                     <select
                       className={selectControlClass}
@@ -614,7 +603,7 @@ export function AgentsSettingsSection({
                       ))}
                     </select>
                   </label>
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                  <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                     {t('codexDefaultReasoningEffort')}
                     <select
                       className={selectControlClass}
@@ -639,7 +628,7 @@ export function AgentsSettingsSection({
                       <span className="font-normal text-amber-700 dark:text-amber-200">{t('codexReasoningUnsupported')}</span>
                     ) : null}
                   </label>
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                  <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                     {t('codexDefaultServiceTier')}
                     <select
                       className={selectControlClass}
@@ -671,9 +660,9 @@ export function AgentsSettingsSection({
                   />
                 </div>
                 {!codexModelCatalog?.available ? (
-                  <div className="text-[12px] text-ds-faint">{t('codexModelCatalogUnavailable')}</div>
+                  <div className="text-ds-sm text-ds-faint">{t('codexModelCatalogUnavailable')}</div>
                 ) : null}
-                <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                   {t('codexExtraArgs')}
                   <textarea
                     className={textareaClass}
@@ -695,7 +684,7 @@ export function AgentsSettingsSection({
             control={
               <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-main/35 p-3">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                  <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                     {t('claudeCommand')}
                     <input
                       className={textInputClass}
@@ -706,7 +695,7 @@ export function AgentsSettingsSection({
                       }
                     />
                   </label>
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                  <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                     {t('claudeModel')}
                     <input
                       className={textInputClass}
@@ -726,7 +715,7 @@ export function AgentsSettingsSection({
                     onChange={(patch) => updateClaudeRuntime(patch)}
                   />
                 </div>
-                <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+                <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
                   {t('claudeExtraArgs')}
                   <textarea
                     className={textareaClass}
@@ -740,169 +729,12 @@ export function AgentsSettingsSection({
                   />
                 </label>
                 <details
-                  className="rounded-lg border border-ds-border-muted bg-ds-card/55 px-3 py-2 text-[12px] text-ds-muted"
+                  className="rounded-lg border border-ds-border-muted bg-ds-card/55 px-3 py-2 text-ds-sm text-ds-muted"
                   data-runtime-details="claude"
                 >
                   <summary className="cursor-pointer font-medium text-ds-ink">{t('runtimeDetails')}</summary>
                   <p className="mt-2">{t('claudeManagedConfigDesc')}</p>
                 </details>
-              </div>
-            }
-          />
-          <SettingRow
-            title={t('dshRuntime')}
-            wideControl
-            control={
-              <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-main/35 p-3">
-                <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-card/70 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className={`inline-flex rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${
-                      dshDiscovery?.available
-                        ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-                        : 'border-amber-400/30 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-                    }`}>
-                      {dshDiscovery?.available
-                        ? t('dshDiscoveryAvailable')
-                        : t('dshDiscoveryUnavailable')}
-                    </span>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={dshDiscoveryChecking}
-                        onClick={() => void detectDsh()}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-55"
-                      >
-                        <RefreshCw className={`h-3.5 w-3.5 ${dshDiscoveryChecking ? 'animate-spin' : ''}`} />
-                        {t('dshDiscoveryRedetect')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void chooseDshRuntimeExecutable(
-                          () => window.sciforge.pickFile({
-                            title: t('dshDiscoveryChoose'),
-                            filters: [
-                              { name: t('dshDiscoveryApplications'), extensions: ['app'] },
-                              { name: t('dshDiscoveryAllFiles'), extensions: ['*'] }
-                            ]
-                          }),
-                          updateDshRuntime,
-                          (path) => runtimeProvider.normalizeExecutablePath('dsh', path)
-                        )}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                      >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        {t('dshDiscoveryChoose')}
-                      </button>
-                      {dshRecoveryOptions.installGuideUrl ? (
-                        <button
-                          type="button"
-                          onClick={() => void window.sciforge.openExternal(dshRecoveryOptions.installGuideUrl!)}
-                          className="rounded-xl px-3 py-2 text-[12.5px] font-medium text-accent transition hover:bg-ds-hover"
-                        >
-                          {t('dshDiscoveryInstall')}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                  <details
-                    className="rounded-lg border border-ds-border-muted bg-ds-main/35 px-3 py-2 text-[12px] text-ds-muted"
-                    data-runtime-details="dsh"
-                  >
-                    <summary className="cursor-pointer font-medium text-ds-ink">{t('runtimeDetails')}</summary>
-                    <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-                      <p className="sm:col-span-2">{t('dshManagedConfigDesc')}</p>
-                      {dshDiscovery ? (
-                        <>
-                          <div>{t('dshDiscoveryVersion')}: <span className="font-mono text-ds-ink">{dshDiscovery.version ?? t('dshDiscoveryUnknown')}</span></div>
-                          <div>{t('runtimeDiscoveryDetectedFrom')}: <span className="font-medium text-ds-ink">{
-                            dshDiscovery.source
-                              ? t(`runtimeDiscoverySource_${dshDiscovery.source.replaceAll('-', '_')}`)
-                              : t('dshDiscoveryUnknown')
-                          }</span></div>
-                          {dshDiscovery.deploymentIntegrity ? (
-                            <div className="sm:col-span-2">{t(
-                              dshDiscovery.deploymentIntegrity === 'pinned'
-                                ? 'runtimeDeploymentIntegrityPinned'
-                                : 'runtimeDeploymentIntegrityDerived'
-                            )}</div>
-                          ) : null}
-                          <div>{t('dshDiscoverySession')}: <span className="font-medium text-ds-ink">{
-                            dshDiscovery.protocol?.supported
-                              ? t('dshDiscoverySupported')
-                              : t('dshDiscoveryUnsupported')
-                          }</span></div>
-                          {dshDiscovery.executablePath ? (
-                            <code className="break-all text-[11px] text-ds-faint sm:col-span-2">{dshDiscovery.executablePath}</code>
-                          ) : null}
-                          {dshDiscovery.failure ? (
-                            <div className="text-amber-800 dark:text-amber-200 sm:col-span-2">{
-                              tCommon(runtimeErrorTranslationKey(dshDiscovery.failure.code) ?? 'runtimeActionFailed')
-                            }</div>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </div>
-                  </details>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                    {t('dshExecutablePath')}
-                    <input
-                      className={textInputClass}
-                      value={dsh.executablePath}
-                      placeholder={t('dshExecutablePathPlaceholder')}
-                      onChange={(event) =>
-                        updateDshRuntime({ executablePath: event.target.value })
-                      }
-                    />
-                  </label>
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                    {t('dshSelectedModel')}
-                    <select
-                      className={selectControlClass}
-                      value={dsh.selectedModel}
-                      onChange={(event) =>
-                        updateDshRuntime({ selectedModel: event.target.value })
-                      }
-                    >
-                      <option value="">{t('dshModelAuto')}</option>
-                      {dsh.selectedModel && !DSH_MODEL_OPTIONS.some((id) => id === dsh.selectedModel) ? (
-                        <option value={dsh.selectedModel} disabled>{dsh.selectedModel}</option>
-                      ) : null}
-                      {DSH_MODEL_OPTIONS.map((model) => (
-                        <option key={model} value={model}>{model}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                    {t('dshReasoningEffort')}
-                    <select
-                      className={selectControlClass}
-                      value={dsh.reasoningEffort}
-                      onChange={(event) =>
-                        updateDshRuntime({ reasoningEffort: event.target.value })
-                      }
-                    >
-                      <option value="">{t('dshReasoningAuto')}</option>
-                      {dsh.reasoningEffort && !DSH_REASONING_EFFORT_OPTIONS.some((id) => id === dsh.reasoningEffort) ? (
-                        <option value={dsh.reasoningEffort} disabled>{dsh.reasoningEffort}</option>
-                      ) : null}
-                      {DSH_REASONING_EFFORT_OPTIONS.map((effort) => (
-                        <option key={effort} value={effort}>{effort}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex items-center justify-between gap-3 rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-[12px] font-semibold text-ds-muted">
-                    <span className="grid gap-0.5">
-                      {t('dshCommandExecution')}
-                      <span className="text-[11px] font-normal">{t('dshCommandExecutionDesc')}</span>
-                    </span>
-                    <Toggle
-                      checked={dsh.commandExecution}
-                      onChange={(commandExecution) => updateDshRuntime({ commandExecution })}
-                    />
-                  </label>
-                </div>
               </div>
             }
           />
@@ -917,7 +749,7 @@ export function AgentsSettingsSection({
                   update({ codePromptPrefix: event.target.value })
                 }
                 placeholder={t('codePromptPrefixPlaceholder')}
-                className="min-h-[110px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+                className="min-h-[110px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-ds-lg leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
               />
             }
           />
@@ -955,8 +787,8 @@ export function AgentsSettingsSection({
             title={t('skillsPath')}
             description={t('skillsPathDesc')}
             control={
-              <div className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-muted shadow-sm">
-                <code className="block break-all rounded-lg bg-ds-main/70 px-2 py-1 font-mono text-[12px] text-ds-ink">
+              <div className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-muted shadow-sm">
+                <code className="block break-all rounded-lg bg-ds-main/70 px-2 py-1 font-mono text-ds-sm text-ds-ink">
                   {selectedSkillRoot?.path || t('skillsRootUnavailable')}
                 </code>
               </div>
@@ -978,7 +810,7 @@ export function AgentsSettingsSection({
                 }
                 spellCheck={false}
                 placeholder={selectedSkillRoot?.path || '~/.agents/skills'}
-                className="min-h-24 w-full rounded-2xl border border-ds-border bg-ds-card px-4 py-3 font-mono text-[13px] leading-6 text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                className="min-h-24 w-full rounded-2xl border border-ds-border bg-ds-card px-4 py-3 font-mono text-ds-md leading-6 text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
               />
             }
           />
@@ -992,7 +824,7 @@ export function AgentsSettingsSection({
                   <button
                     type="button"
                     onClick={() => void openSkillRoot()}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
                   >
                     <FolderOpen className="h-4 w-4" />
                     {t('skillsOpenRoot')}
@@ -1000,7 +832,7 @@ export function AgentsSettingsSection({
                   <button
                     type="button"
                     onClick={() => openPlugins()}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-medium text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-ds-userbubble px-3 py-2 text-ds-md font-medium text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
                   >
                     <Settings className="h-4 w-4" />
                     {t('skillsOpenPlugins')}
@@ -1026,6 +858,7 @@ function RuntimePermissionFields({
   approvalPolicy,
   sandboxMode,
   allowAutoApproval = false,
+  sandboxOnly = false,
   onChange
 }: {
   t: (key: string) => string
@@ -1033,6 +866,7 @@ function RuntimePermissionFields({
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
   allowAutoApproval?: boolean
+  sandboxOnly?: boolean
   onChange: (patch: {
     approvalPolicy?: ApprovalPolicy
     sandboxMode?: SandboxMode
@@ -1041,7 +875,7 @@ function RuntimePermissionFields({
   const permissionLevel = permissionLevelFromRuntime(approvalPolicy, sandboxMode)
   return (
     <>
-      <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted sm:col-span-2">
+      <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted sm:col-span-2">
         {t('permissionLevel')}
         <select
           className={selectControlClass}
@@ -1051,12 +885,14 @@ function RuntimePermissionFields({
             onChange(runtimePatchForPermissionLevel(level, allowAutoApproval ? 'auto' : 'never'))
           }}
         >
-          <option value="request-approval">{t('permissionRequestApproval')}</option>
-          <option value="assisted-approval">{t('permissionAssistedApproval')}</option>
-          <option value="full-access">{t('permissionFullAccess')}</option>
+          {permissionLevel === 'external-sandbox' ? <option value="external-sandbox" disabled>{t('permissionExternalSandbox')}</option> : null}
+          <option value="read-only">{t('permissionReadOnly')}</option>
+          <option value="workspace-write">{t('permissionWorkspaceWrite')}</option>
+          <option value="danger-full-access">{t('permissionFullAccess')}</option>
         </select>
       </label>
-      <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+      {sandboxOnly ? null : <>
+      <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
         {t('approvalPolicy')}
         <select
           className={`${selectControlClass} disabled:cursor-not-allowed disabled:opacity-60`}
@@ -1074,7 +910,7 @@ function RuntimePermissionFields({
           ) : null}
         </select>
       </label>
-      <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
+      <label className="grid gap-1.5 text-ds-sm font-semibold text-ds-muted">
         {t('sandboxMode')}
         <select
           className={selectControlClass}
@@ -1089,14 +925,16 @@ function RuntimePermissionFields({
             })
           }}
         >
+          {sandboxMode === 'external-sandbox' ? <option value="external-sandbox" disabled>{t('permissionExternalSandbox')}</option> : null}
           <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
           <option value="read-only">{t('sandboxReadOnly')}</option>
           <option value="danger-full-access">{t('sandboxFullAccess')}</option>
         </select>
       </label>
-      <p className="text-[12px] text-ds-muted sm:col-span-2">
+      <p className="text-ds-sm text-ds-muted sm:col-span-2">
         {t('runtimePermissionReconnectHint')}
       </p>
+      </>}
     </>
   )
 }
@@ -1211,7 +1049,7 @@ function ComputerUseSettingsCard({
     state: ComputerUsePermissionState
   ): ReactNode => (
     <span
-      className={`rounded-lg border px-2 py-0.5 text-[12px] font-medium ${permissionBadgeClass(state)}`}
+      className={`rounded-lg border px-2 py-0.5 text-ds-sm font-medium ${permissionBadgeClass(state)}`}
     >
       {label}: {t(`computerUsePermission_${state}`)}
     </span>
@@ -1251,7 +1089,7 @@ function ComputerUseSettingsCard({
             ).map(([runtimeId, label]) => (
               <label
                 key={runtimeId}
-                className="flex items-center justify-between gap-3 rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-[12.5px] font-medium text-ds-ink"
+                className="flex items-center justify-between gap-3 rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-ds-sm font-medium text-ds-ink"
               >
                 <span>{label}</span>
                 <Toggle
@@ -1272,7 +1110,7 @@ function ComputerUseSettingsCard({
         wideControl
         control={
           <div className="grid gap-3">
-            <div className="grid gap-2 text-[12.5px] text-ds-muted sm:grid-cols-3">
+            <div className="grid gap-2 text-ds-sm text-ds-muted sm:grid-cols-3">
               <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
                 {t('computerUseConfiguredBackend')}:{' '}
                 <span className="font-mono text-ds-ink">
@@ -1294,7 +1132,7 @@ function ComputerUseSettingsCard({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span
-                className={`inline-flex rounded-lg border px-2.5 py-1 text-[12px] font-semibold ${computerUseStatusPill(backend?.available)}`}
+                className={`inline-flex rounded-lg border px-2.5 py-1 text-ds-sm font-semibold ${computerUseStatusPill(backend?.available)}`}
               >
                 {backend?.available
                   ? t('computerUseBackendAvailable')
@@ -1305,7 +1143,7 @@ function ComputerUseSettingsCard({
               {backendSafetyChips.map((chip) => (
                 <span
                   key={chip.labelKey}
-                  className="inline-flex max-w-full items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-[11px] font-medium text-ds-muted"
+                  className="inline-flex max-w-full items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-main/40 px-2 py-1 text-ds-xs font-medium text-ds-muted"
                 >
                   <span className="text-ds-faint">{t(chip.labelKey)}</span>
                   <span className="text-ds-ink">{t(chip.valueKey)}</span>
@@ -1315,7 +1153,7 @@ function ComputerUseSettingsCard({
                 type="button"
                 onClick={() => void refresh()}
                 disabled={busy}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-sm font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
               >
                 <RefreshCw
                   className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`}
@@ -1326,7 +1164,7 @@ function ComputerUseSettingsCard({
               {notice ? <InlineNoticeView notice={notice} /> : null}
             </div>
             {backend?.reason ? (
-              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-[12.5px] leading-5 text-ds-muted">
+              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2 text-ds-sm leading-5 text-ds-muted">
                 {backend.reason}
               </div>
             ) : null}
@@ -1347,7 +1185,7 @@ function ComputerUseSettingsCard({
             <div className="grid gap-3">
               <div className="flex flex-wrap gap-2">
                 {permissions?.accessibilityNeedsRestart ? (
-                  <span className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[12px] font-medium text-amber-700 dark:text-amber-200">
+                  <span className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-ds-sm font-medium text-amber-700 dark:text-amber-200">
                     {t('computerUseAccessibility')}:{' '}
                     {t('computerUsePermissionNeedsRestart')}
                   </span>
@@ -1363,14 +1201,14 @@ function ComputerUseSettingsCard({
                 )}
               </div>
               {permissions?.accessibilityNeedsRestart ? (
-                <p className="text-[12px] leading-5 text-amber-700 dark:text-amber-200">
+                <p className="text-ds-sm leading-5 text-amber-700 dark:text-amber-200">
                   {t('computerUseRestartHint')}
                 </p>
               ) : null}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+                  className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-sm font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
                   disabled={!canRequestPermission || busy}
                   onClick={() => void requestPermission('accessibility')}
                 >
@@ -1378,7 +1216,7 @@ function ComputerUseSettingsCard({
                 </button>
                 <button
                   type="button"
-                  className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+                  className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-sm font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
                   disabled={!canRequestPermission || busy}
                   onClick={() => void requestPermission('screenRecording')}
                 >
@@ -1396,7 +1234,7 @@ function ComputerUseSettingsCard({
         control={
           <div className="grid gap-2">
             {activeLeases.length === 0 ? (
-              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-[13px] text-ds-faint">
+              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-ds-md text-ds-faint">
                 {t('computerUseNoActiveLeases')}
               </div>
             ) : (
@@ -1405,10 +1243,10 @@ function ComputerUseSettingsCard({
                   key={lease.leaseId}
                   className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2"
                 >
-                  <div className="truncate text-[13px] font-semibold text-ds-ink">
+                  <div className="truncate text-ds-md font-semibold text-ds-ink">
                     {lease.targetId}
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-ds-faint">
+                  <div className="mt-1 flex flex-wrap gap-1.5 text-ds-xs text-ds-faint">
                     <span className="font-mono">{lease.agentId}</span>
                     <span className="font-mono">{lease.threadId}</span>
                     {lease.turnId ? (
@@ -1432,7 +1270,7 @@ function ComputerUseSettingsCard({
         control={
           <div className="grid gap-2">
             {recentRejections.length === 0 ? (
-              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-[13px] text-ds-faint">
+              <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-ds-md text-ds-faint">
                 {t('computerUseNoRecentRejections')}
               </div>
             ) : (
@@ -1445,16 +1283,16 @@ function ComputerUseSettingsCard({
                     className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2"
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
+                      <span className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-2 py-0.5 text-ds-xs font-semibold text-amber-800 dark:text-amber-200">
                         {rejection.code}
                       </span>
                       {rejection.targetId ? (
-                        <span className="font-mono text-[11px] text-ds-faint">
+                        <span className="font-mono text-ds-xs text-ds-faint">
                           {rejection.targetId}
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-1 text-[12.5px] leading-5 text-ds-muted">
+                    <div className="mt-1 text-ds-sm leading-5 text-ds-muted">
                       {rejection.message}
                     </div>
                   </div>

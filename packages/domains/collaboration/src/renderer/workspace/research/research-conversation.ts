@@ -1,5 +1,6 @@
+import { translateWorkspace as cw } from '../workspace-i18n.js'
 import type { DomainRendererWorkbenchHost } from '@sciforge/domain-sdk/host'
-import type { ProjectCoordinatorProject } from '../../../coordinator/contract.js'
+import type { ProjectCoordinatorProject, ProjectCoordinatorSessionProjection } from '../../../coordinator/contract.js'
 import type { ProjectCoordinatorRendererClient } from '../../../coordinator/renderer/project-coordinator-capability-client.js'
 import { COLLABORATION_MAIN_AREA_CONTRIBUTION } from '../../../definition.js'
 import { readSealedDeliverySummary } from '../files/delivery-bundle-summary.js'
@@ -23,6 +24,18 @@ export type ResearchQuestion = Readonly<{
   deliveryManifestIds: readonly string[]
 }>
 
+export function projectResearchSession(project: ProjectCoordinatorProject, projection: ProjectCoordinatorSessionProjection) {
+  const bindings = projection.bindings.filter(binding => binding.role === 'coordinator' &&
+    binding.projectId === project.project.projectId && binding.principalUserId === project.project.ownerUserId)
+  if (bindings.length === 0) throw new Error(cw('本机尚未完成项目研究会话初始化。请检查模型连接和项目创建状态，再重试。'))
+  const sessions = bindings.filter(binding => binding.access === 'coordinator' &&
+    binding.coordinatorAgentId === project.project.coordinatorAgentId &&
+    binding.coordinatorAuthorityEpoch === project.project.coordinatorAuthorityEpoch)
+  if (sessions.length === 0) throw new Error(cw('本机研究会话的协调权限已失效。请刷新项目并检查协调权状态。'))
+  if (sessions.length !== 1) throw new Error(cw('本机存在多个项目研究会话绑定，暂时无法确定会话。请检查项目会话状态。'))
+  return sessions[0]!
+}
+
 /** Read fresh project facts, then enter the existing, project-owned ordinary Session. */
 export async function sendResearchQuestion(
   client: ProjectCoordinatorRendererClient,
@@ -31,27 +44,22 @@ export async function sendResearchQuestion(
   signal?: AbortSignal
 ): Promise<void> {
   const question = input.question.trim()
-  if (!question || question.length > 8_000) throw new Error('请输入研究问题，最多 8,000 字。')
-  if (!workbench.openSession || !workbench.sendMessage) throw new Error('研究会话入口暂不可用。')
-  if (input.deliveryManifestIds.length > 8) throw new Error('一次最多带入 8 份结果，可分轮继续研究。')
+  if (!question || question.length > 8_000) throw new Error(cw('请输入研究问题，最多 8,000 字。'))
+  if (!workbench.openSession || !workbench.sendMessage) throw new Error(cw('研究会话入口暂不可用。'))
+  if (input.deliveryManifestIds.length > 8) throw new Error(cw('一次最多带入 8 份结果，可分轮继续研究。'))
   signal?.throwIfAborted()
   const workspace = await client.readWorkspace({ projectId: input.projectId }, { signal })
   const project = workspace.projects.find((entry) => entry.project.projectId === input.projectId)
   if (workspace.connection.state !== 'ready' || !project || workspace.focusedProjectId !== input.projectId ||
       project.project.ownerUserId !== workspace.connection.userId) {
-    throw new Error('请由当前项目负责人发起研究对话；成员可从自己的任务继续研究。')
+    throw new Error(cw('请由当前项目负责人发起研究对话；成员可从自己的任务继续研究。'))
   }
   const projection = await client.readSessionProjection({ signal })
-  const sessions = projection.bindings.filter((binding) => binding.role === 'coordinator' &&
-    binding.projectId === input.projectId && binding.principalUserId === project.project.ownerUserId &&
-    binding.access === 'coordinator' && binding.coordinatorAgentId === project.project.coordinatorAgentId &&
-    binding.coordinatorAuthorityEpoch === project.project.coordinatorAuthorityEpoch)
-  if (sessions.length !== 1) throw new Error('本机没有可继续的项目研究会话。请在项目所属设备继续，或先完成协调权转移。')
-  const session = sessions[0]!
+  const session = projectResearchSession(project, projection)
   const available = adoptedResearchResults(project)
   const selected = [...new Set(input.deliveryManifestIds)].map((id) => {
     const result = available.find((entry) => entry.manifest.deliveryManifestId === id)
-    if (!result) throw new Error('所选结果的采纳状态已变化，请刷新后重新选择。')
+    if (!result) throw new Error(cw('所选结果的采纳状态已变化，请刷新后重新选择。'))
     return result
   })
   const results = []
@@ -82,13 +90,13 @@ export async function sendResearchQuestion(
     '所选结果的“已采纳”表示协作交付状态，不等于科学结论已获验证。保留反例、适用条件和未解决问题；引用结果时使用上面的精确版本。',
     '需要其他人参与时使用现有协作需求与派单入口。请勿将本次提问视为确认需求或授权对外派单。'
   ].join('\n\n')
-  if (text.length > 90_000) throw new Error('所选材料过长，请减少带入的结果后重试。')
+  if (text.length > 90_000) throw new Error(cw('所选材料过长，请减少带入的结果后重试。'))
   signal?.throwIfAborted()
   // Navigation also resolves the exact runtime/thread in the principal-owned Session catalog.
   const opened = await workbench.openSession({ runtimeId: session.runtimeId, threadId: session.threadId,
     focusComposer: true, returnTo: { contributionId: COLLABORATION_MAIN_AREA_CONTRIBUTION.id,
       label: '返回研究项目', activation: { revision: 1, payload: { projectId: input.projectId, route: 'research' } } } })
-  if (!opened) throw new Error('无法打开项目研究会话，问题尚未发送。')
+  if (!opened) throw new Error(cw('无法打开项目研究会话，问题尚未发送。'))
   const sent = await workbench.sendMessage({ sessionId: session.threadId, text, displayText: question })
   if (!sent.ok) throw new Error(sent.error.message)
 }

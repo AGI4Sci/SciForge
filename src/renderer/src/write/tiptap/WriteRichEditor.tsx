@@ -412,7 +412,7 @@ export function WriteRichEditor({
   if (eligible === false) {
     return (
       <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
-        <div className="write-rich-fallback-notice flex shrink-0 items-center gap-2 border-b border-amber-200/80 bg-amber-50/90 px-4 py-2 text-[12.5px] text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100">
+        <div className="write-rich-fallback-notice flex shrink-0 items-center gap-2 border-b border-amber-200/80 bg-amber-50/90 px-4 py-2 text-ds-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100">
           <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
           <span>{t('writeRichFallbackNotice')}</span>
         </div>

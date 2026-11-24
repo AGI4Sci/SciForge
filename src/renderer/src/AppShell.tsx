@@ -31,7 +31,7 @@ export function RouteFallback(): React.ReactElement {
 
   return (
     <div className="flex h-full min-h-0 items-center justify-center bg-ds-main text-ds-muted">
-      <div className="inline-flex items-center gap-2 rounded-[8px] border border-ds-border-muted bg-ds-card px-3 py-2 text-[12px] font-medium shadow-sm">
+      <div className="inline-flex items-center gap-2 rounded-[8px] border border-ds-border-muted bg-ds-card px-3 py-2 text-ds-sm font-medium shadow-sm">
         <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden />
         <div>
           <span>{timedOut ? 'Workspace loading is taking longer than expected.' : 'Restoring workspace...'}</span>

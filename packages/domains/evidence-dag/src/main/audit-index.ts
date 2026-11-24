@@ -1,3 +1,4 @@
+import { auditReadBindings } from './audit-read-binding.js'
 import { resolve } from 'node:path'
 import type { EvidenceDeltaChain } from './evidence-delta.js'
 import type { EvidenceDagAuditQuerySubject } from '../contract.js'
@@ -46,7 +47,7 @@ function empty() {
     edgesByDelta: new Map<string, { source: string; target: string }[]>(),
     sourceIdentitiesByDelta: new Map<string, Map<string, Set<string>>>(), changesBySource: new Map<string, MaterialChange[]>(),
     labels: new Map<string, string>(), seenEvents: new Set<string>(),
-    addedArtifactKeys: new Set<string>(), addedClosureKeys: new Set<string>(), recordCosts: new Map<string, number>(), metadataByIdentity: new Map<string, Set<string>>(), identityConflicts: new Set<string>(), extractionBounded: false, pending: false, extractionNodes: 0, totalDeltas: 0 }
+    artifactKeys: new Set<string>(), addedArtifactKeys: new Set<string>(), addedClosureKeys: new Set<string>(), recordCosts: new Map<string, number>(), metadataByIdentity: new Map<string, Set<string>>(), identityConflicts: new Set<string>(), extractionBounded: false, pending: false, extractionNodes: 0, totalDeltas: 0 }
 }
 const snapshots = new WeakMap<EvidenceDeltaChain, ReturnType<typeof empty>>()
 export function auditSnapshot(chain: EvidenceDeltaChain, advance = false, limit = 2048) {
@@ -66,7 +67,7 @@ export function auditSnapshot(chain: EvidenceDeltaChain, advance = false, limit 
       if (typeof row.artifactId === 'string' && typeof row.versionId === 'string' && typeof row.contentDigest === 'string') {
         if (row.artifactId.length > 512 || row.versionId.length > 512 || row.contentDigest.length > 128) { budget.bounded = true; return }
         const key = artifactIdentityKey(row as { artifactId: string; versionId: string; contentDigest: string })
-        keys.add(key)
+        keys.add(key); index.artifactKeys.add(key)
         if (typeof row.byteLength === 'number' && row.accessPolicy && typeof row.accessPolicy === 'object') {
           const policy = row.accessPolicy as Record<string, unknown>
           const principals = Array.isArray(policy.principals) ? policy.principals : []
@@ -83,6 +84,7 @@ export function auditSnapshot(chain: EvidenceDeltaChain, advance = false, limit 
   for (const delta of suffix.deltas) {
     index.deltas.push(delta); index.deltaByDigest.set(delta.deltaDigest, delta)
     index.deltaKeys.set(delta.deltaDigest, extract(delta.payload, delta.deltaDigest))
+    for (const key of index.deltaKeys.get(delta.deltaDigest)!) index.addedArtifactKeys.add(key)
     const edges: { source: string; target: string }[] = []
     const sourceIdentities = new Map<string, Set<string>>()
     const change = (value: MaterialChange) => { const rows = index.changesBySource.get(value.sourceId) ?? []; rows.push(value); index.changesBySource.set(value.sourceId, rows) }
@@ -126,6 +128,7 @@ export function auditSnapshot(chain: EvidenceDeltaChain, advance = false, limit 
     for (const digest of closure.includedDeltaDigests) { if (!spend(membershipBudget)) break; for (const key of index.deltaKeys.get(digest) ?? []) { if (!spend(membershipBudget)) break; keys.add(key) } }
     index.extractionBounded ||= membershipBudget.bounded; index.extractionNodes += membershipBudget.visited
     index.closureKeys.set(closure.closureDigest, keys)
+    for (const key of keys) index.addedArtifactKeys.add(key)
   }
   for (const record of suffix.records) {
     index.records.push(record)
@@ -165,7 +168,7 @@ export class OwnerAuditIndex {
       const member = prior ?? { chain, revision: chain.auditRevision, stamp: 0, artifactKeys: new Set<string>(), closureKeys: new Set<string>() }
       member.revision = chain.auditRevision; member.stamp = ++this.revision
       this.members.set(id, member)
-      for (const key of prior ? index.addedArtifactKeys : index.recordsByArtifact.keys()) { const members = this.artifacts.get(key) ?? []; if (!members.includes(chain)) members.push(chain); this.artifacts.set(key, members); member.artifactKeys.add(key) }
+      for (const key of prior ? index.addedArtifactKeys : index.artifactKeys) { const members = this.artifacts.get(key) ?? []; if (!members.includes(chain)) members.push(chain); this.artifacts.set(key, members); member.artifactKeys.add(key) }
       for (const key of prior ? index.addedClosureKeys : index.closuresByDigest.keys()) { const members = this.closures.get(key) ?? []; if (!members.includes(chain)) members.push(chain); this.closures.set(key, members); member.closureKeys.add(key) }
     }
     const candidates = ('threadId' in subject ? [chains.get(subject.threadId)].filter((c): c is EvidenceDeltaChain => Boolean(c))
@@ -182,7 +185,7 @@ export class OwnerAuditIndex {
     if (previous) {
       const result = structuredClone(previous)
       if (result.review.coverageDetails) { result.review.coverageDetails.queryNodes = 0; result.review.coverageDetails.scannedDeltas = indexedWork; result.review.coverageDetails.extractionNodes = extractionNodes }
-      return result
+      return { ...result, bindings: auditReadBindings(candidates, subject, workspaceRoot) }
     }
     let evaluation = evidenceDagAuditQueryOverChains({ chains: candidates, subject, workspaceRoot })
     if (scopeUnknown) evaluation = { ...evaluation, complete: false, gapCodes: [...evaluation.gapCodes, 'workspace_scope_unknown'] }
@@ -197,6 +200,6 @@ export class OwnerAuditIndex {
     const result = { evaluation, review }
     if (this.results.size >= 32) this.results.delete(this.results.keys().next().value!)
     this.results.set(key, result)
-    return structuredClone(result)
+    return { ...structuredClone(result), bindings: auditReadBindings(candidates, subject, workspaceRoot) }
   }
 }

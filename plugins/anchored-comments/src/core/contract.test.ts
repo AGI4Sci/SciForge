@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   ANCHORED_COMMENT_SCHEMA_VERSION,
+  ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
   DEFAULT_FEEDBACK_DISCLOSURE_CHOICES,
   anchoredCommentThreadSchema,
   buildAnchoredCommentContextReferences,
   migrateAnchoredCommentStore,
+  migrateAnchoredCommentThread,
   productFeedbackPacketSchema,
   renderAnchoredCommentContext,
   type AnchoredCommentThread
@@ -12,7 +14,7 @@ import {
 
 function thread(overrides: Partial<AnchoredCommentThread> = {}): AnchoredCommentThread {
   return {
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     id: 'comment-1',
     workspaceKey: '/workspace/example',
     purpose: 'research',
@@ -136,7 +138,7 @@ describe('anchored comment contracts', () => {
       }]
     })
     expect(migrated).toMatchObject({
-      schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+      schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
       threads: [{
         purpose: 'research',
         status: 'open',
@@ -144,6 +146,28 @@ describe('anchored comment contracts', () => {
         feedback: { state: 'local' }
       }]
     })
+  })
+
+  it('migrates a version-1 thread to version 2 with no parent', () => {
+    const legacy = { ...thread(), schemaVersion: 1 }
+    delete (legacy as { parentThreadId?: string }).parentThreadId
+    const migrated = migrateAnchoredCommentThread(legacy)
+    expect(migrated.schemaVersion).toBe(ANCHORED_COMMENT_THREAD_SCHEMA_VERSION)
+    expect(migrated.parentThreadId).toBeUndefined()
+  })
+
+  it('preserves a branch parent and rejects an empty one', () => {
+    const child = anchoredCommentThreadSchema.parse(thread({ parentThreadId: 'comment-1' }))
+    expect(child.parentThreadId).toBe('comment-1')
+    expect(anchoredCommentThreadSchema.safeParse(thread({ parentThreadId: '' })).success).toBe(false)
+  })
+
+  it('rejects a store newer than the supported version', () => {
+    expect(() => migrateAnchoredCommentStore({
+      schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION + 1,
+      threads: [],
+      updatedAt: new Date(0).toISOString()
+    })).toThrow(/Unsupported anchored comment store schema version/)
   })
 
   it('builds context only for explicitly selected comments and keeps it bounded', () => {

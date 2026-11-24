@@ -82,29 +82,38 @@ describe('Host reviewed plugin contract policy', () => {
     const sourceOptions: PluginContractPinsLoadOptions = { appPath, resourcesPath: '/unused', isPackaged: false }
     const source = await loadPluginContractPins(sourceOptions)
     expect(source).toEqual({
-      '@sciforge/plugin-scientific-plotting@0.3.1': {
-        hostServices: ['artifact-versions.workspace'],
-        dshConfig: { artifacts: 'host' },
-        uiCapabilities: ['artifact-versions.list', 'artifact-versions.read', 'artifact-versions.materialize', 'artifact-versions.describe-v2'],
-        uiResourceKinds: ['scientific-plot', 'scientific-plot-render-manifest']
-      },
-      '@sciforge/plugin-scientific-plotting@0.3.2': {
-        hostServices: ['artifact-versions.workspace'],
-        dshConfig: { artifacts: 'host' },
-        uiCapabilities: ['artifact-versions.list', 'artifact-versions.read', 'artifact-versions.materialize', 'artifact-versions.describe-v2'],
-        uiResourceKinds: ['scientific-plot', 'scientific-plot-render-manifest']
-      },
-      '@sciforge/plugin-scientific-plotting@0.3.3': {
-        hostServices: ['artifact-versions.workspace'],
-        dshConfig: { artifacts: 'host' },
-        uiCapabilities: ['artifact-versions.list', 'artifact-versions.read', 'artifact-versions.materialize', 'artifact-versions.describe-v2'],
-        uiResourceKinds: ['scientific-plot', 'scientific-plot-render-manifest']
-      },
+      // Public historical installations retain their exact reviewed grants;
+      // preserving these is not authority for any newer or unlisted version.
+      ...Object.fromEntries(['0.3.1', '0.3.2', '0.3.3'].map(version => [
+        `@sciforge/plugin-scientific-plotting@${version}`, {
+          hostServices: ['artifact-versions.workspace'], dshConfig: { artifacts: 'host' },
+          uiCapabilities: ['artifact-versions.list', 'artifact-versions.read', 'artifact-versions.materialize', 'artifact-versions.describe-v2'],
+          uiResourceKinds: ['scientific-plot', 'scientific-plot-render-manifest']
+        }
+      ])),
+      // Existing approved 0.2.1 installations need their release-reviewed service
+      // and resource grants on startup and on failed-upgrade recovery.
       '@sciforge/plugin-anchored-comments@0.2.1': {
-        hostServices: [],
+        hostServices: ['identity-access.authenticated-cloud'],
+        uiResourceKinds: ['resource-text-selection']
+      },
+      '@sciforge/plugin-anchored-comments@0.2.2': {
+        hostServices: ['identity-access.authenticated-cloud'],
+        uiResourceKinds: ['resource-text-selection']
+      },
+      '@sciforge/plugin-anchored-comments@0.2.3': {
+        hostServices: ['identity-access.authenticated-cloud'],
         uiResourceKinds: ['resource-text-selection']
       }
     })
+    expect(source['@sciforge/plugin-anchored-comments@0.2.0']).toBeUndefined()
+    expect(source['@sciforge/plugin-anchored-comments@0.2.4']).toBeUndefined()
+    // Reviewed service metadata never supplies signature trust or tool approval.
+    for (const reviewed of Object.values(source)) {
+      expect(reviewed).not.toHaveProperty('approved')
+      expect(reviewed).not.toHaveProperty('dshAuthorization')
+      expect(reviewed).not.toHaveProperty('publisherId')
+    }
     const { options, path } = await fixture(true)
     await copyFile(resolvePluginContractPinsPath(sourceOptions), path)
     expect(await loadPluginContractPins(options)).toEqual(source)

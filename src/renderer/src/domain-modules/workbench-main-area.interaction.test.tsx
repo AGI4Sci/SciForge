@@ -22,6 +22,7 @@ function FixturePage({ context }: { context: PageContext }): ReactElement {
   const [sessionId, setSessionId] = useState<string | null>(null)
   return (
     <div className={context.className}>
+      <p id="page-session">{JSON.stringify(context.session)}</p>
       <p id="activation">{JSON.stringify(context.activation)}</p>
       <button id="count" onClick={() => setCount(count + 1)}>{count}</button>
       <button id="open-detail" onClick={() => setDetailOpen(true)}>detail</button>
@@ -80,6 +81,7 @@ async function mount() {
   const render = () => root.render(
     <WorkbenchMainAreaOutlet
       pages={registry.list()}
+      session={state.activeSessionId ? { id: state.activeSessionId, runtimeId: 'codex' } : undefined}
       activePageId={state.activePageId}
       activations={state.activations}
       dock={dock()}
@@ -208,5 +210,16 @@ it('the standard Session return action restores the owning page with its exact o
   await act(async () => back.click())
   expect(container.querySelector('#activation')?.textContent).toBe(JSON.stringify(target.activation))
   expect(container.querySelector('[data-testid="session-return-to-domain"]')).toBeNull()
+  await act(async () => root.unmount())
+})
+
+
+it('passes the current generic conversation identity without remounting package pages', async () => {
+  const { container, root, update, click } = await mount()
+  await click('#count')
+  expect(container.querySelector('#page-session')?.textContent).toBe(JSON.stringify({ id: 'previous-session', runtimeId: 'codex' }))
+  await update({ activeSessionId: 'own-session' })
+  expect(container.querySelector('#page-session')?.textContent).toBe(JSON.stringify({ id: 'own-session', runtimeId: 'codex' }))
+  expect(container.querySelector('#count')?.textContent).toBe('1')
   await act(async () => root.unmount())
 })

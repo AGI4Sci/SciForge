@@ -1,6 +1,7 @@
 import type { DomainMainUserInputHost } from './user-input.js'
+import type { DomainMainWakeupsHost } from './wakeups.js'
 import { z } from 'zod'
-import type { SessionAdmissionEvent, SessionOutputEvent, SessionHumanInputEvent, SessionHumanDecisionLease, SessionAdmissionLease } from './session-admission.js'
+import type { SessionAcceptedInputEvent, SessionAdmissionEvent, SessionOutputEvent, SessionHumanInputEvent, SessionHumanDecisionLease, SessionAdmissionLease } from './session-admission.js'
 
 import type { DomainMainAgentExecutionHost, DomainMainAgentExecutionResult } from './agent-execution.js'
 import type { DomainMainExternalNavigationHost } from './external-navigation.js'
@@ -56,6 +57,7 @@ export * from './agent-routing.js'
 export * from './external-navigation.js'
 export * from './file-transfer.js'
 export * from './power.js'
+export * from './wakeups.js'
 export * from './remote-approval.js'
 export * from './portable-resource-references.js'
 export * from './package-storage.js'
@@ -356,7 +358,7 @@ export type DomainMainDurableTurnBoundary = Readonly<{
   principal?: PrincipalSnapshot
   /** Exact Host authorization lease; absent only for legacy unknown attribution. */
   principalContext?: PrincipalContextSnapshot
-  phase: 'pending-start' | 'watching' | 'completed-intent' | 'terminal-settlement'
+  phase: 'pending-start' | 'watching' | 'completed-intent' | 'terminated-intent' | 'terminal-settlement'
   turnId?: string
   terminalState?: 'completed' | 'failed' | 'cancelled' | 'rejected'
   occurredAt: string
@@ -380,6 +382,8 @@ export type DomainMainDurableTurnBoundarySnapshot = Readonly<{
 }>
 
 export type DomainMainTurnLifecycleEventsHost = Readonly<{
+  /** Post-commit native input notification; listeners must handle receipt replay idempotently. */
+  subscribeAcceptedInput?: (listener: (event: SessionAcceptedInputEvent) => void | Promise<void>) => DomainMainRuntimeDisposer
   subscribeHumanInput?: (listener: (event: SessionHumanInputEvent) => SessionHumanDecisionLease | null | Promise<SessionHumanDecisionLease | null>) => DomainMainRuntimeDisposer
   subscribeRequiredAdmission?: (listener: (event: SessionAdmissionEvent) => void | SessionAdmissionLease | Promise<void | SessionAdmissionLease>) => DomainMainRuntimeDisposer
   subscribeRequiredOutput?: (listener: (event: SessionOutputEvent) => void | Promise<void>) => DomainMainRuntimeDisposer
@@ -617,6 +621,7 @@ export type DomainMainRuntimeLifecycleHost = Readonly<{
   agentExecution?: DomainMainAgentExecutionHost
   remoteCapabilityApprovals?: DomainMainRemoteCapabilityApprovalHost
   power?: DomainMainPowerHost
+  wakeups?: DomainMainWakeupsHost
   capabilities: DomainMainSystemCapabilityInvoker
   modelAccess: DomainMainModelAccessHost
   executionEvents: DomainMainExecutionEventsRouter
@@ -694,10 +699,9 @@ export type DomainTurnFilePatchReceiptV1 = Readonly<{
   patchDigest: string
 }>
 
-/** Opaque completed Agent turn delivered through the canonical artifact stream. */
+/** Opaque terminal Agent turn delivered through the canonical artifact stream. */
 export type DomainTurnArtifactEvent = Readonly<{
   contractVersion: 1
-  kind: 'turn-completed'
   runtimeId: string
   threadId: string
   turnId: string
@@ -717,7 +721,10 @@ export type DomainTurnArtifactEvent = Readonly<{
   principal?: PrincipalSnapshot
   /** Exact Host authorization lease; absent only for legacy unknown attribution. */
   principalContext?: PrincipalContextSnapshot
-}>
+} & (
+  | Readonly<{ kind: 'turn-completed' }>
+  | Readonly<{ kind: 'turn-terminated'; terminalState: 'failed' | 'cancelled' }>
+)>
 
 /** Opaque completed non-Agent execution delivered through the same stream. */
 export type DomainExecutionArtifactEvent = Readonly<{
@@ -763,7 +770,7 @@ export type DomainArtifactEventScope = Readonly<{
 export function domainArtifactEventScope(
   event: DomainArtifactEvent
 ): DomainArtifactEventScope {
-  if (event.kind === 'turn-completed') {
+  if (event.kind !== 'execution-completed') {
     return Object.freeze({
       runtimeId: event.runtimeId,
       threadId: event.threadId,
@@ -1194,6 +1201,12 @@ export type DomainMainHost = Readonly<{
   getExecutablePath?: () => string
   /** Whether the current application is running from a packaged build. */
   isPackaged?: () => boolean
+  /** Trusted capability declarations may use autonomousWrite: 'human-decision-request'
+   * only to persist a bounded request for a human decision. This policy grants
+   * no permission to answer, execute the proposed action, transfer authority or
+   * delegate a batch. The handler must validate recipient and current scope.
+   * Actual writes still require their own canonical authorization.
+   */
   defineCapability: (options: unknown) => unknown
   /** Owner-scoped non-secret settings; introduced in Host API 1.2. */
   packageSettings?: DomainMainPackageSettingsHost
@@ -1338,7 +1351,10 @@ export type DomainVisibleContextSelectionInspection = Readonly<{
 }>
 
 export type DomainRendererVisibleContextHost = Readonly<{
-  registerComponent(component: DomainVisibleContextComponent): () => void
+  /** Session ownership is local to the Host and never serialized into the component. */
+  registerComponent(component: DomainVisibleContextComponent, options?: Readonly<{ sessionId: string }>): () => void
+  /** Refresh question-time context within the Host budget; stop work when aborted. */
+  registerRefresh?(callback: (signal: AbortSignal) => Promise<void>): () => void
   registerVisualTarget(input: Readonly<{
     componentId: string
     target: DomainVisibleContextTarget

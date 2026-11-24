@@ -110,7 +110,7 @@ export function SddAssistantPanel({
           </SidebarTitlebarToggleButton>
           <div className="sdd-assistant-title-pill flex min-w-0 flex-1 items-center gap-2 rounded-[12px] bg-ds-surface-subtle px-3 py-1.5 dark:bg-white/8">
             <Sparkles className="sdd-assistant-sparkle h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
-            <span className="min-w-0 truncate text-[13px] font-medium text-ds-ink">
+            <span className="min-w-0 truncate text-ds-md font-medium text-ds-ink">
               {t('sddAssistant')}
             </span>
           </div>
@@ -126,7 +126,7 @@ export function SddAssistantPanel({
           </button>
         </div>
         <div className="min-w-0 px-4 pb-3">
-          <div className="truncate rounded-full border border-ds-border-muted bg-ds-surface-subtle px-3 py-1.5 text-[11.5px] font-medium text-ds-muted dark:bg-white/6">
+          <div className="truncate rounded-full border border-ds-border-muted bg-ds-surface-subtle px-3 py-1.5 text-ds-xs font-medium text-ds-muted dark:bg-white/6">
             {draft.relativePath}
           </div>
         </div>
@@ -152,10 +152,10 @@ export function SddAssistantPanel({
               <div className="sdd-assistant-empty-icon flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/10 text-accent">
                 <FileQuestion className="h-5 w-5" strokeWidth={1.9} />
               </div>
-              <h3 className="mt-4 text-[18px] font-semibold text-ds-ink">
+              <h3 className="mt-4 text-ds-2xl font-semibold text-ds-ink">
                 {t('sddAssistantEmptyTitle')}
               </h3>
-              <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+              <p className="mt-2 text-ds-md leading-6 text-ds-muted">
                 {t('sddAssistantEmptySub')}
               </p>
             </div>
@@ -170,8 +170,8 @@ export function SddAssistantPanel({
                   <Lightbulb className="h-4 w-4" strokeWidth={1.9} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[13.5px] font-semibold text-ds-ink">{t('sddAssistantClarify')}</span>
-                  <span className="mt-0.5 block truncate text-[12px] text-ds-faint">{t('sddAssistantClarifySub')}</span>
+                  <span className="block text-ds-md font-semibold text-ds-ink">{t('sddAssistantClarify')}</span>
+                  <span className="mt-0.5 block truncate text-ds-sm text-ds-faint">{t('sddAssistantClarifySub')}</span>
                 </span>
               </button>
               <button
@@ -183,8 +183,8 @@ export function SddAssistantPanel({
                   <Search className="h-4 w-4" strokeWidth={1.9} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[13.5px] font-semibold text-ds-ink">{t('sddAssistantResearch')}</span>
-                  <span className="mt-0.5 block truncate text-[12px] text-ds-faint">{t('sddAssistantResearchSub')}</span>
+                  <span className="block text-ds-md font-semibold text-ds-ink">{t('sddAssistantResearch')}</span>
+                  <span className="mt-0.5 block truncate text-ds-sm text-ds-faint">{t('sddAssistantResearchSub')}</span>
                 </span>
               </button>
             </div>

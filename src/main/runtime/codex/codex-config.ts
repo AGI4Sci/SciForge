@@ -102,6 +102,11 @@ type CodexCommandResolutionOptions = {
   ) => Promise<CodexRuntimeProbeCommandResult>
 }
 
+// Electron userData is the stable profile boundary in both development and packaged apps.
+export function resolveManagedCodexHome(userDataPath: string): string {
+  return join(userDataPath, 'runtime-codex', 'codex-home')
+}
+
 export async function prepareCodexAppServerLaunch(options: {
   settings: AppSettingsV1
   workspace?: string

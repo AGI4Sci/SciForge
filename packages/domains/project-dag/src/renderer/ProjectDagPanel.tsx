@@ -363,11 +363,11 @@ export function ProjectDagPanel({
     >
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink">
+          <div className="flex items-center gap-2 text-ds-md font-semibold text-ds-ink">
             <GitMerge className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <span>{t('rightPanelProjectDag')}</span>
           </div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">
+          <div className="mt-1 truncate text-ds-xs text-ds-faint">
             {summary ?? subtitle}
           </div>
         </div>
@@ -376,7 +376,7 @@ export function ProjectDagPanel({
             type="button"
             onClick={updateProject}
             disabled={loading || updateBusy}
-            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-ds-xs font-medium text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {updateBusy
               ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -416,7 +416,7 @@ export function ProjectDagPanel({
         </div>
       ) : null}
       {status && (status.attentionCount > 0 || status.auditStale) ? (
-        <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-ds-border-muted px-3 py-1.5 text-[10.5px]">
+        <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-ds-border-muted px-3 py-1.5 text-ds-2xs">
           {status.attentionCount > 0 ? (
             <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-800">
               {t('projectDagAttention', { count: status.attentionCount })}
@@ -431,7 +431,7 @@ export function ProjectDagPanel({
       ) : null}
       {status?.committed?.evidenceVector.length ? (
         <div className="shrink-0 border-b border-ds-border-muted px-3 py-2">
-          <div className="mb-1.5 text-[10.5px] font-medium text-ds-faint">
+          <div className="mb-1.5 text-ds-2xs font-medium text-ds-faint">
             {t('projectDagEvidenceSessions')}
           </div>
           <div className="flex flex-wrap gap-1">
@@ -443,7 +443,7 @@ export function ProjectDagPanel({
                   type="button"
                   onClick={() => openEvidenceDag(evidence.threadId, evidence.digest)}
                   disabled={!identity || !workbench}
-                  className="inline-flex max-w-full items-center gap-1 rounded-full border border-ds-border bg-ds-surface px-2 py-0.5 text-[10.5px] text-ds-muted hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-60"
+                  className="inline-flex max-w-full items-center gap-1 rounded-full border border-ds-border bg-ds-surface px-2 py-0.5 text-ds-2xs text-ds-muted hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:opacity-60"
                   title={t('projectDagOpenEvidence', {
                     session: identity?.threadId ?? evidence.threadId
                   })}
@@ -459,14 +459,14 @@ export function ProjectDagPanel({
         </div>
       ) : null}
       {pendingMeta ? (
-        <div className="shrink-0 border-b border-ds-border-muted px-3 py-1.5 text-[10.5px] text-ds-faint">
+        <div className="shrink-0 border-b border-ds-border-muted px-3 py-1.5 text-ds-2xs text-ds-faint">
           {pendingMeta}
         </div>
       ) : null}
       {error || pendingError ? (
         <div
           role="alert"
-          className="flex shrink-0 items-start gap-2 border-b border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-4 text-rose-700"
+          className="flex shrink-0 items-start gap-2 border-b border-rose-200 bg-rose-50 px-3 py-2 text-ds-xs leading-4 text-rose-700"
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{error ?? pendingError}</span>
@@ -475,7 +475,7 @@ export function ProjectDagPanel({
 
       <div className="min-h-0 flex-1 bg-ds-main">
         {loading && !view ? (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-ds-muted">
+          <div className="flex h-full items-center justify-center gap-2 text-ds-lg text-ds-muted">
             <Loader2 className="h-4 w-4 animate-spin" />
             {t('projectDagLoading')}
           </div>
@@ -491,14 +491,14 @@ export function ProjectDagPanel({
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ds-muted">
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ds-lg text-ds-muted">
             <GitMerge className="h-8 w-8 text-ds-faint" />
             <span>{error ? t('projectDagUnavailable') : t('projectDagEmpty')}</span>
             <button
               type="button"
               onClick={updateProject}
               disabled={submitting}
-              className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-xs text-ds-ink hover:bg-ds-hover disabled:opacity-50"
+              className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-ds-sm text-ds-ink hover:bg-ds-hover disabled:opacity-50"
             >
               {t('projectDagUpdate')}
             </button>
@@ -506,7 +506,7 @@ export function ProjectDagPanel({
         )}
       </div>
 
-      <details className="shrink-0 border-t border-ds-border bg-ds-sidebar px-3 py-2 text-[11px] text-ds-muted">
+      <details className="shrink-0 border-t border-ds-border bg-ds-sidebar px-3 py-2 text-ds-xs text-ds-muted">
         <summary className="cursor-pointer select-none">{t('projectDagGoal')}</summary>
         <div className="mt-2 grid gap-2">
           <input
@@ -514,7 +514,7 @@ export function ProjectDagPanel({
             onChange={(event) => setGoalTitle(event.target.value)}
             placeholder={t('projectDagGoalTitle')}
             maxLength={500}
-            className="rounded-md border border-ds-border bg-ds-surface px-2 py-1.5 text-xs text-ds-ink outline-none focus:border-ds-accent"
+            className="rounded-md border border-ds-border bg-ds-surface px-2 py-1.5 text-ds-sm text-ds-ink outline-none focus:border-ds-accent"
           />
           <textarea
             value={goalDescription}
@@ -522,14 +522,14 @@ export function ProjectDagPanel({
             placeholder={t('projectDagGoalDescription')}
             maxLength={4_000}
             rows={2}
-            className="resize-none rounded-md border border-ds-border bg-ds-surface px-2 py-1.5 text-xs text-ds-ink outline-none focus:border-ds-accent"
+            className="resize-none rounded-md border border-ds-border bg-ds-surface px-2 py-1.5 text-ds-sm text-ds-ink outline-none focus:border-ds-accent"
           />
           <div className="flex items-center justify-between gap-2">
             <select
               value={autonomyMode}
               onChange={(event) =>
                 setAutonomyMode(event.target.value as ProjectDagAutonomyMode)}
-              className="rounded-md border border-ds-border bg-ds-surface px-2 py-1.5 text-xs text-ds-ink"
+              className="rounded-md border border-ds-border bg-ds-surface px-2 py-1.5 text-ds-sm text-ds-ink"
             >
               <option value="autonomous">Autonomous</option>
               <option value="checkpointed">Checkpointed</option>
@@ -539,7 +539,7 @@ export function ProjectDagPanel({
               type="button"
               onClick={saveGoal}
               disabled={!goalTitle.trim() || savingGoal}
-              className="inline-flex items-center gap-1.5 rounded-md border border-ds-border bg-ds-surface px-2.5 py-1.5 text-xs text-ds-ink hover:bg-ds-hover disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md border border-ds-border bg-ds-surface px-2.5 py-1.5 text-ds-sm text-ds-ink hover:bg-ds-hover disabled:opacity-50"
             >
               {savingGoal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               {t('projectDagGoalSave')}

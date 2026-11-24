@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
+import { createPortal } from 'react-dom'
+import { clampPanelGeometry, type PanelGeometry } from './floating-panel-geometry'
 import type { DomainExtensionRendererContribution } from '@shared/domain-extensions'
 
 type PluginPanelMessage = Readonly<{
@@ -84,8 +86,45 @@ export function DevelopmentPluginPanelHost({ contribution, active, className = '
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
+  const [floating, setFloating] = useState(false)
+  const [geometry, setGeometry] = useState<PanelGeometry>({ x: 24, y: 70, width: 480, height: 600 })
+  const dockRef = useRef<HTMLDivElement>(null)
+  const stopGesture = useRef<(() => void) | null>(null)
+  const [dock, setDock] = useState({ x: 0, y: 0, width: 0, height: 0 })
+  useEffect(() => {
+    const measure = () => {
+      const rect = dockRef.current?.getBoundingClientRect()
+      if (rect) setDock({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+      setGeometry(value => clampPanelGeometry(value, { width: innerWidth, height: innerHeight }))
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    if (dockRef.current) observer?.observe(dockRef.current)
+    window.addEventListener('resize', measure); window.addEventListener('scroll', measure, true)
+    return () => { observer?.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true) }
+  }, [])
+  const gesture = (event: React.PointerEvent<HTMLElement>, resize: boolean) => {
+    if (event.button !== 0) return
+    stopGesture.current?.()
+    event.preventDefault()
+    const node = event.currentTarget, start = { clientX: event.clientX, clientY: event.clientY, ...geometry }
+    node.setPointerCapture?.(event.pointerId)
+    const move = (next: PointerEvent) => setGeometry(clampPanelGeometry(resize
+      ? { ...start, width: start.width + next.clientX - start.clientX, height: start.height + next.clientY - start.clientY }
+      : { ...start, x: start.x + next.clientX - start.clientX, y: start.y + next.clientY - start.clientY }, { width: innerWidth, height: innerHeight }))
+    const stop = () => {
+      node.removeEventListener('pointermove', move); node.removeEventListener('pointerup', stop); node.removeEventListener('pointercancel', stop)
+      node.removeEventListener('lostpointercapture', stop)
+      if (node.hasPointerCapture?.(event.pointerId)) node.releasePointerCapture(event.pointerId)
+      stopGesture.current = null
+    }
+    stopGesture.current = stop
+    node.addEventListener('pointermove', move); node.addEventListener('pointerup', stop); node.addEventListener('pointercancel', stop)
+    node.addEventListener('lostpointercapture', stop)
+  }
   const { pluginId, contributionId, generation, version, stateVersion, entryUrl } = contribution
   const frameKey = JSON.stringify([pluginId, contributionId, generation, version, entryUrl, retry])
+  useEffect(() => () => stopGesture.current?.(), [active, floating, frameKey, workspaceRoot, sessionId, runtimeId])
   // Deserialized contributions may contain a new array on every inventory poll.
   const capabilitySignature = JSON.stringify([...new Set(
     Array.isArray(contribution.capabilityIds) ? contribution.capabilityIds.filter((id) => typeof id === 'string') : []
@@ -227,6 +266,17 @@ export function DevelopmentPluginPanelHost({ contribution, active, className = '
     const onMessage = (event: MessageEvent<PluginPanelMessage>): void => {
       if (event.source !== iframe.contentWindow) return
       const type = typeof event.data?.type === 'string' ? event.data.type : ''
+      if (type === 'presentation.set') {
+        const input = event.data.input as { mode?: unknown } | undefined
+        if (input?.mode === 'floating' || input?.mode === 'docked') {
+          if (input.mode === 'floating') {
+            const bounds = dockRef.current?.getBoundingClientRect()
+            setGeometry(value => clampPanelGeometry({ ...value, x: bounds?.x ?? value.x, y: bounds?.y ?? value.y }, { width: innerWidth, height: innerHeight }))
+          }
+          setFloating(input.mode === 'floating')
+        }
+        return
+      }
       if (type === 'collapse') {
         callbacksRef.current.onClose?.()
         return
@@ -317,9 +367,15 @@ export function DevelopmentPluginPanelHost({ contribution, active, className = '
   }, [active, ready, frameKey])
 
   return (
-    <div className={`relative h-full min-h-0 w-full overflow-hidden bg-ds-sidebar ${className}`} data-plugin-panel={contribution.contributionId} data-plugin-generation={String(contribution.generation)}>
+    <div ref={dockRef} className={`h-full min-h-0 w-full ${className}`}>
+    {createPortal(<div className="fixed flex flex-col overflow-hidden border border-ds-border bg-ds-sidebar shadow-xl" style={{ left: floating ? geometry.x : dock.x, top: floating ? geometry.y : dock.y,
+      width: floating ? geometry.width : dock.width, height: floating ? geometry.height : dock.height, zIndex: floating ? 1001 : 40, visibility: active ? 'visible' : 'hidden' }}
+      data-floating-plugin-panel={floating ? contribution.contributionId : undefined} data-plugin-panel={contribution.contributionId} data-plugin-generation={String(contribution.generation)}>
+      {floating && <header className="flex shrink-0 touch-none items-center justify-between border-b border-ds-border px-3 py-1 text-ds-sm" onPointerDown={event => { if (!(event.target as HTMLElement).closest('button')) gesture(event, false) }}>
+        <span>{contribution.title}</span><button type="button" aria-label="Dock plugin panel" onClick={() => setFloating(false)}>↙</button>
+      </header>}
       {!ready ? (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 p-4 text-center text-xs text-ds-muted" role={failed ? 'alert' : 'status'}>
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 p-4 text-center text-ds-sm text-ds-muted" role={failed ? 'alert' : 'status'}>
           {t(failed ? 'pluginPanelLoadFailed' : 'pluginPanelLoading')}
           {failed ? <button type="button" className="rounded border border-ds-border px-3 py-1" onClick={() => setRetry((value) => value + 1)}>{t('pluginPanelRetry')}</button> : null}
         </div>
@@ -330,10 +386,12 @@ export function DevelopmentPluginPanelHost({ contribution, active, className = '
         title={contribution.title}
         src={entryUrl}
         sandbox="allow-scripts"
-        className={`h-full w-full border-0 ${ready ? '' : 'opacity-0'}`}
+        className={`min-h-0 w-full flex-1 border-0 ${ready ? '' : 'opacity-0'}`}
         loading={active ? 'eager' : 'lazy'}
         data-plugin-frame
       />
+      {floating && <button type="button" aria-label="Resize plugin panel" className="absolute bottom-0 right-0 h-5 w-5 touch-none cursor-se-resize" onPointerDown={event => gesture(event, true)}>◢</button>}
+    </div>, document.body)}
     </div>
   )
 }

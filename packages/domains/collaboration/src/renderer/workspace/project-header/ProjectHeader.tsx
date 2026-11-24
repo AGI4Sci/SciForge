@@ -1,7 +1,23 @@
+import { useTranslation } from 'react-i18next'
+import { useWorkspaceTranslation } from '../workspace-i18n.js'
 import React, { type KeyboardEvent, type ReactElement } from 'react'
 import type { ProjectStatus } from '../workspace-types.js'
 
-type ProjectTab = 'research' | 'board' | 'requirements' | 'files' | 'settings'
+/**
+ * The Project pages, in the order the header renders them. Each id is also the
+ * page route the workspace shell switches to, so the header and the routes can
+ * never drift apart.
+ */
+export const PROJECT_TABS = Object.freeze([
+  { id: 'research', label: '研究对话' },
+  { id: 'board', label: '看板' },
+  { id: 'members', label: '成员' },
+  { id: 'requirements', label: '需求' },
+  { id: 'files', label: '共享文件' },
+  { id: 'info', label: '项目信息' }
+] as const)
+
+export type ProjectTab = (typeof PROJECT_TABS)[number]['id']
 
 export function ProjectHeader({
   initials,
@@ -12,8 +28,9 @@ export function ProjectHeader({
   onTabChange,
   onPrimaryAction,
   primaryActionLabel,
-  canOpenSettings = true,
+  canManage = true,
   progress,
+  boardCount = 0,
 }: Readonly<{
   initials: string
   name: string
@@ -23,16 +40,18 @@ export function ProjectHeader({
   onTabChange?(tab: ProjectTab): void
   onPrimaryAction?(): void
   primaryActionLabel?: string
-  canOpenSettings?: boolean
+  /** The Owner's project-level action; members never see it. */
+  canManage?: boolean
   progress?: Readonly<{ adopted: number; total: number }>
+  /** Tasks waiting for this User's acceptance, visible without opening the board. */
+  boardCount?: number
 }>): ReactElement {
-  const tabs: readonly Readonly<{ id: ProjectTab; label: string }>[] = [
-    { id: 'research', label: '研究对话' },
-    { id: 'board', label: '工作与协作' },
-    { id: 'requirements', label: '需求' },
-    { id: 'files', label: '文件' },
-    ...(canOpenSettings ? [{ id: 'settings' as const, label: '项目设置' }] : []),
-  ]
+  const cw = useWorkspaceTranslation()
+  const { t } = useTranslation('common')
+  const tabs: readonly Readonly<{ id: ProjectTab; label: string; badge?: number }>[] = PROJECT_TABS.map((tab) => ({
+    ...tab,
+    ...(tab.id === 'board' && boardCount > 0 ? { badge: boardCount } : {})
+  }))
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
     const index = tabs.findIndex((tab) => tab.id === activeTab)
@@ -49,28 +68,39 @@ export function ProjectHeader({
         <div className="collaboration-workspace-project-header-title">
           <div className="collaboration-workspace-project-header-name-row">
             <h1 title={name}>{name}</h1>
-            <span className={`collaboration-workspace-status-label status-${status}`}>{statusLabel(status)}</span>
+            <span className={`collaboration-workspace-status-label status-${status}`}>{cw(statusLabel(status))}</span>
           </div>
-          <p>协作项目 · {memberCount} 位成员{progress ? <> · <span className={progress.adopted === progress.total ? 'collaboration-workspace-progress is-done' : 'collaboration-workspace-progress'}>已采纳 {progress.adopted}/{progress.total}</span></> : null}</p>
+          <p>{memberCount === 1 ? cw('协作项目 · 1 位成员') : cw('协作项目 · {{count}} 位成员', { count: memberCount })}{progress ? <> · <span className={progress.adopted === progress.total ? 'collaboration-workspace-progress is-done' : 'collaboration-workspace-progress'}>{cw('已采纳 {{adopted}}/{{total}}', { adopted: progress.adopted, total: progress.total })}</span></> : null}</p>
         </div>
       </div>
-      <div className="collaboration-workspace-project-header-tabs" role="tablist" aria-label="项目页面" onKeyDown={moveFocus}>
+      <div className="collaboration-workspace-project-header-tabs" role="tablist" aria-label={cw('项目页面')} onKeyDown={moveFocus}>
         {tabs.map((tab) => (
-          <button
-            type="button"
+          <div
             key={tab.id}
-            className={activeTab === tab.id ? 'is-active' : undefined}
+            className={`collaboration-workspace-project-header-tab${activeTab === tab.id ? ' is-active' : ''}`}
             role="tab"
             aria-selected={activeTab === tab.id}
             tabIndex={activeTab === tab.id ? 0 : -1}
             onClick={() => onTabChange?.(tab.id)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              onTabChange?.(tab.id)
+            }}
           >
-            {tab.label}
-          </button>
+            <button
+              type="button"
+              className="collaboration-workspace-project-header-tab-label"
+              tabIndex={-1}
+            >
+              {tab.id === 'members' ? t('collaborationWorkspaceTabMembers', { defaultValue: '成员' }) : cw(tab.label)}
+            </button>
+            {tab.badge ? <><b className="collaboration-workspace-project-header-tab-badge">{tab.badge}</b><span className="collaboration-workspace-visually-hidden">{cw(' 个待你接受的任务')}</span></> : null}
+          </div>
         ))}
       </div>
       <div className="collaboration-workspace-project-header-actions">
-        {primaryActionLabel && canOpenSettings ? <button type="button" className="collaboration-workspace-button-primary" onClick={onPrimaryAction}>{primaryActionLabel}</button> : null}
+        {primaryActionLabel && canManage ? <button type="button" className="collaboration-workspace-button-primary" onClick={onPrimaryAction}>{cw(primaryActionLabel)}</button> : null}
       </div>
     </header>
   )

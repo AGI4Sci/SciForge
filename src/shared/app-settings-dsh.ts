@@ -6,13 +6,10 @@ import {
   type DshRuntimeSettingsV1
 } from './app-settings-types'
 
-// Empty values mean "let the runtime default / discovery decide". The
-// production DSH runtime path pins its executable to the packaged,
-// release-verified artifact and selects the model through the Host
-// ModelRouter, so these persisted selections are user-preference records
-// only; the renderer surfaces them and the canonical engine may ignore them.
+// Discovery and launch both resolve this command. The default command enables
+// automatic discovery; an absolute path selects a user-installed executable.
+// Empty model/reasoning values leave selection to the runtime / Host ModelRouter.
 const DEFAULT_DSH_COMMAND = 'dsh'
-const DEFAULT_DSH_EXECUTABLE_PATH = ''
 const DEFAULT_DSH_SELECTED_MODEL = ''
 const DEFAULT_DSH_REASONING_EFFORT: DshReasoningEffort = ''
 // Fail-closed: a missing or unreadable value never enables the native shell.
@@ -20,8 +17,8 @@ const DEFAULT_DSH_COMMAND_EXECUTION = false
 
 export function defaultDshRuntimeSettings(): DshRuntimeSettingsV1 {
   return {
+    sandboxMode: 'workspace-write',
     command: DEFAULT_DSH_COMMAND,
-    executablePath: DEFAULT_DSH_EXECUTABLE_PATH,
     selectedModel: DEFAULT_DSH_SELECTED_MODEL,
     reasoningEffort: DEFAULT_DSH_REASONING_EFFORT,
     commandExecution: DEFAULT_DSH_COMMAND_EXECUTION
@@ -86,8 +83,8 @@ function normalizeDshRuntimeSettings(
 ): DshRuntimeSettingsV1 {
   const defaults = defaultDshRuntimeSettings()
   return {
+    sandboxMode: input?.sandboxMode === 'read-only' || input?.sandboxMode === 'danger-full-access' ? input.sandboxMode : 'workspace-write',
     command: optionalString(input?.command) || defaults.command,
-    executablePath: optionalString(input?.executablePath) || defaults.executablePath,
     selectedModel: optionalString(input?.selectedModel) || defaults.selectedModel,
     reasoningEffort: optionalString(input?.reasoningEffort) || defaults.reasoningEffort,
     commandExecution: input?.commandExecution === true

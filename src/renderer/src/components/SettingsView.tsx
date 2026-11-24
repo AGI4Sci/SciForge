@@ -25,6 +25,7 @@ import {
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { useChatStore, type SettingsRouteSection } from '../store/chat-store'
 import { SettingsSidebar } from './SettingsSidebar'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
 import { useSettingsGuiUpdate } from './use-settings-gui-update'
 import {
   DEFAULT_WORKSPACE_ROOT,
@@ -46,12 +47,6 @@ import {
   SpeechToTextSettingsSection
 } from './settings-sections'
 
-type SettingsCategory =
-  | 'general'
-  | 'speechToText'
-  | 'agents'
-  | 'shortcuts'
-  | 'remoteResources'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
 type SkillRootOption = {
@@ -74,7 +69,10 @@ export function SettingsView(): ReactElement {
   const applyI18n = useChatStore((s) => s.applyI18nFromSettings)
   const reloadUiSettings = useChatStore((s) => s.reloadUiSettings)
   const probeRuntime = useChatStore((s) => s.probeRuntime)
-  const [category, setCategory] = useState<SettingsCategory>('general')
+  const [category, setCategory] = useState('general')
+  const settingsExtensions = installedRendererContributions.settingsSections.list()
+  const extensionCategory = (id: string): string => 'extension:' + id
+  const selectedExtension = settingsExtensions.find(({ id }) => extensionCategory(id) === category)
   const [form, setForm] = useState<AppSettingsV1 | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [workspacePickerError, setWorkspacePickerError] = useState<
@@ -419,10 +417,10 @@ export function SettingsView(): ReactElement {
         : t('loadFailed', { message: loadError })
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 bg-ds-main p-6 text-center">
-        <p className="max-w-md text-sm text-red-700 dark:text-red-300">{msg}</p>
+        <p className="max-w-md text-ds-lg text-red-700 dark:text-red-300">{msg}</p>
         <button
           type="button"
-          className="rounded-xl bg-ds-userbubble px-4 py-2 text-sm font-medium text-ds-userbubbleFg"
+          className="rounded-xl bg-ds-userbubble px-4 py-2 text-ds-lg font-medium text-ds-userbubbleFg"
           onClick={goBack}
         >
           {t('back')}
@@ -499,7 +497,7 @@ export function SettingsView(): ReactElement {
   }
 
   const selectControlClass =
-    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
+    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
 
   const settingsSectionContext = {
     t,
@@ -548,6 +546,9 @@ export function SettingsView(): ReactElement {
     <div className="ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main">
       <SettingsSidebar
         category={category}
+        extensions={settingsExtensions.map(({ id, contribution }) => ({
+          id: extensionCategory(id), label: contribution.label
+        }))}
         setCategory={setCategory}
         goBack={goBack}
         t={t}
@@ -555,12 +556,12 @@ export function SettingsView(): ReactElement {
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
         <div className="mx-auto max-w-3xl">
-          {!modelAccessConfigured ? (
+          {!selectedExtension && !modelAccessConfigured ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
-              <div className="text-[15px] font-semibold">
+              <div className="text-ds-xl font-semibold">
                 {t('modelAccessRequiredTitle')}
               </div>
-              <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
+              <p className="mt-1 text-ds-md leading-6 text-amber-900/90 dark:text-amber-100/90">
                 {t('modelAccessRequiredBody')}
               </p>
             </div>
@@ -568,16 +569,16 @@ export function SettingsView(): ReactElement {
 
           <div className="mb-8 flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-ds-ink">
-                {t('title')}
+              <h1 className="text-ds-5xl font-semibold tracking-tight text-ds-ink">
+                {selectedExtension?.contribution.label ?? t('title')}
               </h1>
-              <p className="mt-1 text-[14px] text-ds-muted">{t('subtitle')}</p>
+              {!selectedExtension ? <p className="mt-1 text-ds-lg text-ds-muted">{t('subtitle')}</p> : null}
             </div>
-            <span
+            {!selectedExtension ? <span
               title={
                 saveStatus === 'error' && saveError ? saveError : undefined
               }
-              className={`max-w-md shrink-0 rounded-full px-3 py-1 text-right text-[12px] font-medium leading-5 ${
+              className={`max-w-md shrink-0 rounded-full px-3 py-1 text-right text-ds-sm font-medium leading-5 ${
                 saveStatus === 'saved'
                   ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200'
                   : saveStatus === 'error'
@@ -594,7 +595,7 @@ export function SettingsView(): ReactElement {
                       ? t('applyFailedWithReason', { message: saveError })
                       : t('applyFailed')
                     : t('autoApplyHint')}
-            </span>
+            </span> : null}
           </div>
 
           {category === 'general' ? (
@@ -611,6 +612,9 @@ export function SettingsView(): ReactElement {
           ) : null}
           {category === 'remoteResources' ? (
             <RemoteResourcesSettingsSection ctx={settingsSectionContext} />
+          ) : null}
+          {selectedExtension ? (
+            <div key={selectedExtension.id}>{selectedExtension.contribution.render()}</div>
           ) : null}
         </div>
       </div>

@@ -158,3 +158,22 @@ test('requests deterministic products for only the caller-pinned snapshot', asyn
   })
   assert.deepEqual(result.products.map((product) => product.product), kinds)
 })
+
+test('graph binding rejects mismatched owner identity and carries exact selectors into URL', async () => {
+  const digest = 'sha256:' + 'a'.repeat(64)
+  const client = new EvidenceDagServiceClient({ endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'fixture' }),
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true, data: { binding: { status: 'resolved', snapshotDigest: digest }, snapshot: {
+      threadId: 'other-thread', digest, version: 1, inputWatermark: '1', schemaVersion: 'evidence.v3', extractorVersion: 'test', verifierVersion: 'test',
+      artifactDigests: [], createdAt: '2026-01-01T00:00:00Z', status: 'committed'
+    } } }), { headers: { 'content-type': 'application/json' } }) })
+  await assert.rejects(client.graphBinding('codex:thread', { snapshotDigest: digest }), /identity mismatch/)
+  assert.equal(new URL(client.uiUrl('codex', 'thread', digest)).searchParams.get('snapshotDigest'), digest)
+})
+
+test('even empty human review responses must echo the exact authorized scope', async () => {
+  const digest = 'sha256:' + 'a'.repeat(64)
+  const client = new EvidenceDagServiceClient({ endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'fixture' }),
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true, data: { status: 'available', records: [], reasons: [],
+      scope: { threadId: 'another-thread', snapshotDigest: digest, artifactVersionRef: null } } }), { headers: { 'content-type': 'application/json' } }) })
+  await assert.rejects(client.humanReviews('codex:thread', digest), /scope mismatch/)
+})

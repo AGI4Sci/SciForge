@@ -307,11 +307,11 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
           <Icon className="h-4 w-4" strokeWidth={1.9} />
         </span>
         <div className="min-w-0 flex-1 pt-0.5">
-          <div className="line-clamp-2 text-[13px] font-semibold leading-4 text-ds-ink">
+          <div className="line-clamp-2 text-ds-md font-semibold leading-4 text-ds-ink">
             {node.name.trim() || t(`workflowNode_${node.type}`)}
           </div>
           {summary ? (
-            <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-ds-faint">{summary}</div>
+            <div className="mt-0.5 line-clamp-2 text-ds-xs leading-4 text-ds-faint">{summary}</div>
           ) : null}
         </div>
         <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotClass(status)}`} />
@@ -321,10 +321,10 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
         <>
           <Handle type="source" position={Position.Right} id="true" style={{ top: '38%' }} />
           <Handle type="source" position={Position.Right} id="false" style={{ top: '70%' }} />
-          <div className="pointer-events-none absolute right-1 top-[30%] text-[9px] font-medium text-emerald-600">
+          <div className="pointer-events-none absolute right-1 top-[30%] text-ds-2xs font-medium text-emerald-600">
             {t('workflowConditionTrue')}
           </div>
-          <div className="pointer-events-none absolute right-1 top-[62%] text-[9px] font-medium text-red-500">
+          <div className="pointer-events-none absolute right-1 top-[62%] text-ds-2xs font-medium text-red-500">
             {t('workflowConditionFalse')}
           </div>
         </>
@@ -337,7 +337,7 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
               <div key={`case-${index}`}>
                 <Handle type="source" position={Position.Right} id={`case-${index}`} style={{ top: `${top}%` }} />
                 <div
-                  className="pointer-events-none absolute right-1 text-[9px] font-medium text-ds-faint"
+                  className="pointer-events-none absolute right-1 text-ds-2xs font-medium text-ds-faint"
                   style={{ top: `calc(${top}% - 7px)` }}
                 >
                   {index + 1}
@@ -353,10 +353,10 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
         <>
           <Handle type="source" position={Position.Right} id="approved" style={{ top: '38%' }} />
           <Handle type="source" position={Position.Right} id="rejected" style={{ top: '70%' }} />
-          <div className="pointer-events-none absolute right-1 top-[30%] text-[9px] font-medium text-emerald-600">
+          <div className="pointer-events-none absolute right-1 top-[30%] text-ds-2xs font-medium text-emerald-600">
             {t('workflowApprovalApproved')}
           </div>
-          <div className="pointer-events-none absolute right-1 top-[62%] text-[9px] font-medium text-red-500">
+          <div className="pointer-events-none absolute right-1 top-[62%] text-ds-2xs font-medium text-red-500">
             {t('workflowApprovalRejected')}
           </div>
         </>
@@ -368,7 +368,7 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
               <div key={category.id}>
                 <Handle type="source" position={Position.Right} id={category.id} style={{ top: `${top}%` }} />
                 <div
-                  className="pointer-events-none absolute right-1 max-w-[60px] truncate text-[9px] font-medium text-ds-faint"
+                  className="pointer-events-none absolute right-1 max-w-[60px] truncate text-ds-2xs font-medium text-ds-faint"
                   style={{ top: `calc(${top}% - 7px)` }}
                 >
                   {category.label || index + 1}

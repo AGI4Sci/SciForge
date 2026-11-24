@@ -245,6 +245,31 @@ describe('MarkdownWorkspaceViewer', () => {
     }
   })
 
+  it('lays the preview out for the panel it is mounted in, never for a fixed page', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation(),
+      initialMode: 'preview',
+      onCopyForWechat: async () => markdownWechatCopyResult()
+    }))
+
+    // The document body is a size query container: its typography and gutters
+    // follow the panel width instead of the window width.
+    expect(html).toContain('workspace-preview-markdown-document')
+    expect(html).not.toContain('width: 860px')
+    expect(html).not.toContain('style="width')
+    // Long labels must be able to wrap, so nothing is clipped at the right edge.
+    expect(html).toContain('data-markdown-viewer-chrome')
+    expect(html).toContain('data-markdown-viewer-header')
+    expect(html).toContain('flex-wrap')
+    expect(html).not.toContain('flex-nowrap')
+    // The copy actions keep an accessible name when the container query hides
+    // their label, and the label stays in the markup for wide panels.
+    expect(html).toContain('data-markdown-copy-label')
+    expect(html).toMatch(/<button[^>]*aria-label="[^"]+"[^>]*data-markdown-copy-for-wechat/u)
+    // Rows below the floating panel buttons no longer reserve a pixel gutter.
+    expect(html).not.toContain('pr-20')
+  })
+
   it('maps split-pane scrolling by bounded document progress', () => {
     expect(proportionalScrollTop({
       sourceScrollTop: 400,

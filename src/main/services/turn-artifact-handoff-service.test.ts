@@ -66,6 +66,119 @@ afterEach(async () => {
 })
 
 describe('TurnArtifactHandoffService', () => {
+  it.each(['failed', 'cancelled'] as const)('replays %s artifacts before releasing their exact lease', async (terminalState) => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const order: string[] = []
+    const delivered: DomainTurnArtifactEvent[] = []
+    const first = handoff({ outbox,
+      materialize: async value => terminatedEvent(value),
+      inspectTerminalState: async () => terminalState,
+      consumers: [{ consume: async value => { delivered.push(value as DomainTurnArtifactEvent); throw new Error('archive offline') } }],
+      lifecycleConsumer: async () => { order.push('released') }
+    })
+    const accepted = await acceptTurn(first)
+    const intent = { ...accepted.intent, terminalState }
+    await first.publish(intent)
+    await assert.rejects(first.flushThread(intent.runtimeId, intent.threadId), AggregateError)
+    assert.equal(order.length, 0)
+    assert.equal(outbox.all()[0]?.stage, 'pending_fanout')
+    assert.match(outbox.all()[0]?.error ?? '', /fan-out failed/)
+    assert.equal(outbox.durableTurnBoundarySnapshot().owners[0]?.phase, 'terminated-intent')
+    assert.equal(outbox.durableTurnBoundarySnapshot().owners[0]?.terminalState, terminalState)
+    await first.close()
+    const restoredOutbox = new TurnArtifactOutbox(root)
+    await restoredOutbox.load()
+    assert.match(restoredOutbox.all()[0]?.error ?? '', /fan-out failed/)
+    const recovered = handoff({ outbox: restoredOutbox,
+      materialize: async () => { throw new Error('must replay frozen event') },
+      consumers: [{ consume: async value => { delivered.push(value as DomainTurnArtifactEvent); order.push('artifact') } }],
+      lifecycleConsumer: async value => { assert.equal(value.state, terminalState); order.push('released') }
+    })
+    await recovered.publish(intent)
+    await recovered.flushThread(intent.runtimeId, intent.threadId)
+    assert.deepEqual(order, ['artifact', 'released'])
+    assert.deepEqual(delivered[0], delivered[1])
+    assert.equal(delivered[1]?.kind, 'turn-terminated')
+    await recovered.publish(intent)
+    await recovered.flushThread(intent.runtimeId, intent.threadId)
+    assert.equal(delivered.length, 2)
+    await assert.rejects(recovered.publish({ ...intent, terminalState: 'completed' }), /different intent|collision|match/)
+    assert.equal(restoredOutbox.durableTurnBoundarySnapshot().owners[0]?.terminalState, terminalState)
+    await recovered.close()
+  })
+
+  it('keeps mismatched terminated materialization and its lease pending past the completed retry budget', async () => {
+    const outbox = new TurnArtifactOutbox(await temporaryRoot())
+    const service = handoff({ outbox, consumers: [],
+      materialize: async value => event(value, 'incorrectly-completed'),
+      lifecycleConsumer: async () => { assert.fail('must retain lease') }
+    })
+    const accepted = await acceptTurn(service)
+    const intent = { ...accepted.intent, terminalState: 'failed' as const }
+    await service.publish(intent)
+    for (let attempt = 0; attempt < 33; attempt += 1) {
+      await assert.rejects(service.flushThread(intent.runtimeId, intent.threadId), AggregateError)
+    }
+    assert.equal(outbox.all()[0]?.attempts, 33)
+    assert.equal(outbox.all()[0]?.stage, 'pending_materialization')
+    assert.equal(outbox.durableTurnBoundarySnapshot().owners[0]?.phase, 'terminated-intent')
+    await service.close()
+  })
+
+  it('rejects invalid terminated sequences, terminal states and absent accepted leases', async () => {
+    const outbox = new TurnArtifactOutbox(await temporaryRoot())
+    const accepted = await acceptTurn(outbox)
+    const intent = { ...accepted.intent, terminalState: 'failed' as const }
+    for (const sequence of [undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      await assert.rejects(outbox.completeWatch({ ...intent, sequence }), /sequence/)
+    }
+    await assert.rejects(outbox.completeWatch({ ...intent, terminalState: 'aborted' } as unknown as TurnArtifactIntent), /terminal state/)
+    await assert.rejects(outbox.completeWatch({ ...intent, turnId: 'unaccepted' }), /watch/)
+    await outbox.completeWatch(intent)
+    await assert.rejects(outbox.markMaterialized(turnArtifactIntentKey(intent), {
+      ...terminatedEvent(intent), terminalState: 'cancelled'
+    }), /invalid contract/)
+    await assert.rejects(outbox.completeWatch({ ...intent, terminalState: 'cancelled' }), /collision/)
+    assert.equal(outbox.all()[0]?.intent.terminalState, 'failed')
+  })
+
+  it('retains terminated materialization state across restart and rejects conflicting frozen content', async () => {
+    const root = await temporaryRoot()
+    const first = new TurnArtifactOutbox(root)
+    const accepted = await acceptTurn(first)
+    const intent = { ...accepted.intent, terminalState: 'cancelled' as const }
+    await first.completeWatch(intent)
+    const restored = new TurnArtifactOutbox(root)
+    await restored.load()
+    const key = turnArtifactIntentKey(intent)
+    assert.equal(restored.record(key)?.intent.terminalState, 'cancelled')
+    const frozen = terminatedEvent(intent)
+    await restored.markMaterialized(key, frozen)
+    await restored.markMaterialized(key, frozen)
+    await assert.rejects(restored.markMaterialized(key, { ...frozen, artifacts: ['later output'] }), /conflicts/)
+    await assert.rejects(restored.markMaterialized(key, { ...frozen, terminalState: 'failed' }), /invalid contract/)
+  })
+
+  it('settles asynchronous and synchronous consumer failures without abandoning later fan-out', async () => {
+    const root = await temporaryRoot()
+    const outbox = new TurnArtifactOutbox(root)
+    const visited: string[] = []
+    const service = handoff({ outbox, materialize: async (value) => event(value, 'startup'), consumers: [
+      { consume: async () => { visited.push('async'); throw new Error('consumer not active') } },
+      { consume: () => { visited.push('sync'); throw new Error('consumer activation failed') } },
+      { consume: async () => { visited.push('last') } }
+    ] })
+    const accepted = await acceptTurn(service)
+    await service.publish(accepted.intent)
+    await assert.rejects(service.replayPending(), AggregateError)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(visited, ['async', 'sync', 'last'])
+    assert.equal(outbox.wasDelivered(turnArtifactIntentKey(accepted.intent)), false)
+    assert.equal(outbox.all()[0]?.stage, 'pending_fanout')
+    await service.close()
+  })
+
   it('persists a recovery-safe prepared phase before crossing into dispatching', async () => {
     const root = await temporaryRoot()
     const service = handoff({
@@ -119,7 +232,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       starts: Array<{ phase?: unknown }>
     }
-    assert.equal(migrated.version, 6)
+    assert.equal(migrated.version, 7)
     assert.equal(migrated.starts[0]?.phase, 'dispatching')
   })
 
@@ -496,7 +609,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<Record<string, unknown>>
     }
-    assert.equal(persisted.version, 6)
+    assert.equal(persisted.version, 7)
     persisted.version = 5
     for (const watch of persisted.watches) delete watch.principalContext
     await writeFile(first.path, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8')
@@ -511,7 +624,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<{ principalContext?: unknown }>
     }
-    assert.equal(migrated.version, 6)
+    assert.equal(migrated.version, 7)
     assert.deepEqual(migrated.watches[0]?.principalContext, HOST_PRINCIPAL_CONTEXT)
   })
 
@@ -536,7 +649,7 @@ describe('TurnArtifactHandoffService', () => {
       receipts: Array<Record<string, unknown>>
       lifecycleReceipts: Array<{ event: Record<string, unknown> }>
     }
-    assert.equal(persisted.version, 6)
+    assert.equal(persisted.version, 7)
     persisted.version = 5
     for (const receipt of persisted.receipts) {
       delete receipt.outcome
@@ -565,7 +678,7 @@ describe('TurnArtifactHandoffService', () => {
       }>
       lifecycleReceipts: Array<{ event: { principalContext?: unknown } }>
     }
-    assert.equal(migrated.version, 6)
+    assert.equal(migrated.version, 7)
     assert.equal(migrated.receipts[0]?.outcome, 'delivered')
     assert.equal(recovered.wasDelivered(key), true)
     assert.deepEqual(migrated.receipts[0]?.principalContext, HOST_PRINCIPAL_CONTEXT)
@@ -597,7 +710,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<{ principalContext?: unknown }>
     }
-    assert.equal(migrated.version, 6)
+    assert.equal(migrated.version, 7)
     assert.equal(migrated.watches[0]?.principalContext, null)
   })
 
@@ -625,7 +738,7 @@ describe('TurnArtifactHandoffService', () => {
       version: number
       watches: Array<{ principal?: unknown; principalContext?: unknown }>
     }
-    assert.equal(migrated.version, 6)
+    assert.equal(migrated.version, 7)
     assert.equal(migrated.watches[0]?.principal, null)
     assert.equal(migrated.watches[0]?.principalContext, null)
 
@@ -1027,7 +1140,7 @@ describe('TurnArtifactHandoffService', () => {
     await service.close()
   })
 
-  it('releases a completed intent when the runtime durably reports failure', async () => {
+  it.each(['flush', 'replay'] as const)('releases a historical completed intent with runtime failure through %s', async mode => {
     const root = await temporaryRoot()
     const outbox = new TurnArtifactOutbox(root)
     const delivered: DomainMainAfterTurnEvent[] = []
@@ -1052,7 +1165,8 @@ describe('TurnArtifactHandoffService', () => {
     const key = turnArtifactIntentKey(intent)
     await service.publish(intent)
 
-    await service.flushThread(intent.runtimeId, intent.threadId)
+    if (mode === 'flush') await service.flushThread(intent.runtimeId, intent.threadId)
+    else await service.replayPending()
 
     assert.equal(outbox.record(key), undefined)
     assert.equal(outbox.wasDelivered(key), false)
@@ -1792,3 +1906,8 @@ const inertSetTimeout = ((
 ) => ({ unref: () => undefined })) as unknown as typeof setTimeout
 
 const inertClearTimeout = (() => undefined) as unknown as typeof clearTimeout
+
+function terminatedEvent(value: TurnArtifactReplayIntent): Extract<DomainTurnArtifactEvent, { kind: 'turn-terminated' }> {
+  return { ...event(value, 'partial'), kind: 'turn-terminated',
+    terminalState: value.terminalState === 'cancelled' ? 'cancelled' : 'failed' }
+}

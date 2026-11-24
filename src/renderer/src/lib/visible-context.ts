@@ -25,8 +25,13 @@ type VisibleContextShell = {
 type ComponentRegistration = {
   snapshot: VisibleContextComponentSnapshot
   element?: () => Element | null
+  sessionId?: string
 }
 const components = new Map<string, ComponentRegistration>()
+const refreshCallbacks = new Set<(signal: AbortSignal) => Promise<void>>()
+// The main process waits 1,000 ms; leave 250 ms for publication and IPC.
+const VISIBLE_CONTEXT_REFRESH_BUDGET_MS = 750
+let activeRefresh: AbortController | null = null
 type VisualTargetRegistration = {
   componentId: string
   target: Omit<VisualContextTarget, 'bounds'> & { bounds?: VisibleContextBounds }
@@ -67,6 +72,8 @@ export function setVisibleContextShell(next: VisibleContextShell): void {
   // a session switch (or a queue drain) must observe the current owner session
   // instead of racing the debounced publish and the main-process refresh.
   if (shell.activeThreadId !== previousActiveThreadId) {
+    activeRefresh?.abort()
+    activeRefresh = null
     publishVisibleContextNow()
   } else {
     scheduleVisibleContextPublish()
@@ -92,14 +99,15 @@ function normalizedThreadId(value: string | null | undefined): string | null {
 
 export function registerVisibleContextComponent(
   component: VisibleContextComponentSnapshot,
-  element?: () => Element | null
+  element?: () => Element | null,
+  options?: Readonly<{ sessionId: string }>
 ): () => void {
   ensureVisibleContextRefreshListener()
   const snapshot = {
     ...component,
     visible: component.visible !== false
   }
-  const registration = { snapshot, element }
+  const registration = { snapshot, element, ...(options ? { sessionId: options.sessionId.trim() } : {}) }
   components.set(snapshot.id, registration)
   const publishesCapabilityResource = snapshot.resources?.some((resource) => (
     typeof resource.capability?.resourceRef === 'string' &&
@@ -318,18 +326,57 @@ export function publishVisibleContextNow(): void {
   publishVisibleContext()
 }
 
+/** Refresh callbacks belong to installed renderers; no domain-specific polling. */
+export function registerVisibleContextRefresh(callback: (signal: AbortSignal) => Promise<void>): () => void {
+  ensureVisibleContextRefreshListener()
+  refreshCallbacks.add(callback)
+  return () => { refreshCallbacks.delete(callback) }
+}
+
+async function refreshVisibleContext(): Promise<void> {
+  activeRefresh?.abort()
+  if (refreshCallbacks.size === 0) {
+    activeRefresh = null
+    publishVisibleContextNow()
+    return
+  }
+  const controller = new AbortController()
+  activeRefresh = controller
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const aborted = new Promise<void>((resolve) => {
+    controller.signal.addEventListener('abort', () => resolve(), { once: true })
+    timer = setTimeout(() => controller.abort(), VISIBLE_CONTEXT_REFRESH_BUDGET_MS)
+  })
+  try {
+    await Promise.race([
+      Promise.allSettled([...refreshCallbacks].map(callback => Promise.resolve().then(() => {
+        if (!controller.signal.aborted) return callback(controller.signal)
+      }))),
+      aborted
+    ])
+  } finally {
+    clearTimeout(timer)
+    // A newer refresh or a session switch owns publication now.
+    if (activeRefresh === controller) {
+      activeRefresh = null
+      publishVisibleContextNow()
+    }
+  }
+}
+
 let refreshListenerInstalled = false
 
 export function ensureVisibleContextRefreshListener(): void {
   if (refreshListenerInstalled || typeof window === 'undefined') return
   const subscribe = window.sciforge?.visibleContext?.onRefreshRequested
   if (typeof subscribe !== 'function') return
-  subscribe(() => publishVisibleContextNow())
+  subscribe(() => { void refreshVisibleContext() })
   refreshListenerInstalled = true
 }
 
 function componentIsVisible(registration: ComponentRegistration): boolean {
   if (!registration.snapshot.visible) return false
+  if (registration.sessionId !== undefined && registration.sessionId !== shell.activeThreadId) return false
   if (!registration.element) return true
   const element = registration.element()
   // Retained tabs stay mounted. Measure their real visibility at publication
@@ -340,6 +387,8 @@ function componentIsVisible(registration: ComponentRegistration): boolean {
 }
 
 function publishVisibleContext(): void {
+  // Registration and DOM timers must not publish an intermediate stale snapshot.
+  if (activeRefresh) return
   if (typeof window === 'undefined') return
   const publish = window.sciforge?.visibleContext?.publish
   if (typeof publish !== 'function') return

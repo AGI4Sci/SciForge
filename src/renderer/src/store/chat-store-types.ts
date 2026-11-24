@@ -28,6 +28,7 @@ import type { AgentRuntimeWorkState } from '@shared/agent-runtime-contract'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type { DomainWorkbenchSideChatMode, DomainWorkbenchSideConversationContext } from '@sciforge/domain-sdk/host'
+import type { DiscussionCheckpoint, DiscussionHandoffDraft } from './discussion-checkpoint'
 
 export type SideChatMode = DomainWorkbenchSideChatMode
 
@@ -173,6 +174,9 @@ export type SideConversation = {
   workspaceRoot?: string
   chatMode?: SideChatMode
   context?: DomainWorkbenchSideConversationContext
+  handoffDraft?: DiscussionHandoffDraft
+  handedOffBasis?: string
+  handoffPending?: string
   source?: 'side' | 'child_agent' | 'pdf_annotation' | 'sdd_assistant'
   title: string
   createdAt: string
@@ -321,6 +325,7 @@ export type ChatState = {
    * and subscription are never touched by these entries.
    */
   sideConversations: Record<string, SideConversation>
+  discussionCheckpoints: Record<string, DiscussionCheckpoint>
   sidePanel: SidePanelState
   workspaceLocator: WorkspaceLocator | null
   setError: (message: string | null) => void
@@ -422,6 +427,8 @@ export type ChatState = {
     model?: string
     source?: SideConversation['source']
     openPanel?: boolean
+    /** The caller displays restore errors in its own current view. */
+    reportErrors?: boolean
   }) => Promise<string | null>
   /**
    * Open the side chat surface without creating an underlying side
@@ -462,7 +469,8 @@ export type ChatState = {
   ) => Promise<void>
   resolveUserInput: (
     blockId: string,
-    action: { kind: 'submit'; answers: UserInputAnswer[] } | { kind: 'cancel' }
+    action: { kind: 'submit'; answers: UserInputAnswer[] } | { kind: 'cancel' },
+    threadId?: string
   ) => Promise<void>
   applyI18nFromSettings: (locale: 'en' | 'zh') => Promise<void>
   reloadUiSettings: () => Promise<void>

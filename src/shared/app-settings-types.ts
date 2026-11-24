@@ -277,8 +277,9 @@ export type ClaudeRuntimeSettingsV1 = {
 export type DshReasoningEffort = string
 
 export type DshRuntimeSettingsV1 = {
+  sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
+  /** The executable command or absolute path used by both discovery and launch. */
   command: string
-  executablePath: string
   selectedModel: string
   reasoningEffort: DshReasoningEffort
   /** Opt-in for the reviewed DSH shell tools. False keeps the audited closure:

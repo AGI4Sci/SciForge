@@ -9,6 +9,8 @@ export interface DshRuntimeOptions {
   executableArgs?: readonly string[]
   /** Dedicated Host-owned state, never a user's ordinary DSH profile. */
   stateDirectory: string
+  /** Dedicated text-only composition; never shares sessions with the ordinary worker. */
+  contextProfile?: 'minimal'
   modelRouter?: DshModelRouter
   /** Resolve fresh Host-authorized neutral settings before every connection use. */
   getModelRouter?: (context: DshContext) => Promise<DshModelRouter>
@@ -29,6 +31,8 @@ export interface DshRuntimeOptions {
   /** Static fallback for embedders that do not resolve a per-attempt target; the
    * target's own `commandExecution` wins. Absent/false keeps the audited closure. */
   commandExecution?: boolean
+  /** Host-selected native filesystem confinement for this process. */
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   /** When set, the deployed --version output must match exactly. Leave unset for
    * discovered user installs; the packaged artifact always pins its release version. */
   expectedVersion?: string
@@ -50,9 +54,18 @@ export interface DshRuntimeOptions {
    * A changed live-session MCP configuration fails closed (no invented update API). */
   getAuthorizedMcpServers?: (identity: DshIdentity & { workspace: string; allowedTools?: readonly string[]; permissionLevel?: string; governanceProfile?: string; toolImageInputAllowed: boolean; signal: AbortSignal }) => Promise<readonly DshMcpServer[]>
   resolveWorkspace?: (context: DshContext, input: { workspace?: string | null; workspaceLocator?: unknown }) => Promise<string>
-  /** Lifecycle requests and Host callbacks; defaults to 15 seconds. */
+  /** Per-request budget for lifecycle calls (initialize, session/new, resume,
+   * close, list), deployment probes and Host callbacks. Defaults to 15 seconds.
+   * A real per-request deadline: none of these calls spans turn execution, so
+   * it must not be raised as a proxy for turn duration. */
   requestTimeoutMs?: number
-  /** Finite total prompt budget, independent of lifecycle requests. Defaults to 15 seconds. */
+  /** Maximum SILENCE for one prompt, not maximum duration. Defaults to 600000
+   * (10 minutes). The prompt stays pending while the ACP runtime keeps emitting
+   * `session/update` (or any other) notifications for its session, so a long
+   * turn that keeps making progress is never cut off; a runtime that emits
+   * nothing for this long is considered stuck. Expiry fails the turn with the
+   * distinct code `runtime_prompt_idle_timeout` after the connection is retired,
+   * while the durable thread/session identity stays resumable. */
   promptTimeoutMs?: number
   /** Cancel acknowledgement/quiescence budget; defaults to the lifecycle budget. */
   cancelTimeoutMs?: number
@@ -93,7 +106,7 @@ export interface DshTurnInput {
 }
 export interface DshTurnHandle { runtimeId: 'dsh'; threadId: string; turnId: string }
 export interface DshThread { id: string; runtimeId: 'dsh'; title: string; updatedAt: string; workspace?: string; state?: 'running' | 'idle' | 'failed' | 'unknown' }
-export interface DshToolItem { id: string; turnId: string; kind: 'tool'; toolKind: 'tool_call'; status: 'pending' | 'running' | 'completed' | 'failed' | 'aborted'; summary?: string; detail?: string; meta?: Record<string, unknown> }
+export interface DshToolItem { id: string; turnId: string; kind: 'tool'; toolKind: 'tool_call' | 'file_change'; status: 'pending' | 'running' | 'completed' | 'failed' | 'aborted'; summary?: string; detail?: string; meta?: Record<string, unknown> }
 export type DshEvent = DshIdentity & { seq: number; createdAt: string } & (
   | { kind: 'item_snapshot'; item: DshToolItem }
   | { kind: 'assistant_delta'; text: string; itemId: string }

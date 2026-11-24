@@ -5,6 +5,74 @@ versioning, installation, and release boundary for the Python Evidence engine,
 durable update state, public contracts, main-process lifecycle, generic artifact
 ingestion, and optional renderer panel.
 
+Evidence capture binds each chain to one runtime and workspace. When an existing
+Agent Session changes workspace, its original chain and immutable digests remain
+owned by the original workspace. New capture resolves to a successor engine chain
+using the normalized workspace digest. Status, graph URLs, closure sealing,
+sidechains, rerun, preview, export and review authorization share that resolution;
+returning to an earlier workspace resolves its retained chain. Native Session IDs
+and coordination ownership do not change, and durable event replay stays idempotent.
+
+`evidence-dag.submit-claims` accepts explicit claim text and one or more sources per
+claim. Each source contains a complete public Artifact Version `ref`, `startByte`,
+`endByte` (exclusive), and an exact UTF-8 `quote`. The capability uses caller workspace
+authority, reads immutable bytes through Artifact Versions, and rejects mismatched
+references or quotations before appending through the existing delta store.
+`runtimeId`, `threadId`, and `idempotencyKey` identify the submission; retries retain
+the first delta and captured source metadata even after live Artifact metadata or
+the thread watermark advances. Each retry revalidates current access and bytes.
+Reusing that key with
+changed claims fails. Source validation interrupted by runtime shutdown or enablement
+changes cannot append later.
+
+Submitted claims appear in provisional state with stable IDs and `reviewStatus:
+pending`. Explicit closure sealing preserves those IDs and source byte anchors in
+the Python Snapshot without model reinterpretation. Submission, closure, scientific
+review, and Project adoption remain separate operations. Ordinary conversation text
+does not become an explicit submitted claim.
+
+Replay resolves full source references only against authoritative projections in
+the validated closure envelopes. Earlier explicit submissions can share an exact
+reference with a later submission's projection; missing or conflicting references
+fail closed. No source kind or locator is inferred from a version identifier.
+
+Closure policies may explicitly select `watermarkPolicy: 'captured-thread-v2'`
+to compare lifecycle deltas at their captured conversation boundary. Lifecycle
+receipt coverage remains independent. Historical policies without this field keep
+their original semantics and immutable identities.
+
+Digest failures in persisted delta payloads or envelopes are isolated by the Evidence
+owner during normal store loading. Before replacing the active file, it durably
+retains the exact original file in `deltas-quarantine-<file-sha256>.json` in the same
+private Evidence directory. Other threads remain intact. The affected chain retains
+its fully validated prefix and prefix-bound closures/Snapshots/sidechains; its entire
+remaining suffix and original execution references stay in the archive. That suffix
+is quarantined even if individual later records have valid digests: their ancestry
+crosses the broken boundary and is not certified. No original digest is rewritten.
+
+A new `integrity_isolation` delta records the archive identity, reason, retained
+prefix length and quarantined suffix count. Capture resumes through the ordinary
+validated durable append path, so artifact fanout may acknowledge and later Session
+input can cross the handoff boundary. Repeated startup validates the archive and
+retains one recovery event. Status and startup diagnostics continue reporting the
+historical integrity failure; provisional coverage and later closures remain
+incomplete with `lineage_incomplete`. Existing valid historical closures remain
+unchanged. This is isolation, not restoration of the missing original payload.
+Schema, scope, ordering, archive and storage failures still fail closed; failed
+archive or active-store persistence never acknowledges the consumer.
+
+The everyday entry is **Research progress**: overview, recent changes and process.
+Overview presents sourced goals, progress, negative results and open questions
+from the current node and loaded children, rather than listing raw operations.
+It merges matching entries while retaining their sources, bounds the initial
+reading, and offers explicit expansion and full process navigation. Summary and
+member pagination gaps remain visible; this is not a whole-project synthesis or
+scientific approval. Selection and visual targets retain the owning record scope.
+Material checks load when the reader opens Related materials. Reading controls,
+source retention and query filters stay behind their respective settings or
+disclosures. Actionable failures remain visible beside the affected content;
+technical provenance and review details are available on request.
+
 Human review packets bind to a deterministic digest of the scientific graph,
 artifact registry, access policy and current checks. Changing evidence creates a
 new review identity even when target IDs and severity codes stay the same. An
@@ -13,6 +81,29 @@ remain audit history, not approval of new material. The current implementation
 conservatively binds the whole graph; unrelated material changes can also require
 another review. Incremental updates rebuild the current check projection without
 appending duplicate assessments to the ledger.
+
+The Research Record inspector presents a compact material check: status and
+actions first, with conditions, exact versions and coverage available on demand.
+“Discuss” opens the same bounded, exact-version context passed
+to the existing side-conversation draft; opening it does not dispatch a question
+or record approval. Missing conditions remain unknown. Rerun controls are
+progressively disclosed and retain the existing execution confirmation.
+
+Questions and corrections share the existing discussion composer. Its context
+carries the exact material version and recorded coverage; opening it prepares
+a draft before the user sends a message. The handoff editor retains counterexamples
+and comparison criteria; the original task receives them through ordinary input.
+Private drafts reopen without automatically resuming execution. Receipt acceptance
+and scientific approval remain separate; see ADR-0048.
+
+The graph review checkpoint requires an actual rationale and, for approval,
+explicit confirmation of the complete packet scope. Navigating between targets
+retains the current packet draft within the page, scoped to its thread and
+snapshot. Decisions still use the canonical CAS-bound append-only event path.
+Their read projection exposes `reviewRationale` and `reviewedSnapshotDigest`
+from that event, including after restart; those decision fields never change an
+immutable scientific snapshot digest. A changed material identity requires a
+new review. This UI is not a new reviewer identity authentication mechanism.
 
 The package intentionally has no root export. Consumers select one public
 boundary:
@@ -334,6 +425,24 @@ numerator/denominator. A value is `null` with an explicit reason when timestamps
 snapshot history, provenance, or explicit run links are absent; missing facts are
 never inferred from prose.
 
+## Review selection provenance and per-target outcomes
+
+Human review packets are produced from machine-check findings. Two optional additions record how targets were chosen and
+what the reviewer found, so a later estimator can correct for selection (see the `add-belief-review-ranking` OpenSpec change):
+
+- **`ReviewPacket.selection`** records how the targets were selected: today the mechanism `random_audit` with its inclusion
+  probability, sampling frame and audit round. Other mechanisms are added together with the code that produces them.
+- **Random audit.** With `EDAG_RANDOM_AUDIT_FRACTION` in `(0, 1)` (default unset, disabled), each compile adds one non-blocking,
+  optional-level packet holding a uniform sample of that share of the eligible nodes (claim, conclusion, finding, assumption).
+  The sample is drawn from the **full** eligible set before any ranking, by hashing the node id with the scientific-state digest, so
+  recompiling an unchanged state redraws the same sample and the recorded inclusion probability (`sampled / eligible`) is exact.
+  A newer draw expires an unanswered older one. A policy with an audit share carries a distinct policy version.
+- **`targetOutcomes`** on `POST /threads/{id}/reviews/{packetId}/decision` is an optional array of
+  `{ targetId, errorFound, errorOrigin }`. `errorOrigin` is `source`, `inherited` or `undetermined` exactly when an error is found,
+  and `null` otherwise; targets must belong to the packet and may not repeat. A random-audit packet cannot be approved or rejected
+  without an outcome for every sampled target. Decisions without outcomes behave as before and records written before this field
+  existed are read unchanged.
+
 ## Run and test
 
 ```bash
@@ -342,6 +451,8 @@ export EDAG_MODEL_ROUTER_BASE_URL=http://127.0.0.1:3892/v1
 export EDAG_MODEL_ROUTER_API_KEY=local-router-key
 export EDAG_MODEL_ROUTER_MODEL=sciforge-router
 export EDAG_STORAGE_DIR=/path/to/evidence-store
+# optional: share of eligible nodes drawn into a random-audit review packet per scientific state (0 < f < 1)
+# export EDAG_RANDOM_AUDIT_FRACTION=0.1
 npm --workspace @sciforge/domain-evidence-dag run start
 
 npm --workspace @sciforge/domain-evidence-dag test

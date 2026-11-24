@@ -179,14 +179,14 @@ export function HtmlWorkspaceViewer({
     >
       <header className="flex items-start justify-between gap-3 border-b border-ds-border px-4 py-3 pr-20">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ds-text">{model.title}</h3>
-          {model.subtitle ? <p className="mt-1 text-xs text-ds-muted">{model.subtitle}</p> : null}
+          <h3 className="truncate text-ds-lg font-semibold text-ds-text">{model.title}</h3>
+          {model.subtitle ? <p className="mt-1 text-ds-sm text-ds-muted">{model.subtitle}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-3">
           {model.status === 'ready' ? (
             <HtmlModeControl mode={mode} onModeChange={setMode} />
           ) : null}
-          <p className="text-xs text-ds-muted" data-html-agent-summary>
+          <p className="text-ds-sm text-ds-muted" data-html-agent-summary>
             {model.summary}
           </p>
         </div>
@@ -194,7 +194,7 @@ export function HtmlWorkspaceViewer({
 
       {model.status !== 'ready' ? (
         <div
-          className="p-4 text-sm text-ds-text"
+          className="p-4 text-ds-lg text-ds-text"
           role={model.status === 'unsupported' ? 'alert' : 'status'}
         >
           <strong>{model.status === 'empty' ? 'No HTML observation' : 'Unsupported observation'}</strong>
@@ -259,7 +259,7 @@ function HtmlModeControl({
           type="button"
           onClick={() => onModeChange(item.mode)}
           className={compactClassName(
-            'inline-flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-[11.5px] font-semibold transition',
+            'inline-flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-md px-2 text-ds-xs font-semibold transition',
             mode === item.mode
               ? 'bg-white text-accent shadow-sm ring-1 ring-ds-border dark:bg-white/10 dark:ring-white/10'
               : 'text-ds-muted hover:bg-ds-hover hover:text-ds-text'
@@ -338,7 +338,7 @@ function HtmlPreviewPane({
   if (previewUrlState && !previewUrlState.ok) {
     return (
       <div className="min-h-0 bg-ds-bg p-4 pr-20" data-html-preview-pane data-html-preview-mode="error">
-        <div className="rounded-md border border-ds-border bg-ds-panel p-3 text-sm text-ds-text" role="status">
+        <div className="rounded-md border border-ds-border bg-ds-panel p-3 text-ds-lg text-ds-text" role="status">
           <strong>HTML preview URL unavailable</strong>
           <p className="mt-1 text-ds-muted">{previewUrlState.message}</p>
         </div>
@@ -350,7 +350,7 @@ function HtmlPreviewPane({
   if (hasPreviewUrlLoader) {
     return (
       <div className="min-h-0 bg-ds-bg p-4 pr-20" data-html-preview-pane data-html-preview-mode="loading">
-        <div className="rounded-md border border-ds-border bg-ds-panel p-3 text-sm text-ds-text" role="status">
+        <div className="rounded-md border border-ds-border bg-ds-panel p-3 text-ds-lg text-ds-text" role="status">
           Resolving HTML preview URL...
         </div>
       </div>
@@ -415,13 +415,13 @@ function HtmlPreviewToolbar({
         >
           <ZoomIn className="h-4 w-4" aria-hidden="true" />
         </button>
-        <span className="ml-1 min-w-[3rem] text-right text-[11.5px] font-semibold text-ds-muted" data-html-preview-zoom>
+        <span className="ml-1 min-w-[3rem] text-right text-ds-xs font-semibold text-ds-muted" data-html-preview-zoom>
           {Math.round(zoom * 100)}%
         </span>
       </div>
       <button
         type="button"
-        className="inline-flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-md border border-ds-border px-2 text-[11.5px] font-semibold text-ds-text transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-md border border-ds-border px-2 text-ds-xs font-semibold text-ds-text transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
         title="Open preview externally"
         aria-label="Open preview externally"
         data-html-open-external

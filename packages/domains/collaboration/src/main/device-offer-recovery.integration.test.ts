@@ -437,6 +437,14 @@ async function createFixture(options: Readonly<{
     status: () => identity.authenticatedCloudTransportStatus(),
     execute: (request, options) => identity.executeAuthenticatedCloud(request, options),
     readObject: (input, options) => identity.readAuthenticatedCloudObject(input, options),
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: (input, options) => identity.stageAuthenticatedCloudObject(input, options)
   })
   const store = new CollaborationLocalStore({ read: async () => options.persisted, write: async () => undefined })

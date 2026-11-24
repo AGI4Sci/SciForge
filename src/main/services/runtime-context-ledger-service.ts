@@ -952,7 +952,7 @@ function digestPayload(value: unknown): string {
 function assertUnlocked(ledger: AgentRuntimeContextLedger): void {
   if (ledger.submissionFence) throw new SessionAdmissionError('submission_locked', 'Submission is in progress. Keep this input unsent until editing is reopened.')
 }
-function directiveReceipt(item: AgentRuntimeContextDirective): SessionInputReceipt {
+export function directiveReceipt(item: AgentRuntimeContextDirective): SessionInputReceipt {
   return {
     clientDirectiveId: item.id,
     ...(item.admission ?? { revision: 0, mode: 'direct' as const, payloadDigest: digestPayload(item.text), execution: 'output_pending' as const }),

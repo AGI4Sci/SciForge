@@ -1,9 +1,12 @@
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { CURRENT_EDITOR_DOCUMENT_SCRIPT } from './editor-document.js'
 
 import type { BrowserWindow, WebContentsView } from 'electron'
-import type { CurrentUserProfile } from '@sciforge/domain-identity-access/current-user-profile'
+import { currentUserProfileSchema, type CurrentUserProfile } from '@sciforge/domain-identity-access/current-user-profile'
 import { attachCommentIdentityBridge, isEditorOrigin } from './comment-identity-bridge.js'
+import { attachNativeAiSession, type SiYuanNativeAiAccess } from './native-ai-session.js'
 
 /**
  * The package owns the embedded editor as a native child view instead of an
@@ -14,8 +17,22 @@ import { attachCommentIdentityBridge, isEditorOrigin } from './comment-identity-
 const electronRuntime = (): typeof import('electron') =>
   createRequire(import.meta.url)('electron')
 
-/** Persisted partition: the SiYuan session survives application restarts. */
-export const SIYUAN_EDITOR_PARTITION = 'persist:sciforge-siyuan'
+const accountKey = (profile: CurrentUserProfile): string =>
+  profile.state === 'signed-in' ? `user:${profile.userId}` : profile.state
+
+/** Browser state is local to this account and server, while documents remain shared.
+ * This partitions cookies/storage; it does not grant server authorization. */
+export function siyuanEditorPartition(url: string, profile: CurrentUserProfile): string {
+  const digest = createHash('sha256').update(JSON.stringify([new URL(url).origin, accountKey(profile)]))
+    .digest('hex')
+  return `persist:sciforge-siyuan-${digest}`
+}
+
+/** The exact same account/origin jar is used for bootstrap, API reads and the editor. */
+export function siyuanCloudBrowserSession(url: string, identity: CurrentUserProfile): Readonly<{ fetch: typeof fetch }> {
+  const session = electronRuntime().session.fromPartition(siyuanEditorPartition(url, identity), { cache: true })
+  return { fetch: (input, init) => session.fetch(input instanceof Request ? input.url : String(input), init) }
+}
 
 export type SiYuanViewport = Readonly<{
   x: number
@@ -23,6 +40,7 @@ export type SiYuanViewport = Readonly<{
   width: number
   height: number
   visible: boolean
+  windowName?: string
 }>
 
 /**
@@ -40,33 +58,48 @@ export function siyuanEditorUserAgent(platform = process.platform): string {
 
 type EditorEntry = {
   hostId: number
+  account: string
+  origin: string
   window: BrowserWindow
+  ownerWindow: BrowserWindow
+  detachSurface: () => void
   view: WebContentsView
   loadedUrl: string
+  reloadRevision?: number
+  navigation?: Promise<void>
+  presentation?: Parameters<SiYuanNativeView['present']>[0]
   detachHostListeners: () => void
 }
 
 export type SiYuanNativeView = Readonly<{
   present: (input: Readonly<{
     hostId: number
+    reloadRevision?: number
     url: string
     viewport: SiYuanViewport
   }>) => Promise<void>
+  currentDocument: (expectedUrl: string, signal?: AbortSignal) => Promise<string | null>
+  hide: () => void
   dispose: () => void
 }>
 
 /**
  * Owns exactly one editor child view per desktop window. The view is created
- * lazily on first presentation and destroyed with its window, so the local
- * kernel and its window never outlive the surface that shows them.
+ * lazily on first presentation and destroyed with its window, so the remote
+ * editor page never outlives the surface that shows it.
  */
 export function createSiYuanNativeView(options: Readonly<{
   savePath?: (fileName: string) => string
   onDownload?: (filePath: string) => void
   preloadPath?: string
   readIdentity?: () => CurrentUserProfile
+  nativeAi?: SiYuanNativeAiAccess
 }> = {}): SiYuanNativeView {
   let entry: EditorEntry | undefined
+  const readIdentity = (): CurrentUserProfile => {
+    try { return currentUserProfileSchema.parse(options.readIdentity?.() ?? { state: 'unavailable' }) }
+    catch { return { state: 'unavailable' } }
+  }
   const savePath = options.savePath ??
     ((fileName: string) => join(electronRuntime().app.getPath('downloads'), fileName))
 
@@ -75,6 +108,7 @@ export function createSiYuanNativeView(options: Readonly<{
     entry = undefined
     if (!current) return
     current.detachHostListeners()
+    current.detachSurface()
     if (!current.window.isDestroyed()) current.window.contentView.removeChildView(current.view)
     // The page is closed even when its window is already gone: otherwise the
     // renderer process outlives the surface that owned it.
@@ -82,12 +116,16 @@ export function createSiYuanNativeView(options: Readonly<{
     if (!page.isDestroyed()) page.close({ waitForBeforeUnload: false })
   }
 
-  const attach = (hostId: number): EditorEntry => {
+  const attach = (hostId: number, url: string): EditorEntry => {
+    const identity = readIdentity()
+    const account = accountKey(identity)
+    const origin = new URL(url).origin
     const current = entry
     if (
       current &&
       current.hostId === hostId &&
-      !current.window.isDestroyed() &&
+      current.account === account && current.origin === origin &&
+      !current.ownerWindow.isDestroyed() &&
       !current.view.webContents.isDestroyed()
     ) return current
     dispose()
@@ -99,7 +137,7 @@ export function createSiYuanNativeView(options: Readonly<{
       throw new Error('内嵌思源编辑界面需要 SciForge 桌面窗口，当前环境不可用。')
     }
 
-    const editorSession = runtime.session.fromPartition(SIYUAN_EDITOR_PARTITION, { cache: true })
+    const editorSession = runtime.session.fromPartition(siyuanEditorPartition(url, identity), { cache: true })
     const view = new runtime.WebContentsView({
       webPreferences: {
         session: editorSession,
@@ -130,7 +168,27 @@ export function createSiYuanNativeView(options: Readonly<{
     editorSession.on('will-download', onWillDownload)
 
     const detachIdentity = attachCommentIdentityBridge(view.webContents,
-      () => entry?.loadedUrl ?? '', options.readIdentity ?? (() => ({ state: 'unavailable' })))
+      () => entry?.view === view ? entry.loadedUrl : '', () => {
+        const profile = readIdentity()
+        return accountKey(profile) === account ? profile : { state: 'unavailable' }
+      })
+    const detachAi = options.nativeAi ? attachNativeAiSession(editorSession, url, {
+      page: view.webContents, access: options.nativeAi, authorized: () => {
+        const profile = readIdentity()
+        return entry?.view === view && profile.state === 'signed-in' && accountKey(profile) === account
+      }
+    }) : () => undefined
+    // Account changes fence the old page immediately at every identity read,
+    // and retire it even while the renderer slot is inactive or unchanged.
+    const identityTimer = setInterval(() => {
+      if (entry?.view !== view || accountKey(readIdentity()) === account) return
+      const presentation = entry.presentation
+      dispose()
+      // A brief account change between renderer polls must not leave the slot
+      // referring to a closed page. Reuse the canonical presentation path.
+      if (presentation) void present(presentation).catch(() => undefined)
+    }, 500)
+    identityTimer.unref?.()
     // Remote navigation must never carry the identity bridge to another origin.
     const willNavigate = (event: Electron.Event, url: string): void => {
       if (!isEditorOrigin(url, entry?.loadedUrl ?? '')) event.preventDefault()
@@ -151,11 +209,17 @@ export function createSiYuanNativeView(options: Readonly<{
 
     entry = {
       hostId,
+      account,
+      origin,
       window,
+      ownerWindow: window,
+      detachSurface: () => undefined,
       view,
       loadedUrl: '',
       detachHostListeners: () => {
+        clearInterval(identityTimer)
         detachIdentity()
+        detachAi()
         view.webContents.removeListener('will-navigate', willNavigate)
         view.webContents.removeListener('will-redirect', willNavigate)
         editorSession.removeListener('will-download', onWillDownload)
@@ -166,25 +230,93 @@ export function createSiYuanNativeView(options: Readonly<{
     return entry
   }
 
-  return Object.freeze({
-    async present(input) {
-      const current = attach(input.hostId)
-      if (current.loadedUrl !== input.url) {
-        current.loadedUrl = input.url
-        await current.view.webContents.loadURL(input.url)
+  async function present(input: Parameters<SiYuanNativeView['present']>[0]): Promise<void> {
+    const current = attach(input.hostId, input.url)
+    const surface = input.viewport.windowName
+      ? current.ownerWindow.getChildWindows().find(child => !child.isDestroyed() &&
+          child.webContents.mainFrame.name === input.viewport.windowName)
+      : current.ownerWindow
+    if (!surface) throw new Error('云笔记窗口已关闭，请重新打开。')
+    if (surface !== current.window) {
+      current.detachSurface()
+      current.view.setVisible(false)
+      if (!current.window.isDestroyed()) current.window.contentView.removeChildView(current.view)
+      surface.contentView.addChildView(current.view)
+      current.window = surface
+      const restore = (): void => {
+        if (entry !== current || current.ownerWindow.isDestroyed()) return
+        current.view.setVisible(false)
+        if (!surface.isDestroyed()) surface.contentView.removeChildView(current.view)
+        current.ownerWindow.contentView.addChildView(current.view)
+        current.window = current.ownerWindow
+        current.detachSurface = () => undefined
+        current.presentation = { ...input, viewport: { ...input.viewport, windowName: undefined, visible: false } }
       }
-      const runtime = electronRuntime()
-      // The Host renderer renders at its own zoom factor, so device-independent
-      // slot coordinates must be scaled before they reach native bounds.
-      const factor = runtime.webContents.fromId(current.hostId)?.getZoomFactor() ?? 1
-      const content = current.window.getContentBounds()
-      const x = Math.max(0, Math.min(content.width, Math.round(input.viewport.x * factor)))
-      const y = Math.max(0, Math.min(content.height, Math.round(input.viewport.y * factor)))
-      const width = Math.max(0, Math.min(content.width - x, Math.round(input.viewport.width * factor)))
-      const height = Math.max(0, Math.min(content.height - y, Math.round(input.viewport.height * factor)))
-      if (width > 0 && height > 0) current.view.setBounds({ x, y, width, height })
-      current.view.setVisible(input.viewport.visible && width > 0 && height > 0)
-    },
-    dispose
-  })
+      if (surface !== current.ownerWindow) surface.once('close', restore)
+      current.detachSurface = () => surface.removeListener('close', restore)
+    }
+    current.presentation = input
+    // Give the native page its real viewport before navigation starts.
+    const runtime = electronRuntime()
+    // The Host renderer renders at its own zoom factor, so device-independent
+    // slot coordinates must be scaled before they reach native bounds.
+    const factor = current.window === current.ownerWindow
+      ? runtime.webContents.fromId(current.hostId)?.getZoomFactor() ?? 1
+      : current.window.webContents.getZoomFactor()
+    const content = current.window.getContentBounds()
+    const x = Math.max(0, Math.min(content.width, Math.round(input.viewport.x * factor)))
+    const y = Math.max(0, Math.min(content.height, Math.round(input.viewport.y * factor)))
+    const width = Math.max(0, Math.min(content.width - x, Math.round(input.viewport.width * factor)))
+    const height = Math.max(0, Math.min(content.height - y, Math.round(input.viewport.height * factor)))
+    if (width > 0 && height > 0) current.view.setBounds({ x, y, width, height })
+    current.view.setVisible(input.viewport.visible && width > 0 && height > 0)
+    const refresh = input.reloadRevision !== undefined && current.reloadRevision !== undefined && input.reloadRevision !== current.reloadRevision
+    current.reloadRevision = input.reloadRevision
+    if (current.loadedUrl !== input.url || refresh) {
+      const target = refresh && isEditorOrigin(current.view.webContents.mainFrame.url, input.url) ? current.view.webContents.mainFrame.url : input.url
+      current.loadedUrl = input.url
+      current.navigation = current.view.webContents.loadURL(target)
+    }
+    const navigation = current.navigation
+    try { await navigation }
+    catch (error) {
+      if (entry !== current || current.loadedUrl !== input.url || current.navigation !== navigation) return
+      current.loadedUrl = ''
+      current.navigation = undefined
+      current.view.setVisible(false)
+      throw error
+    }
+    // A delayed navigation must not restore a retired account or supersede
+    // a newer viewport (for example a hide request while the page loads).
+    if (entry !== current || current.view.webContents.isDestroyed() ||
+        current.presentation !== input) return
+    if (accountKey(readIdentity()) !== current.account) {
+      current.view.setVisible(false)
+      return
+    }
+  }
+  const hide = (): void => {
+    if (!entry) return
+    entry.view.setVisible(false)
+    if (entry.presentation) entry.presentation = { ...entry.presentation, viewport: { ...entry.presentation.viewport, visible: false } }
+  }
+  const currentDocument = async (expectedUrl: string, signal?: AbortSignal): Promise<string | null> => {
+    const current = entry
+    const isCurrent = () => Boolean(current && entry === current && !signal?.aborted &&
+      current.presentation?.viewport.visible && current.loadedUrl === expectedUrl.replace(/\/$/u, '') + '/' && !current.view.webContents.isDestroyed() &&
+      accountKey(readIdentity()) === current.account && new URL(expectedUrl).origin === current.origin &&
+      isEditorOrigin(current.view.webContents.mainFrame.url, expectedUrl))
+    if (!current || !isCurrent()) return null
+    // Read only the active editor's block ID. Content always uses the structured
+    // space-authorized resource API, never DOM text or recent-file history.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const id = await Promise.race([
+        current.view.webContents.executeJavaScript(CURRENT_EDITOR_DOCUMENT_SCRIPT),
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 500) })
+      ])
+      return isCurrent() && typeof id === 'string' && /^\d{14}-[a-z0-9]{7}$/u.test(id) ? id : null
+    } catch { return null } finally { clearTimeout(timer) }
+  }
+  return Object.freeze({ present, currentDocument, hide, dispose })
 }

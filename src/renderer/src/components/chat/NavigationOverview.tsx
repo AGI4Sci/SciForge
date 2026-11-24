@@ -16,16 +16,16 @@ export function NavigationOverview({ title, sidebarCollapsed, onExpandSidebar }:
             <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
           </button>
         ) : null}
-        <h1 className="min-w-0 truncate text-sm font-medium text-ds-ink" title={title}>{title}</h1>
+        <h1 className="min-w-0 truncate text-ds-lg font-medium text-ds-ink" title={title}>{title}</h1>
       </header>
       <div className="flex flex-1 items-center justify-center px-6 py-12">
         <div className="w-full max-w-md text-center">
           <MessageSquare className="mx-auto mb-5 h-8 w-8 text-ds-muted" strokeWidth={1.5} aria-hidden="true" />
-          <h2 className="text-lg font-medium text-ds-ink">{t('navigationOverviewTitle')}</h2>
-          <p className="mt-3 text-sm leading-relaxed text-ds-muted">{t('navigationOverviewDescription')}</p>
+          <h2 className="text-ds-2xl font-medium text-ds-ink">{t('navigationOverviewTitle')}</h2>
+          <p className="mt-3 text-ds-lg leading-relaxed text-ds-muted">{t('navigationOverviewDescription')}</p>
           {sidebarCollapsed ? (
             <button type="button" onClick={onExpandSidebar}
-              className="ds-no-drag mt-6 rounded-lg border border-[var(--ds-border)] px-4 py-2 text-sm text-ds-ink hover:bg-[var(--ds-sidebar-row-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+              className="ds-no-drag mt-6 rounded-lg border border-[var(--ds-border)] px-4 py-2 text-ds-lg text-ds-ink hover:bg-[var(--ds-sidebar-row-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
               {t('sidebarExpand')}
             </button>
           ) : null}

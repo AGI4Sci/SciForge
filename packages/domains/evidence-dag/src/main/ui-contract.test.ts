@@ -51,7 +51,7 @@ test('claim-like inspector traces lineage and downloads ready or blocked canonic
   assert.match(html, /function isConclusionLike/u)
   assert.match(html, /\/conclusion-lineage\?/u)
   assert.match(html, /\/rerun-spec\?/u)
-  assert.match(html, /Download rerun spec/u)
+  assert.match(html, /下载复现说明/u)
   assert.match(html, /executionReady=false/u)
   assert.match(html, /new Blob\(\[JSON\.stringify\(spec/u)
   assert.match(html, /\.sciforge-rerun\.json/u)

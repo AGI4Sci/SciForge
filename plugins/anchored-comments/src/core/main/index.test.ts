@@ -11,6 +11,7 @@ import {
   anchoredCommentCaptureResultSchema
 } from '../contract'
 import { createAnchoredCommentsCapabilityFactory } from './index'
+import { selectionCommentInput } from '../../selection'
 
 // Valid PNG bytes for engineering tests only; never real screenshot acceptance evidence.
 const PNG = Uint8Array.from(Buffer.from(
@@ -106,6 +107,39 @@ describe('Anchored Comments capability factory', () => {
     expect(fixture.getThread.mock.invocationCallOrder[0]).toBeLessThan(fixture.captureRegisteredTarget.mock.invocationCallOrder[0]!)
   })
 
+  it('captures a saved code selection by its source file while preserving immutable range identity', async () => {
+    const fixture = captureFixture()
+    const host = { workspaceRoot: '/workspace', sessionId: 'agent-thread', runtimeId: 'dsh' }
+    const { thread } = selectionCommentInput({
+      schemaVersion: 1, kind: 'resource-text-selection', resourceKind: 'code', resourceId: 'code:' + 'a'.repeat(64),
+      label: 'docs/a.md:1', quote: 'selected code', revision: 'snapshot:abc', capturedAt: SOURCE.capturedAt,
+      scope: { workspaceRoot: host.workspaceRoot, threadId: host.sessionId, runtimeId: host.runtimeId },
+      bounds: REQUEST.targetBounds, viewport: REQUEST.viewport,
+      codeAnchor: { filePath: 'docs/a.md', side: 'new', line: 1, endLine: 1, hunkHeader: '', code: 'selected code', baseRevision: 'snapshot:abc', contentDigest: 'a'.repeat(64) }
+    }, 'Explain', host, REQUEST.threadId, SOURCE.capturedAt)
+    const originalAnchor = structuredClone(thread.anchor)
+    fixture.getThread.mockResolvedValue(thread)
+    await fixture.capture.handler(REQUEST)
+    expect(fixture.captureRegisteredTarget).toHaveBeenCalledWith(expect.objectContaining({ expectedResourcePath: 'docs/a.md' }))
+    expect(thread.anchor).toEqual(originalAnchor)
+    expect(thread.anchor.canonical).toMatchObject({ kind: 'research', resourceId: 'code:' + 'a'.repeat(64) })
+    expect(fixture.attachCapturedScreenshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses code identities without a saved source anchor before contacting Host', async () => {
+    const fixture = captureFixture()
+    fixture.getThread.mockResolvedValue({ capture: {}, anchor: { canonical: { kind: 'research', resourceKind: 'code', resourceId: 'code:' + 'a'.repeat(64) } } })
+    await expect(fixture.capture.handler(REQUEST)).rejects.toThrow(/source path/)
+    expect(fixture.captureRegisteredTarget).not.toHaveBeenCalled()
+  })
+
+  it('refuses a capture source from a different saved workspace before writing assets', async () => {
+    const fixture = captureFixture()
+    fixture.getThread.mockResolvedValue({ workspaceKey: '/foreign', capture: {}, anchor: { canonical: { kind: 'research', resourceId: 'docs/a.md' } } })
+    await expect(fixture.capture.handler(REQUEST)).rejects.toThrow(/source does not match/)
+    expect(fixture.attachCapturedScreenshot).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['different document', { ...SOURCE, resourcePath: '/workspace/docs/b.md' }],
     ['different registered target', { ...SOURCE, targetRef: 'view-document-b' }]
@@ -162,7 +196,7 @@ describe('Anchored Comments capability factory', () => {
 
 function uncapturedThread(): AnchoredCommentThread {
   return {
-    schemaVersion: 1, id: REQUEST.threadId, workspaceKey: '/workspace', purpose: 'research',
+    schemaVersion: 2, id: REQUEST.threadId, workspaceKey: '/workspace', purpose: 'research',
     anchor: { targetKey: 'docs/a.md', targetLabel: 'Document A', canonical: { kind: 'research', resourceKind: 'document', resourceId: 'docs/a.md' }, bounds: REQUEST.targetBounds },
     capture: { capturedAt: SOURCE.capturedAt, appVersion: 'test', platform: 'test', viewport: REQUEST.viewport, targetLabel: 'Document A', targetBounds: REQUEST.targetBounds, unavailableReason: 'Not captured' },
     messages: [{ id: 'original-message', body: 'Original', authorKind: 'user', createdAt: SOURCE.capturedAt, updatedAt: SOURCE.capturedAt }], status: 'open', anchorResolution: 'resolved', feedback: { state: 'local' }, createdAt: SOURCE.capturedAt, updatedAt: SOURCE.capturedAt

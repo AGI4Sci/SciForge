@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from 'node:util'
+import { researchAuditReviewDecisionsSchema, type ArtifactVersionRefV1 } from '@sciforge/domain-sdk/research-audit'
+import { evidenceDagReadBindingSchema } from '../contract.js'
 import { evidenceDagRerunSnapshotInputSchema, evidenceDagRerunCompareInputSchema, evidenceDagRerunSpecOutputSchema, evidenceDagRerunCompareOutputSchema, type EvidenceDagRerunSnapshotInput, type EvidenceDagRerunCompareInput } from '../contract.js'
 import {
   artifactVersionRefV1Schema,
@@ -101,19 +104,53 @@ export class EvidenceDagServiceClient {
     now?: () => Date
   }>) {}
 
-  uiUrl(runtimeId?: string, threadId?: string): string {
+  uiUrl(runtimeId?: string, threadId?: string, snapshotDigest?: string, artifactVersionRef?: ArtifactVersionRefV1): string {
     const endpoint = this.options.endpoint()
     const url = new URL(`${normalizeBaseUrl(endpoint.baseUrl)}/`)
     if (threadId?.trim()) {
       url.searchParams.set('thread', evidenceDagThreadId(runtimeId, threadId))
       if (runtimeId?.trim()) url.searchParams.set('preview', 'trusted')
     }
+    if (snapshotDigest) url.searchParams.set('snapshotDigest', snapshotDigest)
+    if (artifactVersionRef) url.searchParams.set('artifactVersionRef', JSON.stringify(artifactVersionRef))
     if (endpoint.apiKey) {
       const hash = new URLSearchParams()
       hash.set('token', endpoint.apiKey)
       url.hash = hash.toString()
     }
     return url.toString()
+  }
+
+  async graphBinding(threadId: string, selectors: { snapshotDigest?: string; artifactVersionRef?: ArtifactVersionRefV1 }) {
+    const query = new URLSearchParams()
+    if (selectors.snapshotDigest) query.set('snapshotDigest', selectors.snapshotDigest)
+    if (selectors.artifactVersionRef) query.set('artifactVersionRef', JSON.stringify(selectors.artifactVersionRef))
+    const data = record(await this.request(`/threads/${encodeURIComponent(threadId)}/graph?${query}`, { method: 'GET', cache: 'no-store' }, 5000))
+    const binding = evidenceDagReadBindingSchema.parse(data?.binding)
+    if (binding.status === 'missing') return { binding, snapshot: null }
+    const snapshot = normalizeSnapshot(data?.snapshot)
+    if (!snapshot || snapshot.threadId !== threadId || snapshot.digest !== binding.snapshotDigest ||
+        selectors.snapshotDigest && selectors.snapshotDigest !== snapshot.digest) throw new Error('Graph binding response identity mismatch.')
+    return { binding, snapshot }
+  }
+
+  async humanReviews(threadId: string, snapshotDigest: string, artifactVersionRef?: ArtifactVersionRefV1, asOf?: string, options?: { signal?: AbortSignal; timeoutMs?: number }) {
+    const query = new URLSearchParams({ snapshotDigest })
+    if (artifactVersionRef) query.set('artifactVersionRef', JSON.stringify(artifactVersionRef))
+    if (asOf) query.set('asOf', asOf)
+    const data = record(await this.request(
+      `/threads/${encodeURIComponent(threadId)}/human-reviews?${query}`, { method: 'GET', cache: 'no-store', signal: options?.signal }, options?.timeoutMs ?? 5000))
+    const scope = record(data?.scope)
+    if (!scope || scope.threadId !== threadId || scope.snapshotDigest !== snapshotDigest ||
+        !isDeepStrictEqual(scope.artifactVersionRef, artifactVersionRef ?? null)) throw new Error('Human review response scope mismatch.')
+    const projection = { ...data }
+    delete projection.scope
+    const result = researchAuditReviewDecisionsSchema.parse(projection)
+    if (result.asOf !== asOf || result.records.some(row => row.threadId !== threadId || row.snapshotDigest !== snapshotDigest ||
+      row.reviewReceipt.scope.kind === 'review-packet' && (row.reviewReceipt.scope.snapshotDigest !== snapshotDigest || row.reviewReceipt.scope.reviewPacketId !== row.reviewPacketId))) {
+      throw new Error('Human review response identity mismatch.')
+    }
+    return result
   }
 
   async health(): Promise<void> {
@@ -267,7 +304,7 @@ export class EvidenceDagServiceClient {
             Authorization: `Bearer ${endpoint.apiKey}`,
             ...init.headers
           },
-          signal: AbortSignal.timeout(timeoutMs)
+          signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
         }
       )
       const body = await response.json().catch(() => null)

@@ -10,7 +10,8 @@ import {
   TEST_IDS,
   TEST_TIMESTAMP,
   agentInboxMessageFixture,
-  humanAnswerFixture
+  humanAnswerFixture,
+  humanNeededFixture
 } from '@sciforge/collaboration-contracts/testing'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -109,6 +110,7 @@ const commands = [
     },
     requiredAssurance: 'verified' as const,
     prompt: 'Which confirmed direction should the Coordinator record?',
+    interaction: { kind: 'clarification' },
     confirmableAction: null,
     expiresAt: TEST_TIMESTAMP
   },
@@ -129,13 +131,12 @@ const commands = [
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '8.0.0')
-  assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '9.0.0')
+  assert.deepEqual(commands.filter(command => command.type !== 'task.offer.reassign').map((command) => coordinatorCloudCommandSchema.parse(command).type), [
     'project.create',
     'task.offer.create',
     'task.offer.withdraw',
     'task.offer.extend',
-    'task.offer.reassign',
     'human.needed.create',
     'project.decision.submit'
   ])
@@ -194,6 +195,7 @@ test('human Delivery and completion decisions use one closed User-command schema
     },
     requiredAssurance: 'verified' as const,
     prompt: 'Which confirmed direction should the Coordinator record?',
+    interaction: { kind: 'clarification' },
     confirmableAction: null,
     expiresAt: TEST_TIMESTAMP
   }, {
@@ -417,6 +419,7 @@ test('service exposes one strict Coordinator Agent Inbox subscription boundary',
     payload: {
       protocolVersion: '1.0',
       type: 'human.answer.received',
+      request: { ...humanNeededFixture, status: 'answered', revision: humanAnswerFixture.requestRevision + 1, context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: 2 } },
       answer: {
         ...humanAnswerFixture,
         context: {

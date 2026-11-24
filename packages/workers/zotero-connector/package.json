@@ -1,0 +1,37 @@
+{
+  "name": "@sciforge/zotero-connector",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Zotero Web API v3 read and create-only connector with injected fetch and no shipped credentials.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false,
+    "sideEffects": "network"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./client": "./src/client.ts",
+    "./mapping": "./src/mapping.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

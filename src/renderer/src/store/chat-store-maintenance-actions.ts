@@ -81,14 +81,15 @@ import {
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 
-function patchApprovalBlock(
+function patchDecisionBlock<K extends 'approval' | 'user_input'>(
+  kind: K,
   state: ChatState,
   blockId: string,
   ownerThreadId: string | undefined,
-  update: (block: Extract<ChatBlock, { kind: 'approval' }>) => Extract<ChatBlock, { kind: 'approval' }>
+  update: (block: Extract<ChatBlock, { kind: K }>) => Extract<ChatBlock, { kind: K }>
 ): Partial<ChatState> {
   const patchBlocks = (blocks: ChatBlock[]): ChatBlock[] => blocks.map((block) =>
-    block.id === blockId && block.kind === 'approval' ? update(block) : block)
+    block.id === blockId && block.kind === kind ? update(block as Extract<ChatBlock, { kind: K }>) : block)
   if (!ownerThreadId) return { blocks: patchBlocks(state.blocks) }
   const side = state.sideConversations[ownerThreadId]
   if (!side) return {}
@@ -732,7 +733,7 @@ export function createMaintenanceActions(
         false,
         ownerThreadId
       )
-      set((s) => patchApprovalBlock(s, blockId, side ? ownerThreadId : undefined, (current) => ({
+      set((s) => patchDecisionBlock('approval', s, blockId, side ? ownerThreadId : undefined, (current) => ({
         ...current,
         status: decision === 'allow' ? 'allowed' : 'denied'
       })))
@@ -743,7 +744,7 @@ export function createMaintenanceActions(
         blockId
       }).catch(() => undefined)
       set((s) => ({
-        ...patchApprovalBlock(s, blockId, side ? ownerThreadId : undefined, (current) => ({
+        ...patchDecisionBlock('approval', s, blockId, side ? ownerThreadId : undefined, (current) => ({
           ...current,
           status: 'error',
           errorMessage: msg
@@ -758,8 +759,10 @@ export function createMaintenanceActions(
     }
   },
 
-  resolveUserInput: async (blockId, action) => {
-    const { blocks } = get()
+  resolveUserInput: async (blockId, action, threadId) => {
+    const state = get()
+    const ownerThreadId = threadId && state.sideConversations[threadId] ? threadId : undefined
+    const blocks = ownerThreadId ? state.sideConversations[ownerThreadId].blocks : state.blocks
     const block = blocks.find((b) => b.id === blockId && b.kind === 'user_input')
     if (!block || block.kind !== 'user_input' || (block.status !== 'pending' && block.status !== 'error')) {
       throw new Error(i18n.t('common:userInputUnavailable'))
@@ -773,11 +776,7 @@ export function createMaintenanceActions(
         await p.submitUserInputResponse(block.requestId, action.answers)
         if (get().busy) armBusyWatchdog(set, get)
         set((s) => ({
-          blocks: s.blocks.map((b) =>
-            b.id === blockId && b.kind === 'user_input'
-              ? { ...b, status: 'submitted' as const, answers: action.answers, errorMessage: undefined }
-              : b
-          )
+          ...patchDecisionBlock('user_input', s, blockId, ownerThreadId, (b) => ({ ...b, status: 'submitted' as const, answers: action.answers, errorMessage: undefined }))
         }))
         return
       }
@@ -787,11 +786,7 @@ export function createMaintenanceActions(
       }
       await p.cancelUserInput(block.requestId)
       set((s) => ({
-        blocks: s.blocks.map((b) =>
-          b.id === blockId && b.kind === 'user_input'
-            ? { ...b, status: 'cancelled' as const, errorMessage: undefined }
-            : b
-        )
+        ...patchDecisionBlock('user_input', s, blockId, ownerThreadId, (b) => ({ ...b, status: 'cancelled' as const, errorMessage: undefined }))
       }))
     } catch (e) {
       const msg = formatRuntimeError(e)
@@ -804,11 +799,7 @@ export function createMaintenanceActions(
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {}),
-        blocks: s.blocks.map((b) =>
-          b.id === blockId && b.kind === 'user_input'
-            ? { ...b, status: 'pending' as const, errorMessage: msg }
-            : b
-        )
+        ...patchDecisionBlock('user_input', s, blockId, ownerThreadId, (b) => ({ ...b, status: 'pending' as const, errorMessage: msg }))
       }))
       throw e
     }

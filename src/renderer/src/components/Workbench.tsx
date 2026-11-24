@@ -1,3 +1,5 @@
+import { agentRuntimeClient } from '../agent/agent-runtime-client'
+import type { DomainRendererComposerContextSearchRequest, DomainRendererComposerContextRequest } from '@sciforge/domain-sdk/renderer'
 import type { ComponentProps, CSSProperties, ReactElement, SetStateAction } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -22,7 +24,7 @@ import {
 } from '@shared/keyboard-shortcuts'
 import type { DesktopCommand, SkillListItem } from '@shared/sciforge-api'
 import type { AgentRuntimeId, AppSettingsV1 } from '@shared/app-settings'
-import { getClaudeRuntimeSettings, getCodexRuntimeSettings } from '@shared/app-settings'
+import { getClaudeRuntimeSettings, getCodexRuntimeSettings, getDshRuntimeSettings, dshSettingsPatch } from '@shared/app-settings'
 import type { AgentPermissionLevel } from '@shared/app-settings-permissions'
 import {
   permissionLevelFromRuntime,
@@ -43,6 +45,8 @@ import type { LocalRuntimeInfoJson, LocalRuntimeSkillJson } from '../agent/local
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useChatStore } from '../store/chat-store'
+import { errorPresentationIdentity, useErrorPresentationStore } from '../store/error-presentation-store'
+import { canReexecuteSessionInput } from '../store/chat-session-admission'
 import { selectFocusedAgentSurface } from '../store/chat-store-focus-actions'
 import { hasPendingRuntimeWork } from '../store/chat-store-runtime-helpers'
 import { Sidebar } from './chat/Sidebar'
@@ -193,6 +197,7 @@ import {
   setDomainWorkbenchSessionNavigator,
   setDevelopmentWorkbenchResourceNavigationProvider,
   resolveDomainWorkbenchSession,
+  hydrateDomainWorkbenchSession,
   selectDomainWorkbenchSession,
   domainRendererNavigationHost
 } from '../domain-modules/domain-renderer-navigation'
@@ -259,9 +264,7 @@ export function composerPermissionLevelForRuntime(
   settings: AppSettingsV1,
   runtimeId: AgentRuntimeId
 ): AgentPermissionLevel {
-  // DSH keeps no approval/sandbox settings; ACP request_permission gates tools
-  // per call, so the composer always starts at the safest level.
-  if (runtimeId === 'dsh') return 'request-approval'
+  if (runtimeId === 'dsh') return getDshRuntimeSettings(settings).sandboxMode
   const runtime = runtimeId === 'claude'
     ? getClaudeRuntimeSettings(settings)
     : getCodexRuntimeSettings(settings)
@@ -644,6 +647,7 @@ type SessionRightPanelRenderSnapshot = {
 }
 
 export function Workbench(): ReactElement {
+  const [draftSurfaceSessionId] = useState(() => `draft:${crypto.randomUUID()}`)
   const { t } = useTranslation('common')
 
   const {
@@ -661,7 +665,7 @@ export function Workbench(): ReactElement {
     focusAgentBack,
     focusAgentForward,
     focusAgentParent,
-    createThread,
+    createThread: createThreadAction,
     lastSeq,
     error,
     runtimeErrorDetail,
@@ -680,7 +684,7 @@ export function Workbench(): ReactElement {
     chooseWorkspace,
     workspaceLocator,
     setError,
-    sendMessage,
+    sendMessage: sendMessageAction,
     reviewActiveThread,
     queuedMessages,
     chatSessionPersistenceDegraded,
@@ -690,10 +694,10 @@ export function Workbench(): ReactElement {
     clearQueuedMessages,
     updateQueuedMessage,
     steerQueuedMessage,
-    retryQueuedMessage,
-    reexecuteFailedInput,
+    retryQueuedMessage: retryQueuedMessageAction,
+    reexecuteFailedInput: reexecuteFailedInputAction,
     interrupt,
-    probeRuntime,
+    probeRuntime: probeRuntimeAction,
     composerModel,
     composerReasoningEffort,
     composerServiceTier,
@@ -837,15 +841,14 @@ export function Workbench(): ReactElement {
   const [composerInput] = useState(createWorkbenchComposerInput)
   const setInput = composerInput.getState().setInput
   const [mode, setMode] = useState<'plan' | 'agent'>('agent')
-  const [composerPermissionLevel, setComposerPermissionLevel] = useState<AgentPermissionLevel>('full-access')
+  const [composerPermissionLevel, setComposerPermissionLevel] = useState<AgentPermissionLevel>('read-only')
   const persistComposerPermissionLevel = useCallback((level: AgentPermissionLevel): void => {
     setComposerPermissionLevel(level)
-    // DSH has no persisted permission settings; the level stays a per-session
-    // composer hint while ACP request_permission gates tools per call.
-    if (activeAgentRuntime === 'dsh') return
     const patch = runtimePatchForPermissionLevel(level)
     void rendererRuntimeClient.setSettings({
-      agents: activeAgentRuntime === 'claude'
+      agents: activeAgentRuntime === 'dsh'
+        ? dshSettingsPatch({ sandboxMode: patch.sandboxMode === 'external-sandbox' ? 'workspace-write' : patch.sandboxMode })
+        : activeAgentRuntime === 'claude'
         ? claudeSettingsPatch(patch)
         : codexSettingsPatch(patch)
     }).catch(() => undefined)
@@ -1065,6 +1068,36 @@ export function Workbench(): ReactElement {
   const activeSessionFailure = useSessionFailure({ runtimeId: activeThread?.runtimeId,
     threadId: activeThreadId, runtimeReady: runtimeConnection === 'ready', refreshKey: lastSeq, busy,
     latestTurnId: activeThread?.latestTurnId, latestTurnStatus: activeThread?.latestTurnStatus })
+  const beginErrorAttempt = useCallback((): void => {
+    useErrorPresentationStore.getState().beginAttempt(activeThread?.runtimeId ?? activeAgentRuntime, activeThreadId)
+  }, [activeThread?.runtimeId, activeAgentRuntime, activeThreadId])
+  const createThread = useCallback<typeof createThreadAction>((...args) => {
+    beginErrorAttempt()
+    return createThreadAction(...args)
+  }, [beginErrorAttempt, createThreadAction])
+  const sendMessage = useCallback<typeof sendMessageAction>((...args) => {
+    beginErrorAttempt()
+    return sendMessageAction(...args)
+  }, [beginErrorAttempt, sendMessageAction])
+  const probeRuntime = useCallback<typeof probeRuntimeAction>((...args) => {
+    if (args[0] === 'user') beginErrorAttempt()
+    return probeRuntimeAction(...args)
+  }, [beginErrorAttempt, probeRuntimeAction])
+  const reexecuteFailedInput = useCallback<typeof reexecuteFailedInputAction>((ref) => {
+    useErrorPresentationStore.getState().beginAttempt(ref.runtimeId, ref.threadId)
+    return reexecuteFailedInputAction(ref)
+  }, [reexecuteFailedInputAction])
+  const retryQueuedMessage = useCallback<typeof retryQueuedMessageAction>((...args) => {
+    beginErrorAttempt()
+    return retryQueuedMessageAction(...args)
+  }, [beginErrorAttempt, retryQueuedMessageAction])
+  const runtimeErrorIdentity = errorPresentationIdentity(
+    activeThread?.runtimeId ?? activeAgentRuntime, activeThreadId, 'runtime',
+    error, runtimeErrorDetail, activeThread?.latestTurnId ?? null
+  )
+  const runtimeErrorDismissed = useErrorPresentationStore((state) => state.dismissed[runtimeErrorIdentity] === true)
+  const dismissRuntimeError = (): void => useErrorPresentationStore.getState().dismiss(runtimeErrorIdentity)
+  const visibleRuntimeError = runtimeErrorDismissed ? null : error
   const selectedWorkspaceLocator =
     route === 'chat' ? workspaceLocator ?? undefined : undefined
   const activeSkillWorkspace = useMemo(
@@ -1226,6 +1259,11 @@ export function Workbench(): ReactElement {
   const workspaceOverlaySession = workspaceOverlay && resolveWorkbenchOverlaySession(workspaceOverlay.session.id, threads, workspaceOverlay.session)
   const workspaceOverlayVisible = Boolean(activeWorkspaceOverlay && workspaceOverlaySession)
   const sideChatDock = useSideConversationDock(workspaceOverlayVisible || !rightPanelVisible || rightPanelOverlay ? 0 : rightPanelDockViewportWidth)
+  /**
+   * The vertical toolbar renders through a portal into this slot so it can be the
+   * outermost column of the content row instead of living inside the top bar.
+   */
+  const [toolbarRailHost, setToolbarRailHost] = useState<HTMLDivElement | null>(null)
   const toolbarSession = windowOverlaySession ?? workspaceOverlaySession
   const toolbarCommandInvocation = {
     ...(toolbarSession?.id || rightPanelOwnerId ? { sessionId: toolbarSession?.id ?? rightPanelOwnerId! } : {}),
@@ -1662,9 +1700,19 @@ export function Workbench(): ReactElement {
   const sessionNavigationRequest = useRef(0)
 
   useEffect(() => setDomainWorkbenchSessionNavigator(async (request) => {
-    const target = resolveDomainWorkbenchSession(request, useChatStore.getState().threads)
-    if (!target || (request.returnTo && !canReturnToSurface(request.returnTo))) return false
+    if (request.returnTo && !canReturnToSurface(request.returnTo)) return false
     const sequence = ++sessionNavigationRequest.current
+    let target: ReturnType<typeof resolveDomainWorkbenchSession>
+    try {
+      target = await hydrateDomainWorkbenchSession(request, useChatStore.getState,
+        () => agentRuntimeClient.readThreadStatus({ runtimeId: request.runtimeId as AgentRuntimeId, threadId: request.threadId }),
+        thread => {
+          if (sequence !== sessionNavigationRequest.current) return
+          getProvider().rememberThreadRuntime?.(thread.id, thread.runtimeId!, thread.workspaceLocator)
+          useChatStore.setState(state => ({ threads: [...state.threads, thread] }))
+        })
+    } catch { return false }
+    if (!target || sequence !== sessionNavigationRequest.current) return false
     // Selection changes the visible Session before its history arrives. Keep the
     // return action available even if that read fails or reaches its deadline.
     if (request.returnTo) setSessionReturnTargets(current => ({
@@ -2660,6 +2708,7 @@ export function Workbench(): ReactElement {
   }
 
   const handleSend = (intent?: ComposerSendIntent): void => {
+    beginErrorAttempt()
     void handleSendAsync(intent)
   }
 
@@ -2816,6 +2865,27 @@ export function Workbench(): ReactElement {
     })()
   })
 
+  const resolveDraftContextMentions = useCallback(async (request: DomainRendererComposerContextRequest) => {
+    const results = await Promise.all(installedRendererContributions.composerContexts.list().map(
+      ({ contribution }) => contribution.resolveDraft?.(request) ?? { items: [] }
+    ))
+    return { items: results.flatMap(({ items }) => items).slice(0, 100) }
+  }, [])
+
+  const readActiveContextMentions = useCallback(async (request: DomainRendererComposerContextRequest) => {
+    const results = await Promise.all(installedRendererContributions.composerContexts.list().map(
+      ({ contribution }) => contribution.active?.(request) ?? { items: [] }
+    ))
+    return { items: results.flatMap(({ items }) => items).slice(0, 100) }
+  }, [])
+
+  const searchContextMentions = useCallback(async (request: DomainRendererComposerContextSearchRequest) => {
+    const results = await Promise.all(installedRendererContributions.composerContexts.list().map(
+      ({ contribution }) => contribution.search?.(request) ?? { items: [] }
+    ))
+    return { items: results.flatMap(({ items }) => items).slice(0, 100) }
+  }, [])
+
   const startNewChat = useCallback((): void => {
     setNavigationOverview(null)
     setMainAreaPageId(null)
@@ -2855,6 +2925,7 @@ export function Workbench(): ReactElement {
     () => installedMainAreas.map(({ id, contribution }) => ({
       id,
       label: t(contribution.label),
+      navigationIcon: contribution.navigationIcon,
       active: pageLayout.isOpen(id)
     })),
     [installedMainAreas, pageLayout, t]
@@ -2862,7 +2933,7 @@ export function Workbench(): ReactElement {
   const selectMainAreaPage = useCallback((id: string): void => {
     setNavigationOverview(null)
     setRoute('chat')
-    pageLayout.openPage(id)
+    pageLayout.togglePage(id)
   }, [pageLayout, setRoute])
 
   const runtimeRecoveryOptions = runtimeProvider.getRecoveryOptions(activeAgentRuntime)
@@ -2876,9 +2947,31 @@ export function Workbench(): ReactElement {
       ]
     })
     if (selection.canceled || !selection.path) return
+    beginErrorAttempt()
     await runtimeProvider.configureExecutable(activeAgentRuntime, selection.path)
     await probeRuntime('user')
   }
+
+  /**
+   * A failed turn is retried through the same session-input re-execution path
+   * the composer uses — never a parallel retry route. The banner only offers it
+   * when the durable receipt says this exact input may run again.
+   */
+  const retryFailedTurnBanner = activeSessionFailure &&
+    canReexecuteSessionInput(activeSessionFailure.receipt)
+    ? {
+        label: t('runtimeRetryFailedTurn'),
+        disabled: busy || runtimeConnection !== 'ready',
+        onClick: () => {
+          if (!activeThreadId) return
+          void reexecuteFailedInput({
+            runtimeId: activeThread?.runtimeId ?? activeAgentRuntime,
+            threadId: activeThreadId,
+            clientDirectiveId: activeSessionFailure.receipt.clientDirectiveId
+          })
+        }
+      }
+    : null
 
   const renderRuntimeBanner = (message: string, detail?: string | null): ReactElement => (
     <RuntimeBanner
@@ -2896,6 +2989,8 @@ export function Workbench(): ReactElement {
       }
       onOpenSettings={() => openSettings('agents')}
       onRetryConnection={() => void probeRuntime('user')}
+      onRetryTurn={retryFailedTurnBanner}
+      onDismiss={dismissRuntimeError}
       onChooseRuntime={
         runtimeRecoveryOptions.canChooseExecutable
           ? () => void chooseLocalRuntime()
@@ -3028,7 +3123,7 @@ export function Workbench(): ReactElement {
               <DevelopmentPluginPanelHost
                 contribution={developmentRightPanel}
                 active={active}
-                workspaceRoot={workspaceRoot}
+                workspaceRoot={ownerWorkspaceRoot}
                 services={{ sendMessage: (request) => sendDomainWorkbenchMessage(request as never, useChatStore.getState()) }}
                 className="h-full max-h-full w-full"
                 sessionId={ownerSessionId}
@@ -3057,7 +3152,7 @@ export function Workbench(): ReactElement {
                         <div className="shrink-0 border-b border-ds-border bg-ds-sidebar px-2 py-1.5">
                           <button
                             type="button"
-                            className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-ds-xs font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
                             onClick={closeOwnerFilePreview}
                           >
                             <ArrowLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -3341,15 +3436,40 @@ export function Workbench(): ReactElement {
     rightPanelOwnerId
   ])
   const sidebarNavigationSections = useMemo(() => navigationSectionContext
-    ? installedNavigationSections.map(section => ({
-        id: section.id,
-        content: <WorkbenchNavigationSectionOutlet
-          section={section}
-          context={navigationSectionContext}
-          publish={publishNavigationOwnership}
-          showOverview={showNavigationOverview}
-        />
-      }))
+    ? installedNavigationSections
+        .filter(section => (section.contribution.placement ?? 'body') !== 'footer')
+        .map(section => ({
+          id: section.id,
+          content: <WorkbenchNavigationSectionOutlet
+            section={section}
+            context={navigationSectionContext}
+            publish={publishNavigationOwnership}
+            showOverview={showNavigationOverview}
+          />
+        }))
+    : [], [
+    installedNavigationSections,
+    navigationSectionContext,
+    publishNavigationOwnership,
+    showNavigationOverview
+  ])
+
+  /**
+   * Footer sections are pinned above the Settings row, so the account entry point
+   * stays visible no matter how long the navigation list grows.
+   */
+  const sidebarFooterNavigationSections = useMemo(() => navigationSectionContext
+    ? installedNavigationSections
+        .filter(section => (section.contribution.placement ?? 'body') === 'footer')
+        .map(section => ({
+          id: section.id,
+          content: <WorkbenchNavigationSectionOutlet
+            section={section}
+            context={navigationSectionContext}
+            publish={publishNavigationOwnership}
+            showOverview={showNavigationOverview}
+          />
+        }))
     : [], [
     installedNavigationSections,
     navigationSectionContext,
@@ -3395,11 +3515,12 @@ export function Workbench(): ReactElement {
         <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-start">
           <RemoteWorkspaceSelector />
           {(focusedAgentSurface?.busy ?? busy) ? (
-            <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
+            <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-ds-xs font-semibold text-amber-950 dark:text-amber-100">
               {t('running')}
             </span>
           ) : null}
           <WorkbenchTopBar
+            railHost={toolbarRailHost}
             focusedRightPanelMode={focusedRightPanelMode}
             onToggleFocusedRightPanelMode={toggleTopBarRightPanelMode}
             workspaceRoot={activeWorkspaceReferenceRoot}
@@ -3488,7 +3609,7 @@ export function Workbench(): ReactElement {
       <button
         type="button"
         onClick={() => { void openPrimaryChildAttention() }}
-        className="ds-no-drag mx-3 mt-1 flex shrink-0 items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-[12px] font-medium text-amber-950 transition hover:bg-amber-500/15 dark:text-amber-100"
+        className="ds-no-drag mx-3 mt-1 flex shrink-0 items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-ds-sm font-medium text-amber-950 transition hover:bg-amber-500/15 dark:text-amber-100"
       >
         <CircleAlert className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">
@@ -3498,7 +3619,7 @@ export function Workbench(): ReactElement {
               childAgentAttention.summary.counts.waitingApproval
           })}
         </span>
-        <span className="shrink-0 text-[11px] font-semibold underline-offset-2 hover:underline">
+        <span className="shrink-0 text-ds-xs font-semibold underline-offset-2 hover:underline">
           {t('sidebarChildrenLocateAttention')}
         </span>
       </button>
@@ -3519,7 +3640,8 @@ export function Workbench(): ReactElement {
         <WorkbenchMessageTimeline
           activeThreadId={activeThreadId}
           runtimeConnection={runtimeConnection}
-          runtimeError={error}
+          runtimeError={visibleRuntimeError}
+          onDismissRuntimeError={visibleRuntimeError ? dismissRuntimeError : undefined}
           onRetryConnection={() => void probeRuntime('user')}
           onOpenSettings={() => openSettings('agents')}
           autoScrollEnabled={route === 'chat' && Boolean(activeThreadId)}
@@ -3531,6 +3653,9 @@ export function Workbench(): ReactElement {
         />
         <div className="ds-no-drag flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8">
           <WorkbenchComposer
+            searchContextMentions={searchContextMentions}
+            readActiveContextMentions={readActiveContextMentions}
+            resolveDraftContextMentions={resolveDraftContextMentions}
             composerInput={composerInput}
             sessionFailure={activeSessionFailure}
             focusRequestId={composerFocusRequest}
@@ -3655,7 +3780,7 @@ export function Workbench(): ReactElement {
     >
       {visualCaptureActive ? (
         <div
-          className="pointer-events-none fixed left-1/2 top-3 z-[200] flex -translate-x-1/2 items-center gap-2 rounded-full border border-accent/25 bg-ds-card/95 px-3 py-1.5 text-[11.5px] font-semibold text-ds-ink shadow-lg backdrop-blur-xl"
+          className="pointer-events-none fixed left-1/2 top-3 z-[200] flex -translate-x-1/2 items-center gap-2 rounded-full border border-accent/25 bg-ds-card/95 px-3 py-1.5 text-ds-xs font-semibold text-ds-ink shadow-lg backdrop-blur-xl"
           role="status"
           aria-live="polite"
         >
@@ -3682,12 +3807,13 @@ export function Workbench(): ReactElement {
             title={t('sidebarExpand')}
           ><span className="absolute left-1 top-1/2 h-10 w-0.5 rounded bg-ds-border" /></button> : null}
           {leftSidebarModal && !leftSidebarCollapsed ? (
-            <button className="ds-no-drag absolute inset-0 z-30 bg-black/20" aria-label={t('sidebarCollapse')} onClick={toggleLeftSidebar} />
+            <button data-native-view-occluder="true" className="ds-no-drag absolute inset-0 z-30 bg-black/20" aria-label={t('sidebarCollapse')} onClick={toggleLeftSidebar} />
           ) : null}
           <div
             ref={sidebarOverlayRef}
             {...leftSidebarEdge.panelProps}
             hidden={leftSidebarCollapsed && !sidebarRail}
+            data-native-view-occluder={leftSidebarOverlay && !leftSidebarCollapsed ? 'true' : undefined}
             role={leftSidebarModal && !leftSidebarCollapsed ? 'dialog' : undefined}
             aria-modal={leftSidebarModal && !leftSidebarCollapsed || undefined}
             aria-label={leftSidebarModal && !leftSidebarCollapsed ? t('sidebarLocalWorkspaces') : undefined}
@@ -3697,18 +3823,19 @@ export function Workbench(): ReactElement {
           >
             <Sidebar
               collapsed={sidebarRail}
-              displayControl={<label className="flex items-center justify-between gap-2 px-2 py-1 text-[11px] text-ds-muted">
+              displayControl={<label className="flex items-center justify-between gap-2 px-2 py-1 text-ds-xs text-ds-muted">
                 {t('sidebarDisplayMode', { defaultValue: '侧栏显示' })}
                 <select aria-label={t('sidebarDisplayMode', { defaultValue: '侧栏显示' })}
                   value={leftSidebarEdge.behavior}
                   onChange={event => leftSidebarEdge.setBehavior(event.target.value as 'pinned' | 'auto' | 'hidden')}
-                  className="ds-no-drag rounded border border-ds-border bg-ds-main px-1 py-1">
+                  className="ds-no-drag rounded-md border-0 bg-transparent px-1 py-1 transition hover:bg-[var(--ds-sidebar-row-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
                   <option value="pinned">{t('panelPinned', { defaultValue: '固定显示' })}</option>
                   <option value="auto">{t('panelAutoReveal', { defaultValue: '靠近展开' })}</option>
                   <option value="hidden">{t('panelManual', { defaultValue: '手动收起' })}</option>
                 </select>
               </label>}
               navigationSections={sidebarNavigationSections}
+              footerNavigationSections={sidebarFooterNavigationSections}
               mainAreaPages={sidebarMainAreaPages}
               onSelectMainAreaPage={selectMainAreaPage}
               threads={ownershipReady ? localNavigation.localThreads : EMPTY_SIDEBAR_THREADS}
@@ -3753,15 +3880,15 @@ export function Workbench(): ReactElement {
       >
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-workbench-content>
         {activeWorkspaceOverlay && workspaceOverlaySession ? (
-          <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-ds-main" data-workbench-workspace-overlay>
+          <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-ds-main" data-workbench-workspace-overlay data-native-view-occluder="true">
             <header className="ds-no-drag flex min-h-11 shrink-0 items-center gap-2 border-b border-ds-border px-3 py-1.5">
               <SidebarTitlebarToggleButton
                 onClick={toggleLeftSidebar}
                 title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
                 ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
               />
-              <span className="min-w-0 flex-1 truncate text-xs text-ds-muted">{workspaceOverlaySession.title}</span>
-              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-ds-muted hover:bg-ds-hover disabled:opacity-40"
+              <span className="min-w-0 flex-1 truncate text-ds-sm text-ds-muted">{workspaceOverlaySession.title}</span>
+              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-ds-sm text-ds-muted hover:bg-ds-hover disabled:opacity-40"
                 disabled={!workspaceOverlaySession.runtimeId}
                 onClick={openWorkspaceOverlaySideChat}
                 aria-label={t('sidePanelOpen')} title={t('sidePanelOpen')}>
@@ -3806,11 +3933,12 @@ export function Workbench(): ReactElement {
             />
           </Suspense>
         ) : null}
-        {!mainAreaHidden && error && !(runtimeConnection !== 'ready' && !activeThreadId) ? renderRuntimeBanner(error, runtimeErrorDetail) : null}
+        {!mainAreaHidden && visibleRuntimeError && !(runtimeConnection !== 'ready' && !activeThreadId) ? renderRuntimeBanner(visibleRuntimeError, runtimeErrorDetail) : null}
 
         <div className={`flex min-h-0 flex-1 ${mainAreaHidden ? 'hidden' : ''}`} hidden={mainAreaHidden}
           style={mainAreaPageId ? { '--ds-main-area-leading-inset': sidebarRail ? 'max(0px, calc(var(--ds-window-controls-end) - var(--ds-sidebar-rail-width)))' : '0px' } as CSSProperties : undefined}>
           <WorkbenchMainAreaOutlet
+            session={{ id: activeThreadId ?? draftSurfaceSessionId, runtimeId: activeThread?.runtimeId ?? activeAgentRuntime, workspaceRoot: activeThread?.workspace || workspaceRoot || undefined }}
             pages={installedMainAreas}
             activations={mainAreaActivations}
             activePageId={mainAreaHidden ? null : mainAreaPageId}
@@ -3864,6 +3992,16 @@ export function Workbench(): ReactElement {
             rightOffset={workspaceOverlayVisible ? 16 : rightPanelVisible && !rightPanelOverlay ? rightPanelDockViewportWidth + 24 : 24}
           />
         ) : null}
+        {/*
+          The toolbar rail slot is the last column of the content row so the rail
+          stays the outermost right-edge column and does not move when the right
+          panel toggles. It collapses while empty.
+        */}
+        <div
+          ref={setToolbarRailHost}
+          className="ds-workbench-toolbar-rail-host"
+          data-workbench-toolbar-rail
+        />
       </main>
     </div>
   )

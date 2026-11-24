@@ -45,14 +45,31 @@ export function createNativeIdentityPrivateVault(options: Readonly<{
     binding ??= loadNativeIdentityPrivateVaultBinding()
     return binding
   }
+  // Share only overlapping reads, never cache settled secret material. A
+  // mutation invalidates the pending entry so later readers observe new state.
+  const reads = new Map<string, Promise<string | null>>()
   const vault: IdentityPrivateVault = {
-    read: async (ref) => requireBinding().readSecret(vaultKey(installationId, ref)),
+    read: async (ref) => {
+      const key = vaultKey(installationId, ref)
+      const existing = reads.get(key)
+      if (existing) return existing
+      const pending = Promise.resolve().then(() => requireBinding().readSecret(key))
+        .finally(() => { if (reads.get(key) === pending) reads.delete(key) })
+      reads.set(key, pending)
+      return pending
+    },
     write: async (ref, value) => {
       assertSecretValue(value)
-      requireBinding().storeSecret(vaultKey(installationId, ref), value)
+      const key = vaultKey(installationId, ref)
+      reads.delete(key)
+      requireBinding().storeSecret(key, value)
     },
     has: async (ref) => requireBinding().hasSecret(vaultKey(installationId, ref)),
-    remove: async (ref) => requireBinding().deleteSecret(vaultKey(installationId, ref))
+    remove: async (ref) => {
+      const key = vaultKey(installationId, ref)
+      reads.delete(key)
+      requireBinding().deleteSecret(key)
+    }
   }
   return Object.freeze(vault)
 }

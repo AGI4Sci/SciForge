@@ -1,3 +1,4 @@
+import { isClientToolCall } from './response-tool-transcript';
 import { createHash } from 'node:crypto';
 
 import {
@@ -28,9 +29,20 @@ import {
 } from './response-compat';
 import { hygienizeModelRequestBody } from './request-hygiene';
 import {
+  assertLocallyEnforceableJsonSchema,
+  jsonObjectStructuredOutputInstruction,
   structuredOutputValidationIssues,
   type LocalStructuredOutputContract,
 } from './structured-output-validation';
+import {
+  isRetryableUpstreamFailureCode,
+  planUpstreamRetry,
+  resolveUpstreamRetryPolicy,
+  retryAfterHeaderMs,
+  sleepWithAbort,
+  type UpstreamRetryOptions,
+  type UpstreamRetryPolicy,
+} from './upstream-retry';
 
 export type UpstreamWireProtocol = 'responses' | 'chat-completions' | 'anthropic-messages';
 
@@ -95,7 +107,7 @@ type DriverRequest = {
   signal?: AbortSignal;
   toolNameAliases?: Record<string, string>;
   onReasoningDelta?: (text: string) => void;
-  onTextDelta?: (text: string, phase?: string) => void;
+  onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void;
   traceAttempt?: (attempt: UpstreamTraceAttemptStart) => UpstreamTraceAttemptObserver | undefined;
 };
 
@@ -111,6 +123,13 @@ type UpstreamDriver = {
   prepare(options: DriverRequest): PreparedRequest;
 };
 
+type RetryRuntime = {
+  policy: UpstreamRetryPolicy;
+  now: () => number;
+  random: () => number;
+  sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+};
+
 const STABLE_PROTOCOL_ORDER: readonly UpstreamWireProtocol[] = [
   'responses',
   'chat-completions',
@@ -118,12 +137,30 @@ const STABLE_PROTOCOL_ORDER: readonly UpstreamWireProtocol[] = [
 ];
 const DEFAULT_UPSTREAM_REQUEST_TIMEOUT_MS = 300_000;
 
+/**
+ * How the retry policy ended for this logical upstream call. Present only when
+ * the call was retried at least once, so a single non-retryable failure keeps
+ * exactly the shape it always had. `code` stays the existing contract (for
+ * example `upstream_http_429`); `reasonCode` is the distinct final reason
+ * (for example `upstream_http_429_exhausted`).
+ */
+export type UpstreamRetryState = {
+  /** Wire attempts made for this logical call (>= 2). */
+  attempts: number;
+  /** True when the policy stopped while the failure was still retryable. */
+  exhausted: boolean;
+  reasonCode: string;
+};
+
 export class UpstreamRequestError extends Error {
   readonly code: string;
   readonly status: number;
   readonly upstreamStatus?: number;
   readonly responseBody?: string;
   readonly definitiveRejection: boolean;
+  /** Whether the failure class itself is transient and safely re-sendable. */
+  readonly retryable: boolean;
+  readonly retryState?: UpstreamRetryState;
 
   constructor(options: {
     code: string;
@@ -132,6 +169,8 @@ export class UpstreamRequestError extends Error {
     upstreamStatus?: number;
     responseBody?: string;
     definitiveRejection?: boolean;
+    retryable?: boolean;
+    retryState?: UpstreamRetryState;
   }) {
     super(options.message);
     this.name = 'UpstreamRequestError';
@@ -140,6 +179,8 @@ export class UpstreamRequestError extends Error {
     this.upstreamStatus = options.upstreamStatus;
     this.responseBody = options.responseBody;
     this.definitiveRejection = options.definitiveRejection === true;
+    this.retryable = options.retryable ?? isRetryableUpstreamFailureCode(options.code);
+    this.retryState = options.retryState;
   }
 }
 
@@ -197,9 +238,16 @@ export class UpstreamProtocolNegotiator {
   readonly #cache = new Map<string, UpstreamWireProtocol>();
   readonly #probes = new Map<string, Promise<UpstreamWireProtocol>>();
   readonly #corrections: CapabilityCorrections;
+  readonly #retry: RetryRuntime;
 
-  constructor(options: { corrections?: CapabilityCorrections } = {}) {
+  constructor(options: { corrections?: CapabilityCorrections } & UpstreamRetryOptions = {}) {
     this.#corrections = options.corrections ?? defaultCapabilityCorrections;
+    this.#retry = {
+      policy: resolveUpstreamRetryPolicy(options.policy),
+      now: options.now ?? Date.now,
+      random: options.random ?? Math.random,
+      sleep: options.sleep ?? sleepWithAbort,
+    };
   }
 
   cachedProtocol(
@@ -261,7 +309,31 @@ export class UpstreamProtocolNegotiator {
     let lastCapabilityError: UpstreamCapabilityError | undefined;
     let lastCorrectionError: UpstreamRequestError | undefined;
 
-    for (const [retry, protocol] of requestCandidates.entries()) {
+    const retryPolicy = this.#retry.policy;
+    const attemptTimeoutMs = upstreamRequestTimeoutMs(options.timeoutMs);
+    // One wall-clock deadline for the whole logical call: room for one full
+    // attempt plus the retry budget. See upstream-retry.ts for the policy.
+    const retryDeadlineAt = this.#retry.now() + attemptTimeoutMs + retryPolicy.retryBudgetMs;
+    // Replays stop at the first delta that reached the caller: re-sending after
+    // that would duplicate streamed output.
+    let streamedDelta = false;
+    const onTextDelta = options.onTextDelta
+      ? (text: string, phase?: string, outputIndex?: number) => {
+        streamedDelta = true;
+        options.onTextDelta?.(text, phase, outputIndex);
+      }
+      : undefined;
+    const onReasoningDelta = options.onReasoningDelta
+      ? (text: string) => {
+        streamedDelta = true;
+        options.onReasoningDelta?.(text);
+      }
+      : undefined;
+    // Monotonic per-wire-attempt index for the trace `retry` field. A retried
+    // attempt and a protocol fallback both consume one index.
+    let wireAttempt = 0;
+
+    protocolCandidates: for (const protocol of requestCandidates) {
       const driver = DRIVERS[protocol];
       const requestedLevel = explicitReasoningEffort(validatedRequest);
       if (requestedLevel) {
@@ -292,14 +364,18 @@ export class UpstreamProtocolNegotiator {
             errorCode: 'unsupported_reasoning_effort',
           });
           lastCorrectionError = error;
-          continue;
+          continue protocolCandidates;
         }
       }
       let prepared: PreparedRequest;
       try {
+        // Prepared exactly once per protocol and reused by every retry, so a
+        // retry is guaranteed to re-send the byte-identical request body.
         prepared = driver.prepare({
           ...options,
           request: hygienizeModelRequestBody(validatedRequest as Record<string, unknown>) as ResponsesRequest,
+          onTextDelta,
+          onReasoningDelta,
         });
       } catch (error) {
         if (!(error instanceof UpstreamCapabilityError)) throw error;
@@ -313,173 +389,222 @@ export class UpstreamProtocolNegotiator {
           errorCode: 'upstream_protocol_capability_unsupported',
         });
         if (cached === protocol) this.#cache.delete(cacheKey);
-        continue;
+        continue protocolCandidates;
       }
 
-      const startedAt = Date.now();
-      const traceObserver = options.traceAttempt?.({
-        protocol,
-        phase: 'request',
-        method: 'POST',
-        url: prepared.url,
-        headers: prepared.headers,
-        body: prepared.body,
-        retry,
-        upstreamModel: options.model,
-        reasoning: reasoningHandlingTrace(validatedRequest, prepared.body),
-      });
-      const timeoutSignal = AbortSignal.timeout(upstreamRequestTimeoutMs(options.timeoutMs));
-      const requestSignal = options.signal
-        ? AbortSignal.any([options.signal, timeoutSignal])
-        : timeoutSignal;
-      let response: Response;
-      try {
-        response = await options.fetchImpl(prepared.url, {
-          method: 'POST',
-          headers: prepared.headers,
-          body: JSON.stringify(prepared.body),
-          signal: requestSignal,
-        });
-      } catch (error) {
-        const latencyMs = Date.now() - startedAt;
-        const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
-        traceObserver?.error?.(requestError);
-        traceObserver?.end?.({ durationMs: latencyMs });
-        options.onAttempt?.({
-          protocol,
-          phase: 'request',
-          url: prepared.url,
-          latencyMs,
-          status: 'failed',
-          errorCode: requestError.code,
-        });
-        throw requestError;
-      }
+      let attemptsMade = 0;
+      let retryAfterMs: number | undefined;
+      let lastFailure: UpstreamRequestError | undefined;
+      /**
+       * A transient failure may be re-sent only while nothing has been streamed
+       * to the caller and the caller has not cancelled the turn.
+       */
+      const mayRetry = (failure: UpstreamRequestError): boolean =>
+        failure.retryable && !failure.definitiveRejection && !streamedDelta && !options.signal?.aborted;
 
-      traceObserver?.responseHeaders?.(
-        response.status,
-        Object.fromEntries(response.headers.entries()),
-      );
-      try {
-        response = await captureUpstreamResponse(response, (index, chunk) => {
-          traceObserver?.responseChunk?.(index, chunk);
-        });
-      } catch (error) {
-        const latencyMs = Date.now() - startedAt;
-        const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
-        traceObserver?.error?.(requestError);
-        traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
-        options.onAttempt?.({
-          protocol,
-          phase: 'request',
-          url: prepared.url,
-          latencyMs,
-          status: 'failed',
-          httpStatus: response.status,
-          errorCode: requestError.code,
-        });
-        throw requestError;
-      }
-
-      let latencyMs = Date.now() - startedAt;
-      if (!response.ok) {
-        const responseBody = await response.text().catch(() => '');
-        latencyMs = Date.now() - startedAt;
-        if (requestedLevel) {
-          const reason = reasoningLevelRejectionEvidence({
-            status: response.status,
-            body: responseBody,
-            requestedEffort: requestedLevel,
+      for (;;) {
+        if (attemptsMade > 0) {
+          const previous = lastFailure;
+          if (!previous) throw new Error('Upstream retry state was lost before the next attempt.');
+          const decision = planUpstreamRetry({
+            retryNumber: attemptsMade,
+            policy: retryPolicy,
+            nowMs: this.#retry.now(),
+            deadlineMs: retryDeadlineAt,
+            retryAfterMs,
+            random: this.#retry.random,
           });
-          if (reason) {
-            // Explicit “this level is not supported” evidence only — never auth
-            // failures, rate limits, or timeouts.
-            this.#corrections.record(
-              { model: options.model, baseUrl: options.baseUrl, protocol, level: requestedLevel },
-              { reason, upstreamStatus: response.status },
-            );
+          if (!decision.retry) {
+            throw upstreamRetriesExhausted(previous, attemptsMade, decision.reason);
           }
+          await this.#retry.sleep(decision.delayMs, options.signal);
+          // A cancelled turn surfaces the failure it already had; it never
+          // starts another attempt.
+          if (options.signal?.aborted) throw previous;
         }
-        const definitiveRejection = isDefinitiveProtocolRejection(response.status, responseBody);
-        const error = new UpstreamRequestError({
-          code: `upstream_http_${response.status}`,
-          message: `Upstream returned HTTP ${response.status}.`,
-          status: response.status,
-          upstreamStatus: response.status,
-          responseBody,
-          definitiveRejection,
-        });
-        traceObserver?.error?.(error);
-        traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
-        options.onAttempt?.({
+        attemptsMade += 1;
+        const retry = wireAttempt;
+        wireAttempt += 1;
+        const startedAt = Date.now();
+        const traceObserver = options.traceAttempt?.({
           protocol,
           phase: 'request',
+          method: 'POST',
           url: prepared.url,
-          latencyMs,
-          status: definitiveRejection ? 'rejected' : 'failed',
-          httpStatus: response.status,
-          errorCode: error.code,
+          headers: prepared.headers,
+          body: prepared.body,
+          retry,
+          upstreamModel: options.model,
+          reasoning: reasoningHandlingTrace(validatedRequest, prepared.body),
         });
-        if (!definitiveRejection) throw error;
-        lastDefinitiveError = error;
-        if (cached === protocol) this.#cache.delete(cacheKey);
-        continue;
-      }
-
-      let canonicalResponse: JsonObject;
-      try {
-        canonicalResponse = await prepared.parse(response);
-        latencyMs = Date.now() - startedAt;
-      } catch (error) {
-        latencyMs = Date.now() - startedAt;
-        const responseError = requestSignal.aborted
-          ? requestException(error, { timedOut: timeoutSignal.aborted })
-          : error instanceof UpstreamRequestError
-            ? error
-            : new UpstreamRequestError({
-              code: 'upstream_invalid_response',
-              message: 'Upstream returned an invalid response for the selected protocol.',
-              status: 502,
-            });
-        traceObserver?.error?.(responseError);
-        traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
-        options.onAttempt?.({
-          protocol,
-          phase: 'request',
-          url: prepared.url,
-          latencyMs,
-          status: responseError.definitiveRejection ? 'rejected' : 'failed',
-          httpStatus: response.status,
-          errorCode: responseError.code,
-        });
-        if (responseError.definitiveRejection) {
-          lastDefinitiveError = responseError;
-          if (cached === protocol) this.#cache.delete(cacheKey);
+        const timeoutSignal = AbortSignal.timeout(attemptTimeoutMs);
+        const requestSignal = options.signal
+          ? AbortSignal.any([options.signal, timeoutSignal])
+          : timeoutSignal;
+        let response: Response;
+        try {
+          response = await options.fetchImpl(prepared.url, {
+            method: 'POST',
+            headers: prepared.headers,
+            body: JSON.stringify(prepared.body),
+            signal: requestSignal,
+          });
+        } catch (error) {
+          const latencyMs = Date.now() - startedAt;
+          const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
+          traceObserver?.error?.(requestError);
+          traceObserver?.end?.({ durationMs: latencyMs });
+          options.onAttempt?.({
+            protocol,
+            phase: 'request',
+            url: prepared.url,
+            latencyMs,
+            status: 'failed',
+            errorCode: requestError.code,
+          });
+          if (!mayRetry(requestError)) throw requestError;
+          lastFailure = requestError;
+          retryAfterMs = undefined;
           continue;
         }
-        throw responseError;
-      }
 
-      options.onAttempt?.({
-        protocol,
-        phase: 'request',
-        url: prepared.url,
-        latencyMs,
-        status: 'ok',
-        httpStatus: response.status,
-      });
-      traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
-      this.#cache.set(cacheKey, protocol);
-      if (requestedLevel) {
-        // Recovery: the upstream accepted the level — drop any stale negative.
-        this.#corrections.clear({
-          model: options.model,
-          baseUrl: options.baseUrl,
+        traceObserver?.responseHeaders?.(
+          response.status,
+          Object.fromEntries(response.headers.entries()),
+        );
+        try {
+          response = await captureUpstreamResponse(response, (index, chunk) => {
+            traceObserver?.responseChunk?.(index, chunk);
+          });
+        } catch (error) {
+          const latencyMs = Date.now() - startedAt;
+          const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
+          traceObserver?.error?.(requestError);
+          traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+          options.onAttempt?.({
+            protocol,
+            phase: 'request',
+            url: prepared.url,
+            latencyMs,
+            status: 'failed',
+            httpStatus: response.status,
+            errorCode: requestError.code,
+          });
+          if (!mayRetry(requestError)) throw requestError;
+          lastFailure = requestError;
+          retryAfterMs = undefined;
+          continue;
+        }
+
+        let latencyMs = Date.now() - startedAt;
+        if (!response.ok) {
+          const responseBody = await response.text().catch(() => '');
+          latencyMs = Date.now() - startedAt;
+          if (requestedLevel) {
+            const reason = reasoningLevelRejectionEvidence({
+              status: response.status,
+              body: responseBody,
+              requestedEffort: requestedLevel,
+            });
+            if (reason) {
+              // Explicit “this level is not supported” evidence only — never auth
+              // failures, rate limits, or timeouts.
+              this.#corrections.record(
+                { model: options.model, baseUrl: options.baseUrl, protocol, level: requestedLevel },
+                { reason, upstreamStatus: response.status },
+              );
+            }
+          }
+          const definitiveRejection = isDefinitiveProtocolRejection(response.status, responseBody);
+          const error = new UpstreamRequestError({
+            code: `upstream_http_${response.status}`,
+            message: `Upstream returned HTTP ${response.status}.`,
+            status: response.status,
+            upstreamStatus: response.status,
+            responseBody,
+            definitiveRejection,
+          });
+          traceObserver?.error?.(error);
+          traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+          options.onAttempt?.({
+            protocol,
+            phase: 'request',
+            url: prepared.url,
+            latencyMs,
+            status: definitiveRejection ? 'rejected' : 'failed',
+            httpStatus: response.status,
+            errorCode: error.code,
+          });
+          if (!definitiveRejection) {
+            if (!mayRetry(error)) throw error;
+            lastFailure = error;
+            // Honour the server's own pacing when it states one.
+            retryAfterMs = retryAfterHeaderMs(response.headers, Date.now());
+            continue;
+          }
+          lastDefinitiveError = error;
+          if (cached === protocol) this.#cache.delete(cacheKey);
+          continue protocolCandidates;
+        }
+
+        let canonicalResponse: JsonObject;
+        try {
+          canonicalResponse = await prepared.parse(response);
+          latencyMs = Date.now() - startedAt;
+        } catch (error) {
+          latencyMs = Date.now() - startedAt;
+          const responseError = requestSignal.aborted
+            ? requestException(error, { timedOut: timeoutSignal.aborted })
+            : error instanceof UpstreamRequestError
+              ? error
+              : new UpstreamRequestError({
+                code: 'upstream_invalid_response',
+                message: 'Upstream returned an invalid response for the selected protocol.',
+                status: 502,
+              });
+          traceObserver?.error?.(responseError);
+          traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+          options.onAttempt?.({
+            protocol,
+            phase: 'request',
+            url: prepared.url,
+            latencyMs,
+            status: responseError.definitiveRejection ? 'rejected' : 'failed',
+            httpStatus: response.status,
+            errorCode: responseError.code,
+          });
+          if (responseError.definitiveRejection) {
+            lastDefinitiveError = responseError;
+            if (cached === protocol) this.#cache.delete(cacheKey);
+            continue protocolCandidates;
+          }
+          if (!mayRetry(responseError)) throw responseError;
+          lastFailure = responseError;
+          retryAfterMs = undefined;
+          continue;
+        }
+
+        options.onAttempt?.({
           protocol,
-          level: requestedLevel,
+          phase: 'request',
+          url: prepared.url,
+          latencyMs,
+          status: 'ok',
+          httpStatus: response.status,
         });
+        traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+        this.#cache.set(cacheKey, protocol);
+        if (requestedLevel) {
+          // Recovery: the upstream accepted the level — drop any stale negative.
+          this.#corrections.clear({
+            model: options.model,
+            baseUrl: options.baseUrl,
+            protocol,
+            level: requestedLevel,
+          });
+        }
+        return { protocol, response: canonicalResponse };
       }
-      return { protocol, response: canonicalResponse };
     }
 
     if (lastDefinitiveError) {
@@ -636,6 +761,31 @@ export class UpstreamProtocolNegotiator {
   }
 }
 
+/**
+ * Final failure of a logical call whose retries were spent. `code` keeps the
+ * established contract (so existing consumers and tests keep working) while
+ * `retryState.reasonCode` names the distinct final reason.
+ */
+function upstreamRetriesExhausted(
+  last: UpstreamRequestError,
+  attempts: number,
+  reason: 'attempts-exhausted' | 'deadline-exceeded' | 'retry-after-exceeded',
+): UpstreamRequestError {
+  const reasonText = reason === 'attempts-exhausted'
+    ? `the ${attempts}-attempt budget`
+    : reason === 'deadline-exceeded'
+      ? 'the retry deadline'
+      : 'the upstream Retry-After delay exceeded the remaining retry budget';
+  return new UpstreamRequestError({
+    code: last.code,
+    message: `${last.message} Gave up after ${attempts} attempt(s): ${reasonText} was exhausted.`,
+    status: last.status,
+    upstreamStatus: last.upstreamStatus,
+    responseBody: last.responseBody,
+    retryState: { attempts, exhausted: true, reasonCode: `${last.code}_exhausted` },
+  });
+}
+
 function prepareProtocolProbe(
   options: Pick<DriverRequest, 'baseUrl' | 'apiKey' | 'model'>,
   protocol: UpstreamWireProtocol,
@@ -745,9 +895,23 @@ const responsesDriver: UpstreamDriver = {
     const profile = resolveProviderCompatibility(options.compatibility, 'responses');
     let request: ResponsesRequest;
     let body: JsonObject;
+    let localContract: LocalStructuredOutputContract | undefined;
     try {
       request = normalizeProviderResponsesRequest(anthropicReasoningForOpenAI(options.request), profile);
       body = responsesRequestBody(request, options.model);
+      const format = responsesStructuredOutputFormat(request);
+      if (profile.chatStructuredOutputMode === 'json_object' && format?.type === 'json_schema') {
+        if (!isRecord(format.schema)) throw new RangeError('A json_object upstream requires a JSON Schema to enforce structured output locally.');
+        assertLocallyEnforceableJsonSchema(format.schema as JsonObject);
+        localContract = {
+          name: typeof format.name === 'string' ? format.name : 'sciforge_output',
+          ...(typeof format.description === 'string' ? { description: format.description } : {}),
+          schema: format.schema as JsonObject,
+        };
+        body.text = { ...(isRecord(body.text) ? body.text : {}), format: { type: 'json_object' } };
+        body.instructions = [body.instructions, jsonObjectStructuredOutputInstruction(localContract)]
+          .filter((entry) => typeof entry === 'string' && entry.length > 0).join('\n\n');
+      }
     } catch (error) {
       throw providerNormalizationCapabilityError(error);
     }
@@ -756,7 +920,11 @@ const responsesDriver: UpstreamDriver = {
       url: buildUpstreamEndpointUrl(options.baseUrl, 'responses'),
       headers: bearerHeaders(options.apiKey),
       body,
-      parse: (response) => parseResponsesResponse(response, options.onReasoningDelta, options.onTextDelta),
+      parse: async (response) => {
+        const canonical = await parseResponsesResponse(response, options.onReasoningDelta, options.onTextDelta);
+        if (localContract) assertLocalStructuredOutput(canonical, localContract);
+        return canonical;
+      },
     };
   },
 };
@@ -807,14 +975,18 @@ const chatCompletionsDriver: UpstreamDriver = {
 
 /**
  * A json_object upstream only guarantees JSON syntax, so the Router owns the
- * schema contract and never forwards non-conforming output. Tool calls and
- * empty output are left to the caller's existing handling.
+ * schema contract and never returns non-conforming terminal output. Tool calls
+ * remain available for the next model turn; final text must satisfy the schema.
  */
 function assertLocalStructuredOutput(response: JsonObject, contract: LocalStructuredOutputContract): void {
   const output = Array.isArray(response.output) ? response.output : [];
-  if (output.some((item) => isRecord(item) && item.type === 'function_call')) return;
-  const text = typeof response.output_text === 'string' ? response.output_text : '';
-  if (!text.trim()) return;
+  if (output.some((item) => isRecord(item) && isClientToolCall(item))) return;
+  const text = typeof response.output_text === 'string' ? response.output_text : output
+    .filter((item) => isRecord(item) && item.type === 'message' && item.role === 'assistant')
+    .flatMap((item) => isRecord(item) && Array.isArray(item.content) ? item.content : [])
+    .filter((part) => isRecord(part) && part.type === 'output_text' && typeof part.text === 'string')
+    .map((part) => (part as JsonObject).text as string)
+    .join('');
   const issues = structuredOutputValidationIssues(text, contract.schema);
   if (issues.length === 0) return;
   throw new UpstreamRequestError({
@@ -1023,7 +1195,7 @@ function assertNoUnmappedResponsesTextControls(
 async function parseResponsesResponse(
   response: Response,
   onReasoningDelta?: (text: string) => void,
-  onTextDelta?: (text: string, phase?: string) => void,
+  onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void,
 ): Promise<JsonObject> {
   if (isEventStream(response)) {
     const events = readSse(response);
@@ -1057,7 +1229,7 @@ async function parseResponsesResponse(
         const itemKey = String(payload.item_id ?? payload.output_index ?? 0);
         const key = `${itemKey}:${payload.content_index ?? 0}`;
         firstTextKey ??= key;
-        if (key === firstTextKey) onTextDelta?.(payload.delta, phases.get(itemKey));
+        if (key === firstTextKey) onTextDelta?.(payload.delta, phases.get(itemKey), typeof payload.output_index === 'number' ? payload.output_index : undefined);
       }
       const terminalEvent = eventType === 'response.completed'
         || eventType === 'response.incomplete'
@@ -1150,7 +1322,7 @@ function numericField(value: Record<string, unknown> | undefined, key: string): 
   return typeof field === 'number' && Number.isFinite(field) ? field : 0;
 }
 
-async function parseChatCompletionsResponse(response: Response, onReasoningDelta?: (text: string) => void, onTextDelta?: (text: string, phase?: string) => void): Promise<JsonObject> {
+async function parseChatCompletionsResponse(response: Response, onReasoningDelta?: (text: string) => void, onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void): Promise<JsonObject> {
   if (!isEventStream(response)) {
     const payload = await readJsonObject(response);
     assertNoErrorPayload(payload);
@@ -1179,11 +1351,11 @@ async function parseChatCompletionsResponse(response: Response, onReasoningDelta
     const choice = isRecord(choices[0]) ? choices[0] : {};
     const delta = isRecord(choice.delta) ? choice.delta : {};
     assertNoErrorPayload(chunk as JsonObject);
-    if (typeof delta.content === 'string') { content += delta.content; onTextDelta?.(delta.content); }
     if (typeof delta.reasoning_content === 'string') {
       reasoningContent += delta.reasoning_content;
       onReasoningDelta?.(delta.reasoning_content);
     }
+    if (typeof delta.content === 'string') { content += delta.content; onTextDelta?.(delta.content, undefined, reasoningContent ? 1 : 0); }
     if (choice.finish_reason !== undefined && choice.finish_reason !== null) finishReason = choice.finish_reason;
     const deltas = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
     for (const value of deltas) {
@@ -1224,7 +1396,7 @@ async function parseChatCompletionsResponse(response: Response, onReasoningDelta
   return payload;
 }
 
-async function parseAnthropicMessagesResponse(response: Response, onReasoningDelta?: (text: string) => void, onTextDelta?: (text: string, phase?: string) => void): Promise<JsonObject> {
+async function parseAnthropicMessagesResponse(response: Response, onReasoningDelta?: (text: string) => void, onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void): Promise<JsonObject> {
   if (!isEventStream(response)) {
     const payload = await readJsonObject(response);
     assertNoErrorPayload(payload);
@@ -1234,9 +1406,20 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
 
   const events = readSse(response);
   let firstTextIndex: number | undefined;
+  let firstTextOutputIndex: number | undefined;
   let stopped = false;
   let message: Record<string, unknown> = {};
   const content = new Map<number, Record<string, unknown>>();
+  const emitText = (index: number, text: string): void => {
+    firstTextIndex ??= index;
+    if (index !== firstTextIndex || !text) return;
+    if (firstTextOutputIndex === undefined) {
+      const preceding = [...content.entries()].filter(([key]) => key < index)
+        .sort(([a], [b]) => a - b).map(([, block]) => block);
+      firstTextOutputIndex = (anthropicMessageToResponse({ content: preceding }).output as JsonObject[]).length;
+    }
+    onTextDelta?.(text, undefined, firstTextOutputIndex);
+  };
   let stopReason: unknown = null;
   let stopSequence: unknown = null;
   let usage: Record<string, unknown> = {};
@@ -1256,9 +1439,8 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
     const index = typeof payload.index === 'number' ? payload.index : 0;
     if (payload.type === 'content_block_start' && isRecord(payload.content_block)) {
       content.set(index, { ...payload.content_block });
-      if (payload.content_block.type === 'text') {
-        firstTextIndex ??= index;
-        if (index === firstTextIndex && typeof payload.content_block.text === 'string') onTextDelta?.(payload.content_block.text);
+      if (payload.content_block.type === 'text' && typeof payload.content_block.text === 'string') {
+        emitText(index, payload.content_block.text);
       }
     }
     if (payload.type === 'content_block_delta' && isRecord(payload.delta)) {
@@ -1266,8 +1448,7 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
       const delta = payload.delta;
       if (delta.type === 'text_delta' && typeof delta.text === 'string') {
         current.text = `${typeof current.text === 'string' ? current.text : ''}${delta.text}`;
-        firstTextIndex ??= index;
-        if (index === firstTextIndex) onTextDelta?.(delta.text);
+        emitText(index, delta.text);
       }
       if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
         current.thinking = `${typeof current.thinking === 'string' ? current.thinking : ''}${delta.thinking}`;

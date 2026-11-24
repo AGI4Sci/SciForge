@@ -478,7 +478,10 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       })
       deviceNetworkFails = false
       deviceMode = 'active'
-      await runtime.refreshDevices()
+      // Cloud I/O itself must recover a transient device failure. Requiring a
+      // separate identity-screen refresh strands clients such as cloud notes.
+      await expect(runtime.stageAuthenticatedCloudObject(stageInput)).resolves.toMatchObject({ object })
+      expect(objectRequests).toBe(objectsBeforeOutage + 1)
       expect(principal.current()?.assurance).toBe('cloud-authenticated')
 
       expect(principal.snapshot()).toEqual(localTurnLease)

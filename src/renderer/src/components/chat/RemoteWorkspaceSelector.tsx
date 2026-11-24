@@ -117,7 +117,7 @@ export function RemoteWorkspaceSelectorView({
       <select
         aria-label={t('remoteWorkspaceSelectorLabel')}
         title={t('remoteWorkspaceSelectorLabel')}
-        className="min-h-8 min-w-0 flex-1 max-w-[245px] rounded-lg border border-ds-border-muted bg-ds-card px-2 py-1 text-[12px] font-medium text-ds-muted outline-none transition hover:bg-ds-hover focus:border-accent/45 focus:ring-1 focus:ring-accent/20"
+        className="min-h-8 min-w-0 flex-1 max-w-[245px] rounded-lg border border-ds-border-muted bg-ds-card px-2 py-1 text-ds-sm font-medium text-ds-muted outline-none transition hover:bg-ds-hover focus:border-accent/45 focus:ring-1 focus:ring-accent/20"
         value={selectedValue}
         onChange={(event) => {
           if (!event.target.value) {
@@ -138,7 +138,7 @@ export function RemoteWorkspaceSelectorView({
       {selectedWorkspace ? (
         <>
           <span
-            className={`inline-flex shrink-0 rounded-md border px-1.5 py-0.5 text-[10.5px] font-semibold ${phaseClassName(selectedWorkspace.phase)}`}
+            className={`inline-flex shrink-0 rounded-md border px-1.5 py-0.5 text-ds-2xs font-semibold ${phaseClassName(selectedWorkspace.phase)}`}
             title={statusTitle}
             aria-label={t('remoteWorkspaceConnectionStatusLabel', { status })}
           >
@@ -149,7 +149,7 @@ export function RemoteWorkspaceSelectorView({
           </span>
           {lifecycle ? (
             <span
-              className="hidden shrink-0 rounded-md border border-ds-border-muted bg-ds-subtle px-1.5 py-0.5 text-[10.5px] font-medium text-ds-faint lg:inline-flex"
+              className="hidden shrink-0 rounded-md border border-ds-border-muted bg-ds-subtle px-1.5 py-0.5 text-ds-2xs font-medium text-ds-faint lg:inline-flex"
               title={lifecycle}
             >
               {lifecycle}
@@ -161,7 +161,7 @@ export function RemoteWorkspaceSelectorView({
               <span
                 aria-label={t('remoteWorkspaceEgressLabel')}
                 title={t('remoteWorkspaceEgressDescription')}
-                className="inline-flex min-h-8 max-w-[180px] items-center truncate rounded-lg border border-ds-border-muted bg-ds-card px-2 py-1 text-[11.5px] font-medium text-ds-muted"
+                className="inline-flex min-h-8 max-w-[180px] items-center truncate rounded-lg border border-ds-border-muted bg-ds-card px-2 py-1 text-ds-xs font-medium text-ds-muted"
               >
                 {selectedEgressRoute.displayLabel}
               </span>
@@ -170,7 +170,7 @@ export function RemoteWorkspaceSelectorView({
           {action ? (
             <button
               type="button"
-              className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-card px-2 text-[11.5px] font-semibold text-ds-muted transition hover:bg-ds-hover disabled:cursor-wait disabled:opacity-60"
+              className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-card px-2 text-ds-xs font-semibold text-ds-muted transition hover:bg-ds-hover disabled:cursor-wait disabled:opacity-60"
               disabled={actionBusy || !onReconnect}
               onClick={() => onReconnect?.(selectedWorkspace.workspaceHostId)}
             >

@@ -722,13 +722,14 @@ describe('agent runtime settings', () => {
     expect(getActiveAgentRuntime(normalized)).toBe('dsh')
     expect(normalized.agents.dsh).toEqual(defaultDshRuntimeSettings())
     expect(getDshRuntimeSettings(normalized)).toEqual({
+      sandboxMode: 'workspace-write',
       command: 'dsh',
-      executablePath: '',
       selectedModel: '',
       reasoningEffort: '',
       // Fail-closed: a normalized record never enables the native shell by default.
       commandExecution: false
     })
+    expect(getDshRuntimeSettings(normalized)).not.toHaveProperty('executablePath')
   })
 
   it('does not require a local runtime API key when Codex is the active runtime', () => {
@@ -1069,7 +1070,7 @@ describe('agent runtime settings', () => {
     }))
   })
 
-  it('normalizes persisted Codex permission values to app-server-supported values', () => {
+  it('normalizes obsolete approval values while preserving an externally managed sandbox', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       agents: {
@@ -1084,7 +1085,7 @@ describe('agent runtime settings', () => {
 
     expect(getCodexRuntimeSettings(normalized)).toEqual(expect.objectContaining({
       approvalPolicy: 'never',
-      sandboxMode: 'danger-full-access'
+      sandboxMode: 'external-sandbox'
     }))
   })
 

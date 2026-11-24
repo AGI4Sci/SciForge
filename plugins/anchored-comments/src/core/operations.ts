@@ -25,6 +25,11 @@ import {
 import { createNodeFilePort, type AnchoredCommentFilePort } from '../ports/files.js'
 import type { FeedbackNetworkPort } from '../ports/network.js'
 import type { VisualCapturePort } from '../ports/visual-capture.js'
+import type { DiscussionPort } from '../ports/discussion.js'
+import { AnchoredConversationService } from './main/conversation-service.js'
+import { ProseTranslationService } from './main/prose-translation.js'
+import { SharedConversationService, type SharedConversationTransport } from './main/shared-conversation-service.js'
+import { SharedConversationStore } from './main/shared-conversation-store.js'
 
 export const ANCHORED_COMMENTS_DATA_DIRECTORY = '.sciforge'
 
@@ -45,6 +50,8 @@ export type AnchoredCommentsOperationsOptions = Readonly<{
   env?: NodeJS.ProcessEnv
   now?: () => Date
   visualCapture?: VisualCapturePort
+  discussion?: DiscussionPort
+  cloud?: SharedConversationTransport
 }>
 
 export type AnchoredCommentsOperations = Readonly<{
@@ -61,6 +68,9 @@ type WorkspaceContext = Readonly<{
   workspaceRoot: string
   dataRoot: string
   definitions: readonly AnchoredCapabilityDefinition[]
+  conversations: AnchoredConversationService
+  translation: ProseTranslationService
+  shared?: SharedConversationService
 }>
 
 /**
@@ -88,12 +98,17 @@ export function createAnchoredCommentsOperations(
   const now = options.now
   const visualCapture = options.visualCapture
   const contexts = new Map<string, WorkspaceContext>()
+  let disposed = false
 
   const contextFor = (workspaceRoot: string): WorkspaceContext => {
+    if (disposed) throw new Error('Anchored Comments lifecycle ended.')
     const dataRoot = anchoredCommentsDataRoot(workspaceRoot)
     const cached = contexts.get(dataRoot)
     if (cached) return cached
     const comments = new AnchoredCommentService(dataRoot, filesFor(dataRoot))
+    const conversations = new AnchoredConversationService(comments, options.discussion)
+    const translation = new ProseTranslationService(options.discussion)
+    const shared = options.cloud ? new SharedConversationService(new SharedConversationStore(dataRoot), options.cloud) : undefined
     let feedback: AnchoredCommentFeedbackService | undefined
     // Construct feedback lazily: a broken gateway URL must not break list/get/upsert.
     const getFeedback = (): AnchoredCommentFeedbackService => {
@@ -117,11 +132,17 @@ export function createAnchoredCommentsOperations(
       defineCapability: (definition) => definition as unknown as AnchoredCapabilityDefinition,
       getComments: () => comments,
       getFeedback,
+      getConversations: () => conversations,
+      getTranslation: () => translation,
+      ...(shared ? { getShared: () => shared } : {}),
       ...(visualCapture ? { visualCapture } : {})
     })
     const context: WorkspaceContext = Object.freeze({
       workspaceRoot,
       dataRoot,
+      conversations,
+      translation,
+      ...(shared ? { shared } : {}),
       definitions: factory.createDefinitions()
     })
     contexts.set(dataRoot, context)
@@ -143,6 +164,8 @@ export function createAnchoredCommentsOperations(
       return definition.outputSchema.parse(result.output)
     },
     dispose(): void {
+      disposed = true
+      for (const context of contexts.values()) { context.conversations.dispose(); context.translation.dispose(); context.shared?.dispose() }
       contexts.clear()
     }
   })

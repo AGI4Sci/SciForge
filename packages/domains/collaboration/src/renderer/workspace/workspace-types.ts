@@ -5,7 +5,14 @@ export type ProjectStatus = 'draft' | 'active' | 'paused' | 'completed'
 export type BoardColumnId = 'intake' | 'ready' | 'in-progress' | 'review' | 'completed'
 
 export type TaskCardModel = Readonly<{
+  /** Stable identity of the card inside the board; a planned module uses `module:<planItemId>`. */
   id: string
+  /**
+   * The canonical Cloud Task id (`tsk_…`) this card is backed by. A requirement
+   * module that has not been dispatched yet has no Cloud Task, so every Cloud
+   * capability for the card must be gated on this id instead of `id`.
+   */
+  cloudTaskId?: string
   reference: string
   moduleType: string
   title: string
@@ -13,6 +20,8 @@ export type TaskCardModel = Readonly<{
   question?: string
   assignee: string | null
   date: string
+  /** Raw ISO timestamp behind `date`, used for the hover title. */
+  dateTime?: string
   status: BoardColumnId
   priority?: 'high' | 'urgent'
   stateLabel?: string
@@ -20,6 +29,11 @@ export type TaskCardModel = Readonly<{
   unread?: boolean
   offerId?: string
   offerAvailability?: CollaborationOfferAvailability
+  /**
+   * This Desktop dismissed the newest Offer for the Task, so the assignment is
+   * gone for its Worker. A Project Owner still sees it for dispatch.
+   */
+  offerDismissed?: boolean
   /** The Owner's assignment step for this card, mirroring the Cloud offer rules. */
   assignment?: TaskAssignmentModel
   executionId?: string | null

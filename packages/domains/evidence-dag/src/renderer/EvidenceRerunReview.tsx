@@ -72,12 +72,13 @@ function RerunSession({ result, reference, workspaceRoot, invoker, onReview }: P
     try { await job(current) } catch (error) { if (current()) setState(`unknown / 请求失败：${error instanceof Error ? error.message : String(error)}；未假定执行完成或未执行。`) }
     finally { if (current()) setBusy(false) }
   }
-  return <section aria-label="显式复跑与比较">
-    <p>材料变化 → 选择受影响结论 → 读取最小已记录活动/依赖 → 预览 spec → 明确启动 → 精确对照 → 当前材料重新审阅。</p>
-    <p>既有 owner 将精确闭包解析为其保留的快照；缺失绑定或快照时显示失败，不替换为最新快照。</p>
+  return <details className="mt-2" aria-label="显式复跑与比较"><summary className="cursor-pointer text-ds-muted">复跑与比较{choices.length ? ` · ${choices.length} 项待复核` : ''}</summary><div className="mt-2 space-y-2 break-words">
+    <p>选择结论，预览复跑条件，再明确启动。</p>
+    <details><summary>范围说明</summary><p>精确闭包对应保留快照；缺失时不替换为最新版。执行、复现和科研认可分别判断。</p></details>
     <select aria-label="受影响结论" value={selected} disabled={busy} onChange={event => { generation.current++; setSelected(event.target.value); setSpec(undefined); setComparison(undefined); setState('') }}>
-      <option value="">选择需重新审查的具体结论</option>{choices.map((item, i) => <option key={i} value={item.key}>{item.title} · {item.conclusionId}</option>)}
+      <option value="">选择需重新审查的具体结论</option>{choices.map((item, i) => <option key={i} value={item.key}>{item.title} · 第 {i + 1} 项</option>)}
     </select>
+    <details><summary>引用详情</summary><p className="break-all">材料版本：{reference.versionId}</p>{choice && <p className="break-all">结论：{choice.conclusionId} · 对应证据：{choice.closureDigest}</p>}</details>
     {!choices.length && <p>没有可授权绑定的受影响结论与精确线程；复跑建议未知。</p>}
     <button disabled={!choice || busy || !visible} onClick={() => void perform(async current => {
       if (!choice) return
@@ -108,6 +109,6 @@ function RerunSession({ result, reference, workspaceRoot, invoker, onReview }: P
     {visible && comparison && <><p>{comparison.comparison.classification} · {comparison.comparison.replicationStatus} · 可核验 {String(comparison.comparison.comparisonVerifiable)}</p>
       <details open><summary>输入 / 代码软件 / 参数 / 版本差异与科学边界</summary><pre>{JSON.stringify(comparison, null, 2)}</pre><p>对照分类只基于已记录 spec、执行上下文及输出比较器；不证明科学有效性或跨条件推广。</p></details></>}
     {state && visible && <p role="status">{state}</p>}
-    <button disabled={busy || !visible} onClick={onReview}>重新审阅当前精确材料 · {reference.versionId}</button>
-  </section>
+    <button disabled={busy || !visible} onClick={onReview}>重新审阅当前材料</button>
+  </div></details>
 }

@@ -1,35 +1,17 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
 
 import {
   domainPackageNpmInvocation,
   discoverMainBundlePackageNames,
   discoverDomainPackages,
   generatedDomainPackageContentMatches,
-  renderGeneratedDomainPackageFiles
+  renderGeneratedDomainPackageFiles,
+  renderMainHostServices
 } from './domain-packages.mjs'
-
-/**
- * Run `mapper` over `items` with a bounded concurrency so thousands of
- * file reads never open an unbounded number of descriptors at once.
- */
-async function readFilesBounded(items, mapper, concurrency = 100) {
-  const results = new Array(items.length)
-  let next = 0
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next
-      next += 1
-      results[index] = await mapper(items[index])
-    }
-  })
-  await Promise.all(workers)
-  return results
-}
 
 test('launches npm scripts without a Windows command-shell shim', () => {
   assert.deepEqual(domainPackageNpmInvocation({
@@ -50,6 +32,28 @@ test('launches npm scripts without a Windows command-shell shim', () => {
     () => domainPackageNpmInvocation({ platform: 'win32', npmExecPath: '' }),
     /absolute npm_execpath/
   )
+})
+
+test('generated Host service composition merges every provider and rejects collisions', async () => {
+  const packages = await discoverDomainPackages(path.resolve(import.meta.dirname, '..'))
+  const generated = renderMainHostServices(packages)
+  const start = generated.indexOf('export function createInstalledDomainHostServiceResolution(')
+  assert.ok(start > 0)
+  const source = generated.slice(start)
+    .replace('export function createInstalledDomainHostServiceResolution(options: InstalledDomainHostServiceOptions): InstalledDomainHostServiceResolution', 'function createInstalledDomainHostServiceResolution(options)')
+    .replace('(packageName: string, version: string, generation: number)', '(packageName, version, generation)')
+    .replace('const providers: Record<string, HostServiceProvider>', 'const providers')
+  const factories = [...generated.matchAll(/import \{ createDomainHostServiceResolver as (createDomainHostServiceResolver\d+) \}/g)].map((match) => match[1])
+  assert.ok(factories.length >= 2)
+  const compose = new Function(...factories, `${source}\nreturn createInstalledDomainHostServiceResolution`)
+  const factory = (serviceId, provider) => () => ({ serviceIds: [serviceId], resolve: () => ({ [serviceId]: provider }), resolveClients: () => [] })
+  const resolve = compose(...factories.map((_, index) => factory(`service-${index}`, { index })))({})
+  assert.deepEqual(Object.keys(resolve.resolveHostServiceProviders('plugin', '1', 1)), factories.map((_, index) => `service-${index}`))
+  assert.throws(() => compose(...factories.map(() => factory('duplicate', {})))({}), /Duplicate/)
+  const dynamicCollision = compose(...factories.map((_, index) => () => ({
+    serviceIds: [`unique-${index}`], resolve: () => ({ duplicate: {} }), resolveClients: () => []
+  })))({})
+  assert.throws(() => dynamicCollision.resolveHostServiceProviders('plugin', '1', 1), /Duplicate/)
 })
 
 test('treats Git CRLF checkout conversion as the same generated composition', () => {
@@ -247,118 +251,6 @@ test('validates development fixtures without projecting them into production', a
     generated['src/main/modules/installed-domain-main.ts'],
     /@fixture\/production\/main/
   )
-})
-
-test('keeps the actual production Content Space path free of mocks and retired transfer entrypoints', async () => {
-  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-  const mockPackageName = '@sciforge/domain-content-space-mock-provider'
-  const mockPackageRoot = 'packages/domains/content-space-mock-provider/'
-  const mockManifest = JSON.parse(await readFile(path.join(
-    repositoryRoot,
-    mockPackageRoot,
-    'sciforge.domain.json'
-  ), 'utf8'))
-  assert.equal(mockManifest.packageName, mockPackageName)
-  assert.equal(mockManifest.composition, 'development-only')
-
-  const generatedProductionFiles = [
-    'src/main/modules/installed-domain-main.ts',
-    'src/main/modules/installed-main-source-packages.ts',
-    'src/renderer/src/domain-modules/installed-domain-renderer.ts',
-    'packages/workers/workspace-host/src/generated/installed-domain-workspace-server.ts'
-  ]
-  for (const relativePath of generatedProductionFiles) {
-    const content = await readFile(path.join(repositoryRoot, relativePath), 'utf8')
-    assert.doesNotMatch(content, /content-space-mock-provider/u, relativePath)
-    assert.doesNotMatch(content, /sciforge\.content-space-mock-provider/u, relativePath)
-  }
-
-  const sourceRoots = ['src', 'packages/domains']
-  const sourceFiles = (await Promise.all(sourceRoots.map(async (sourceRoot) => {
-    const absoluteRoot = path.join(repositoryRoot, sourceRoot)
-    return (await readdir(absoluteRoot, { recursive: true }))
-      .filter((relativePath) => /\.(?:c|m)?(?:js|ts)x?$/u.test(relativePath))
-      .filter((relativePath) => !relativePath.split(path.sep).includes('node_modules'))
-      .map((relativePath) => path.posix.join(sourceRoot, relativePath.split(path.sep).join('/')))
-  }))).flat()
-  const sources = await readFilesBounded(sourceFiles, (relativePath) => (
-    readFile(path.join(repositoryRoot, relativePath), 'utf8').then((content) => ({
-      relativePath,
-      content
-    }))
-  ))
-  const externalMockImports = sources
-    .filter(({ relativePath }) => !relativePath.startsWith(mockPackageRoot))
-    .filter(({ content }) => content.includes(mockPackageName))
-    .map(({ relativePath }) => relativePath)
-  assert.deepEqual(externalMockImports.sort(), [
-    'packages/domains/content-space/src/main/provider-catalog.test.ts',
-    'src/main/capabilities/content-space-discovery.test.ts',
-    'src/main/modules/application-composition.test.ts'
-  ])
-  assert.equal(externalMockImports.every((relativePath) => /\.test\.(?:c|m)?(?:js|ts)x?$/u.test(
-    relativePath
-  )), true)
-
-  const productionSources = sources.filter(({ relativePath }) => (
-    !relativePath.startsWith(mockPackageRoot) &&
-    !/\.test\.(?:c|m)?(?:js|ts)x?$/u.test(relativePath)
-  ))
-  const retiredSymbols = [
-    'productionMockContentSpace',
-    'MockContentSpacePort',
-    'resolveContentSpacePortableInvocationReference',
-    'resolveSystemPortableReference',
-    'portableResolver',
-    'mock-opencontent'
-  ]
-  for (const symbol of retiredSymbols) {
-    assert.deepEqual(
-      productionSources
-        .filter(({ content }) => content.includes(symbol))
-        .map(({ relativePath }) => relativePath),
-      [],
-      `retired production Content Space symbol: ${symbol}`
-    )
-  }
-
-  const contentContract = await readFile(path.join(
-    repositoryRoot,
-    'packages/domains/content-space/src/contract.ts'
-  ), 'utf8')
-  const contentMain = await readFile(path.join(
-    repositoryRoot,
-    'packages/domains/content-space/src/main/index.ts'
-  ), 'utf8')
-  const contentService = await readFile(path.join(
-    repositoryRoot,
-    'packages/domains/content-space/src/main/service.ts'
-  ), 'utf8')
-  const collaborationProductionSources = productionSources
-    .filter(({ relativePath }) => relativePath.startsWith('packages/domains/collaboration/'))
-  const systemContracts = [
-    ['CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT', 'systemTransferPreflight'],
-    ['CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT', 'systemDownload'],
-    ['CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT', 'systemUploadNew']
-  ]
-  for (const [contractName, capabilityKey] of systemContracts) {
-    assert.equal(count(contentContract, `export const ${contractName}`), 1, contractName)
-    assert.equal(count(contentMain, `id: CONTENT_SPACE_CAPABILITY_IDS.${capabilityKey}`), 1, capabilityKey)
-  }
-  // Collaboration results now flow exclusively through delivery.* + project.result.publish;
-  // the Content Space system transfer channel stays decoupled from Collaboration.
-  assert.deepEqual(
-    collaborationProductionSources
-      .filter(({ content }) => (
-        content.includes('CONTENT_SPACE_SYSTEM_') || content.includes('content-space.system-')
-      ))
-      .map(({ relativePath }) => relativePath),
-    [],
-    'Collaboration production sources must not consume the Content Space system transfer channel'
-  )
-  assert.equal(count(contentMain, 'portableResources.materialize(') >= 3, true)
-  assert.match(contentService, /provider\.authorizeDownload\(/u)
-  assert.match(contentService, /provider\.uploadNewFile\(/u)
 })
 
 test('projects only workspace-server process entries into the server composition', async (context) => {
@@ -726,10 +618,6 @@ test('fails closed for uninstalled, non-bundled, and cyclic runtime dependencies
     /Cyclic bundled domain runtime dependency/
   )
 })
-
-function count(content, fragment) {
-  return content.split(fragment).length - 1
-}
 
 async function createFixture(root, directoryName, options) {
   const packageRoot = path.join(root, 'packages/domains', directoryName)

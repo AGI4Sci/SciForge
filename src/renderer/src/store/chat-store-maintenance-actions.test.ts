@@ -659,6 +659,23 @@ describe('chat-store-maintenance-actions goal actions', () => {
     expect(state.blocks[0]).toMatchObject({ status: 'cancelled' })
   })
 
+  it.each(['submit', 'cancel'] as const)('resolves side conversation input via %s without changing the main transcript', async (kind) => {
+    const { actions, provider, state } = buildHarness()
+    const block: ChatBlock = { kind: 'user_input', id: 'input-block', requestId: 'side-request', questions: [], status: 'pending' }
+    const answers = [{ id: 'q', label: 'Answer', value: 'Side answer' }]
+    Object.assign(state, {
+      blocks: [{ ...block, requestId: 'main-request' }],
+      sideConversations: {
+        child: { threadId: 'child', blocks: [block] }
+      }
+    })
+    await actions.resolveUserInput('input-block', kind === 'submit' ? { kind, answers } : { kind }, 'child')
+    expect(state.blocks[0]).toMatchObject({ status: 'pending' })
+    expect(state.sideConversations.child.blocks[0]).toMatchObject({ status: kind === 'submit' ? 'submitted' : 'cancelled' })
+    if (kind === 'submit') expect(provider.submitUserInputResponse).toHaveBeenCalledWith('side-request', answers)
+    else expect(provider.cancelUserInput).toHaveBeenCalledWith('side-request')
+  })
+
   it('rejects an absent or settled input instead of reporting a successful submission', async () => {
     const { actions, provider, state } = buildHarness()
     for (const status of ['submitted', 'cancelled'] as const) {

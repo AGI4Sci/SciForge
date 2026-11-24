@@ -95,6 +95,19 @@ describe('anchored-comments workspace argument', () => {
       height: 2
     }
     const samples: Record<string, unknown> = {
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard]: { projectId: 'prj_CodeConversation01', idempotencyKey: 'idem_code_publish_0001' },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.translate]: { text: 'Explain', targetLanguage: 'zh-CN' },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor]: { threadId: 'root', current: { filePath: 'src/test.ts', side: 'new', line: 1, code: 'x', baseRevision: 'abc', hunkHeader: '', contentDigest: 'a'.repeat(64) } },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects]: {},
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull]: { projectId: 'prj_CodeConversation01' },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry]: { projectId: 'prj_CodeConversation01' },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish]: { projectId: 'prj_CodeConversation01', threadId: 'root', requestId: 'req_CodePublish00001', idempotencyKey: 'idem_code_publish_0001', messageIds: ['m1'] },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit]: { projectId: 'prj_CodeConversation01', command: {
+        protocolVersion: '1.0', type: 'project.code_conversation.append', projectId: 'prj_CodeConversation01',
+        requestId: 'req_CodePublish00001', idempotencyKey: 'idem_code_publish_0001', conversationId: 'root', message: { messageId: 'm1', kind: 'user', body: 'Question' } } },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reply]: { threadId: 'parent', requestId: 'b9d4b35c-e50f-4a2f-b248-1d048f10c711', body: 'Question' },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.cancel]: { threadId: 'parent', requestId: 'b9d4b35c-e50f-4a2f-b248-1d048f10c711' },
+      [ANCHORED_COMMENT_CAPABILITY_IDS.fork]: { threadId: 'parent', messageId: 'message', childId: 'child', body: 'Question' },
       [ANCHORED_COMMENT_CAPABILITY_IDS.list]: {},
       [ANCHORED_COMMENT_CAPABILITY_IDS.get]: { threadId: 'thread-1' },
       [ANCHORED_COMMENT_CAPABILITY_IDS.upsert]: { thread: researchThread('thread-1') },

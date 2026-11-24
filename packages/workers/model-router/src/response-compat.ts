@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 import { normalizeProviderJsonSchema } from './provider-compat';
+import { isClientToolCall, isClientToolOutput } from './response-tool-transcript';
 
 export type JsonValue =
   | null
@@ -98,6 +99,7 @@ export function reasoningOutputItem(text: string, id = makeId('rs'), signature?:
   return compactJsonObject({
     id,
     type: 'reasoning',
+    content: [{ type: 'reasoning_text', text }],
     summary: [{
       type: 'summary_text',
       text,
@@ -120,6 +122,10 @@ export function responsesToChatCompletions(
   request: ResponsesRequest,
   options: { defaultModel?: string } = {},
 ): JsonObject {
+  return responsesToMessageProtocol(request, options, 'chat');
+}
+
+function responsesToMessageProtocol(request: ResponsesRequest, options: { defaultModel?: string }, target: 'chat' | 'anthropic'): JsonObject {
   const toolAliases = chatToolNameAliasesFromResponsesTools(request.tools);
   const reasoning = isRecord(request.reasoning) ? request.reasoning : undefined;
   const text = isRecord(request.text) ? request.text : undefined;
@@ -132,7 +138,7 @@ export function responsesToChatCompletions(
   }
   return compactJsonObject({
     model: stringValue(request.model) || options.defaultModel || '',
-    messages: responsesInputToMessages(request, toolAliases),
+    messages: responsesInputToMessages(request, toolAliases, target),
     tools,
     tool_choice: tools?.length ? toolChoice : undefined,
     temperature: request.temperature,
@@ -332,7 +338,7 @@ export function responsesToAnthropicMessages(
   request: ResponsesRequest,
   options: { defaultModel?: string } = {},
 ): JsonObject {
-  const chat = responsesToChatCompletions(request, options);
+  const chat = responsesToMessageProtocol(request, options, 'anthropic');
   const chatMessages = Array.isArray(chat.messages) ? chat.messages : [];
   const system: JsonValue[] = [];
   const messages: JsonValue[] = [];
@@ -799,7 +805,9 @@ export function anthropicMessageToResponse(
     }
     if (value.type === 'thinking') {
       const thinking = stringValue(value.thinking);
-      if (thinking) output.push(reasoningOutputItem(thinking, makeId('rs'), stringValue(value.signature) || undefined));
+      if (thinking || typeof value.signature === 'string') output.push(reasoningOutputItem(
+        thinking, makeId('rs'), typeof value.signature === 'string' ? value.signature : undefined,
+      ));
       continue;
     }
     if (value.type === 'tool_use') {
@@ -910,6 +918,7 @@ export function estimateAnthropicMessagesInputTokens(request: AnthropicMessagesR
 function responsesInputToMessages(
   request: ResponsesRequest,
   toolNameAliases: Record<string, string>,
+  target: 'chat' | 'anthropic',
 ): JsonValue[] {
   const messages: JsonValue[] = [];
   if (request.instructions?.trim()) {
@@ -922,39 +931,68 @@ function responsesInputToMessages(
     const aliasByOriginal = new Map(Object.entries(toolNameAliases).map(([alias, original]) => [original, alias]));
     const pendingToolCalls: JsonObject[] = [];
     const pendingReasoning: string[] = [];
-    const flushPendingToolCalls = (): void => {
-      if (pendingToolCalls.length === 0) {
-        pendingReasoning.length = 0;
-        return;
+    const pendingContent: JsonValue[] = [];
+    const flushAssistant = (): void => {
+      if (pendingToolCalls.length || pendingContent.length || pendingReasoning.length) {
+        messages.push(compactJsonObject({
+          role: 'assistant',
+          content: pendingContent.length
+            ? pendingContent.every((part) => isRecord(part) && part.type === 'text')
+              ? pendingContent.map((part) => (part as JsonObject).text).join('\n')
+              : [...pendingContent]
+            : null,
+          reasoning_content: pendingReasoning.length ? pendingReasoning.join('\n') : undefined,
+          tool_calls: pendingToolCalls.length ? [...pendingToolCalls] : undefined,
+        }));
       }
-      messages.push(compactJsonObject({
-        role: 'assistant',
-        content: null,
-        reasoning_content: pendingReasoning.length > 0 ? pendingReasoning.join('\n') : undefined,
-        tool_calls: [...pendingToolCalls],
-      }));
       pendingToolCalls.length = 0;
       pendingReasoning.length = 0;
+      pendingContent.length = 0;
     };
     for (const item of input) {
+      if (isRecord(item) && ((isClientToolCall(item) && item.type !== 'function_call')
+          || (isClientToolOutput(item) && item.type !== 'function_call_output'))) {
+        throw new RangeError('Target message protocol cannot represent native Responses client tool transcripts.');
+      }
       if (isResponsesContinuationStateItem(item)) {
-        const reasoning = responseReasoningText(item);
-        if (reasoning) pendingReasoning.push(reasoning);
+        // `encrypted_content` is opaque state owned by the provider that issued
+        // it. A chat or Anthropic target cannot replay it and cannot use it, so
+        // dropping it only loses provider-internal reasoning replay. Throwing
+        // instead kills the whole tool loop after its first round trip, which
+        // is what a Codex session on a Chat Completions provider used to do.
+        // Compaction is not the same: it stands in for history that was folded
+        // away, so silently dropping it would lose conversation context.
+        if (item.type === 'compaction' || (target === 'chat' && item.signature !== undefined)) {
+          throw new RangeError('Target message protocol cannot represent opaque Responses continuation state.');
+        }
+        const reasoning = responseReasoningContent(item);
+        if (target === 'anthropic' && (reasoning || typeof item.signature === 'string')) pendingContent.push(compactJsonObject({
+          type: 'thinking', thinking: reasoning, signature: typeof item.signature === 'string' ? item.signature : undefined,
+        }));
+        else if (reasoning) pendingReasoning.push(reasoning);
         continue;
       }
       if (isRecord(item) && item.type === 'function_call') {
         const toolCall = responseInputFunctionCallToChatToolCall(item, aliasByOriginal);
         if (toolCall) {
           pendingToolCalls.push(toolCall.toolCall);
-          if (toolCall.reasoningContent) pendingReasoning.push(toolCall.reasoningContent);
+          if (toolCall.reasoningContent && !pendingReasoning.includes(toolCall.reasoningContent)) pendingReasoning.push(toolCall.reasoningContent);
         }
         continue;
       }
-      flushPendingToolCalls();
       const message = responseInputItemToMessage(item, aliasByOriginal);
+      if (isRecord(message) && message.role === 'assistant') {
+        if (typeof message.content === 'string' && message.content) pendingContent.push({ type: 'text', text: message.content });
+        else if (Array.isArray(message.content)) pendingContent.push(...message.content as JsonValue[]);
+        const reasoning = messageReasoningContent(message);
+        if (reasoning) pendingReasoning.push(reasoning);
+        if (isRecord(item) && item.phase === 'final_answer') flushAssistant();
+        continue;
+      }
+      flushAssistant();
       if (message) messages.push(message);
     }
-    flushPendingToolCalls();
+    flushAssistant();
   }
   if (messages.length === 0) messages.push({ role: 'user', content: '' });
   return messages;
@@ -964,9 +1002,19 @@ function isResponsesContinuationStateItem(item: unknown): item is JsonObject {
   return isRecord(item) && (item.type === 'reasoning' || item.type === 'compaction');
 }
 
+/** Full provider reasoning is distinct from an optional display summary. */
+function responseReasoningContent(item: JsonObject): string {
+  if (item.type !== 'reasoning' || !Array.isArray(item.content)) return '';
+  return item.content.filter(part => isRecord(part) && part.type === 'reasoning_text')
+    .map(part => typeof (part as JsonObject).text === 'string' ? (part as JsonObject).text : '')
+    .filter(Boolean).join('\n');
+}
+
 export function responseReasoningText(item: JsonObject): string {
-  if (item.type !== 'reasoning' || !Array.isArray(item.summary)) return '';
-  return item.summary
+  if (item.type !== 'reasoning') return '';
+  const content = Array.isArray(item.content) ? item.content.filter((part) => isRecord(part) && part.type === 'reasoning_text') : [];
+  const parts = content.length ? content : Array.isArray(item.summary) ? item.summary : [];
+  return parts
     .map((part) => isRecord(part) ? stringValue(part.text) : '')
     .filter(Boolean)
     .join('\n');
@@ -1115,16 +1163,12 @@ function responseOutputToAnthropicContent(output: JsonValue[]): JsonObject[] {
   for (const item of output) {
     if (!isRecord(item)) continue;
     if (item.type === 'reasoning') {
-      const summary = Array.isArray(item.summary) ? item.summary : [];
-      const thinking = summary
-        .map((part) => isRecord(part) ? stringValue(part.text) : '')
-        .filter(Boolean)
-        .join('\n');
-      if (thinking) {
+      const thinking = responseReasoningContent(item as JsonObject);
+      if (thinking || typeof item.signature === 'string') {
         content.push(compactJsonObject({
           type: 'thinking',
           thinking,
-          signature: stringValue(item.signature) || undefined,
+          signature: typeof item.signature === 'string' ? item.signature : undefined,
         }));
       }
       continue;
@@ -1545,7 +1589,9 @@ function chatMessageToAnthropicContent(message: Record<string, unknown>): JsonVa
     for (const part of rawContent) {
       if (!isRecord(part)) continue;
       const type = stringValue(part.type);
-      if (type === 'text' || type === 'input_text') {
+      if (type === 'thinking') {
+        content.push(part as JsonObject);
+      } else if (type === 'text' || type === 'input_text') {
         content.push({ type: 'text', text: stringValue(part.text) });
       } else if (type === 'image_url' || type === 'input_image') {
         const imageUrl = isRecord(part.image_url)

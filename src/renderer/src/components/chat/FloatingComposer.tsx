@@ -1,3 +1,5 @@
+import { removeComposerContextReference } from '../../lib/composer-context-references'
+import type { DomainRendererComposerContextItem, DomainRendererComposerContextSearchRequest, DomainRendererComposerContextRequest, DomainRendererComposerContextResult } from '@sciforge/domain-sdk/renderer'
 import {
   useCallback,
   useEffect,
@@ -21,12 +23,12 @@ import {
   Folder,
   GitFork,
   ImagePlus,
-  Paperclip,
   ListTodo,
   Loader2,
   MessageCircleMore,
   Mic,
   Minimize2,
+  Paperclip,
   PauseCircle,
   Pencil,
   Plus,
@@ -48,7 +50,6 @@ import type { AgentProviderCapabilities, AttachmentReference, ChatBlock, ReviewT
 import { useChatStore } from '../../store/chat-store'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
-  composerFileReferenceKey,
   filterWorkspaceFileMentionSuggestions,
   formatComposerFileMentionToken,
   getFileMentionAtCursor,
@@ -121,9 +122,10 @@ import {
   type WorkspaceReferenceDragDataSource
 } from '../../lib/workspace-reference-drag'
 import { registerVisibleContextComponent } from '../../lib/visible-context'
-import { WORKSPACE_ATTACHMENT_ACCEPT } from '@sciforge/domain-sdk/attachment-policy'
+import { WORKSPACE_ATTACHMENT_ACCEPT, workspaceAttachmentKind } from '@sciforge/domain-sdk/attachment-policy'
 import type { SessionFailureFact } from '../../store/chat-session-admission'
 import { FloatingComposerSessionFailure } from './FloatingComposerSessionFailure'
+import { ComposerAttachmentTray } from './ComposerAttachmentTray'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 
@@ -134,6 +136,9 @@ export type ComposerCommentReference = {
 }
 
 type Props = {
+  resolveDraftContextMentions?: (request: DomainRendererComposerContextRequest) => Promise<DomainRendererComposerContextResult>
+  readActiveContextMentions?: (request: DomainRendererComposerContextRequest) => Promise<DomainRendererComposerContextResult>
+  searchContextMentions?: (request: DomainRendererComposerContextSearchRequest) => Promise<DomainRendererComposerContextResult>
   /** A new request explicitly focuses this standard composer after navigation. */
   focusRequestId?: number
   variant?: 'default' | 'compact'
@@ -331,6 +336,10 @@ export type ComposerClipboardImageSource = ComposerImageTransferSource & {
   getData?: (format: string) => string
 }
 
+export type ComposerFileTransferSource = ComposerImageTransferSource & {
+  types?: ArrayLike<string> | null
+}
+
 export function composerWorkspaceReferenceDropFromTransfer(
   source: WorkspaceReferenceDragDataSource,
   options: {
@@ -478,33 +487,56 @@ function pathForAttachmentFile(file: File): string | undefined {
   }
 }
 
-export function imageAttachmentInputsFromTransfer(
-  source: ComposerImageTransferSource | null | undefined
-): ComposerImageAttachmentInput[] {
+function composerTransferFiles(
+  source: ComposerFileTransferSource | null | undefined,
+  accepts: (file: File) => boolean
+): File[] {
   if (!source) return []
-  const inputs: ComposerImageAttachmentInput[] = []
-  const seen = new Set<File>()
+  const files: File[] = []
+  const seen = new Set<string>()
   const addFile = (file: File | null | undefined, mimeTypeHint?: string): void => {
-    if (!file || seen.has(file)) return
-    seen.add(file)
-    const normalized = normalizedImageFile(file, mimeTypeHint)
-    if (!normalized) return
-    const path = pathForAttachmentFile(file)
-    inputs.push({
-      file: normalized,
-      ...(path ? { path } : {})
-    })
+    if (!file) return
+    // Item and file lists expose separate File objects for the same clipboard
+    // payload, so deduplicate by content identity rather than object identity.
+    const key = `${file.name}:${file.size}:${file.lastModified}:${file.type}`
+    if (seen.has(key)) return
+    const candidate = normalizedImageFile(file, mimeTypeHint) ?? file
+    if (!accepts(candidate)) return
+    seen.add(key)
+    files.push(candidate)
   }
 
   for (const item of arrayLikeValues(source.items)) {
     if (item.kind && item.kind !== 'file') continue
-    if (!isImageMimeType(item.type)) continue
     addFile(item.getAsFile?.(), item.type)
   }
   for (const file of arrayLikeValues(source.files)) {
     addFile(file)
   }
-  return inputs
+  return files
+}
+
+/**
+ * Every attachable file carried by a paste or drop payload, in payload order.
+ * The picker, paste, and drop paths all funnel through the same attachment
+ * inputs so one list owns pending attachments.
+ */
+export function attachmentInputsFromTransfer(
+  source: ComposerFileTransferSource | null | undefined
+): ComposerImageAttachmentInput[] {
+  const files = composerTransferFiles(
+    source,
+    (file) => workspaceAttachmentKind(file) !== 'unsupported'
+  )
+  return attachmentInputsFromPickedFiles(files)
+}
+
+/** Drag-time signal only: `files` stays empty until drop, so `types` decides. */
+export function transferCarriesFiles(source: ComposerFileTransferSource | null | undefined): boolean {
+  if (!source) return false
+  if (arrayLikeValues(source.files).length > 0) return true
+  if (arrayLikeValues(source.types).includes('Files')) return true
+  return arrayLikeValues(source.items).some((item) => item.kind === 'file')
 }
 
 export function attachmentInputsFromPickedFiles(files: File[]): ComposerImageAttachmentInput[] {
@@ -529,26 +561,37 @@ export function imageTransferHasImages(source: ComposerImageTransferSource | nul
   )
 }
 
-export function handleComposerImagePaste({
-  canPickAttachment,
+/**
+ * Attach every file a paste carries, not just clipboard bitmaps. A pasted
+ * bitmap without a `File` still falls back to the Electron clipboard bridge.
+ */
+export function handleComposerAttachmentPaste({
+  canAttachFiles,
   clipboardData,
   preventDefault,
   onPickAttachments,
   onPasteClipboardImage
 }: {
-  canPickAttachment: boolean
+  canAttachFiles: boolean
   clipboardData: ComposerClipboardImageSource
   preventDefault: () => void
   onPickAttachments?: (attachments: ComposerImageAttachmentInput[]) => void
   onPasteClipboardImage?: (options?: { silentNoImage?: boolean }) => void | Promise<void>
 }): boolean {
-  if (!canPickAttachment || (!onPickAttachments && !onPasteClipboardImage)) return false
-  const files = imageAttachmentInputsFromTransfer(clipboardData)
+  if (!canAttachFiles || (!onPickAttachments && !onPasteClipboardImage)) return false
+  const files = attachmentInputsFromTransfer(clipboardData)
   const hasPlainText = Boolean(clipboardData.getData?.('text/plain'))
   const hasImageTransfer = imageTransferHasImages(clipboardData)
   if (files.length > 0) {
     preventDefault()
     onPickAttachments?.(files)
+    return true
+  }
+  if (arrayLikeValues(clipboardData.files).length > 0) {
+    // The DOM paste carried files, but none is an attachable type. Never fall
+    // back to the bitmap reader here, and never swallow an ordinary text paste.
+    if (hasPlainText) return false
+    preventDefault()
     return true
   }
   if (!onPasteClipboardImage) return false
@@ -745,6 +788,9 @@ export function runParsedGoalCommandForComposer({
 }
 
 export function FloatingComposer({
+  searchContextMentions,
+  readActiveContextMentions,
+  resolveDraftContextMentions,
   focusRequestId,
   variant = 'default',
   threadIdOverride,
@@ -767,7 +813,7 @@ export function FloatingComposer({
   runtimeSessionLocked = false,
   composerReasoningEffort,
   composerServiceTier,
-  composerPermissionLevel = 'request-approval',
+  composerPermissionLevel = 'read-only',
   modelCatalog,
   composerReasoningDiscovery,
   onComposerModelChange,
@@ -916,7 +962,13 @@ export function FloatingComposer({
     visibleContextComponentId
   ])
   const canOpenAttachmentPicker = canEditComposer && Boolean(onPickAttachments) && !attachmentUploadBusy
-  const canPickAttachment = canOpenAttachmentPicker && attachmentUploadEnabled
+  // The runtime attachment store is only needed for a real store upload. Any
+  // workspace makes every entry point (picker, paste, drop) usable because the
+  // canonical import copies the file into the workspace.
+  const canAttachFiles = canEditComposer && Boolean(onPickAttachments) && (
+    attachmentUploadEnabled || Boolean(effectiveWorkspaceRoot)
+  )
+  const canPickAttachment = canAttachFiles && !attachmentUploadBusy
   const imageGenerationSettings = useImageGenerationComposerSettings()
   const imageGenerationConfigured = isImageGenerationConfigured(imageGenerationSettings)
   const showImageGenerationMenuItem = !compact && route === 'chat'
@@ -1011,9 +1063,42 @@ export function FloatingComposer({
   const slashQuery = getSlashQuery(input)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [fileMentionSuggestions, setFileMentionSuggestions] = useState<ComposerFileReference[]>([])
+  const [activeContextMentions, setActiveContextMentions] = useState<DomainRendererComposerContextItem[]>([])
+  const [draftContextMentions, setDraftContextMentions] = useState<DomainRendererComposerContextItem[]>([])
+  const [endingContextMentions, setEndingContextMentions] = useState<DomainRendererComposerContextItem[]>([])
+  const pendingEnds = endingContextMentions.filter(item => input.includes(item.content))
+  const visibleInput = pendingEnds.reduce((text, item) => text.replaceAll(`\n${item.content}`, '').replaceAll(item.content, ''), input)
+  const emptyDraft = !input.trim()
+  useEffect(() => {
+    const controller = new AbortController()
+    if (!input.trim()) { setDraftContextMentions([]); setEndingContextMentions([]); return }
+    if (!resolveDraftContextMentions) return
+    const timer = window.setTimeout(() => {
+      void resolveDraftContextMentions({ draftText: input, sessionId: activeThreadId ?? undefined,
+        runtimeId: activeAgentRuntime, workspaceRoot: effectiveWorkspaceRoot || undefined, signal: controller.signal
+      }).then(result => { if (!controller.signal.aborted) setDraftContextMentions(result.items) }).catch(() => undefined)
+    }, 100)
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [input, resolveDraftContextMentions, activeThreadId, activeAgentRuntime, effectiveWorkspaceRoot])
+  useEffect(() => {
+    const controller = new AbortController()
+    setActiveContextMentions([])
+    if (!readActiveContextMentions) return
+    void readActiveContextMentions({ draftText: '', sessionId: activeThreadId ?? undefined, runtimeId: activeAgentRuntime,
+      workspaceRoot: effectiveWorkspaceRoot || undefined, signal: controller.signal
+    }).then(result => { if (!controller.signal.aborted) {
+      setActiveContextMentions(result.items)
+      setEndingContextMentions(current => [...current, ...result.items.filter(item => !current.some(existing => existing.id === item.id))])
+    } }).catch(() => undefined)
+    return () => controller.abort()
+  }, [readActiveContextMentions, activeThreadId, activeAgentRuntime, effectiveWorkspaceRoot, emptyDraft, busy])
+  const [contextMentions, setContextMentions] = useState<DomainRendererComposerContextItem[]>([])
+  const [contextMentionLoading, setContextMentionLoading] = useState(false)
+  const [contextMentionError, setContextMentionError] = useState<string | null>(null)
   const [fileMentionLoading, setFileMentionLoading] = useState(false)
   const [selectedFileMentionIndex, setSelectedFileMentionIndex] = useState(0)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
+  const [attachmentDropActive, setAttachmentDropActive] = useState(false)
   const [imageGenerationMode, setImageGenerationMode] = useState(false)
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const [goalEditDraft, setGoalEditDraft] = useState<string | null>(null)
@@ -1282,9 +1367,9 @@ export function FloatingComposer({
       ? filteredSlashCommands[Math.min(selectedCommandIndex, filteredSlashCommands.length - 1)]
       : null
   const activeFileMention = useMemo<ComposerFileMention | null>(() => {
-    if (!fileReferenceEnabled || slashQuery != null || !effectiveWorkspaceRoot) return null
+    if ((!searchContextMentions && (!fileReferenceEnabled || !effectiveWorkspaceRoot)) || slashQuery != null) return null
     return getFileMentionAtCursor(input, composerCursor)
-  }, [composerCursor, effectiveWorkspaceRoot, fileReferenceEnabled, input, slashQuery])
+  }, [composerCursor, effectiveWorkspaceRoot, fileReferenceEnabled, input, slashQuery, searchContextMentions])
   const activeFileMentionKey = activeFileMention
     ? `${activeFileMention.start}:${activeFileMention.query}:${activeFileMention.quoted ? 'q' : 'p'}`
     : null
@@ -1294,10 +1379,25 @@ export function FloatingComposer({
     activeFileMentionKey !== dismissedFileMentionKey &&
     !composerMenuOpen &&
     !goalPanelOpen
-  const highlightedFileMention =
-    fileMentionSuggestions.length > 0
-      ? fileMentionSuggestions[Math.min(selectedFileMentionIndex, fileMentionSuggestions.length - 1)]
-      : null
+  const mentionCount = contextMentions.length + fileMentionSuggestions.length
+  const highlightedContextMention = contextMentions[selectedFileMentionIndex] ?? null
+  const highlightedFileMention = fileMentionSuggestions[selectedFileMentionIndex - contextMentions.length] ?? null
+  useEffect(() => {
+    const controller = new AbortController()
+    setContextMentions([])
+    setContextMentionError(null)
+    if (!showFileMentionMenu || !activeFileMention || !searchContextMentions) { setContextMentionLoading(false); return }
+    setContextMentionLoading(true)
+    const timer = window.setTimeout(() => {
+      void searchContextMentions({ query: activeFileMention.query, draftText: input,
+        sessionId: activeThreadId ?? undefined, runtimeId: activeAgentRuntime,
+        workspaceRoot: effectiveWorkspaceRoot || undefined, signal: controller.signal
+      }).then(result => { if (!controller.signal.aborted) setContextMentions(result.items) })
+        .catch(() => { if (!controller.signal.aborted) setContextMentionError('无法加载引用，请重试') })
+        .finally(() => { if (!controller.signal.aborted) setContextMentionLoading(false) })
+    }, 150)
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [showFileMentionMenu, activeFileMention, searchContextMentions, input, activeThreadId, activeAgentRuntime, effectiveWorkspaceRoot])
   const parsedGoalCommand = parseGoalCommand(input)
   const parsedSteerCommand = parseSteerCommand(input)
   const goalPanelDraftObjective = getGoalPanelDraftObjective(input, goalPanelOpen)
@@ -1365,7 +1465,7 @@ export function FloatingComposer({
   }, [goalPanelOpen, slashQuery])
 
   useEffect(() => {
-    if (!showFileMentionMenu || !activeFileMention || !effectiveWorkspaceRoot) {
+    if (!showFileMentionMenu || !activeFileMention || !effectiveWorkspaceRoot || !fileReferenceEnabled) {
       setFileMentionSuggestions((current) => (current.length === 0 ? current : []))
       setFileMentionLoading(false)
       return
@@ -1393,7 +1493,7 @@ export function FloatingComposer({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [activeFileMention, effectiveWorkspaceRoot, fileReferences, showFileMentionMenu])
+  }, [activeFileMention, effectiveWorkspaceRoot, fileReferences, showFileMentionMenu, fileReferenceEnabled])
 
   useEffect(() => {
     if (!composerMenuOpen && !goalPanelOpen) return
@@ -1619,6 +1719,19 @@ export function FloatingComposer({
     setComposerCursor(element.selectionStart ?? input.length)
   }
 
+  const applyContextMention = (item: DomainRendererComposerContextItem): void => {
+    if (!activeFileMention) return
+    const next = input.slice(0, activeFileMention.start) + item.content + ' '
+    setInput(next + input.slice(activeFileMention.end))
+    setContextMentions([])
+    setDraftContextMentions(current => [...current.filter(existing => existing.id !== item.id), item])
+    window.requestAnimationFrame(() => {
+      draft.textareaRef.current?.focus()
+      draft.textareaRef.current?.setSelectionRange(next.length, next.length)
+      setComposerCursor(next.length)
+    })
+  }
+
   const applyFileMention = (reference: ComposerFileReference | null): void => {
     if (!reference || !activeFileMention) return
     const next = replaceFileMentionInInput(input, activeFileMention, reference)
@@ -1638,6 +1751,22 @@ export function FloatingComposer({
     onRemoveFileReference?.(reference.relativePath, reference.workspaceRoot)
     const relativePath = reference.relativePath
     const nextInput = removeComposerFileMentionToken(input, relativePath)
+    if (nextInput !== input) {
+      setInput(nextInput)
+      window.requestAnimationFrame(() => syncComposerCursor())
+    }
+    draft.focusComposer()
+  }
+
+  const clearAllAttachments = (): void => {
+    let nextInput = input
+    for (const reference of fileReferences) {
+      onRemoveFileReference?.(reference.relativePath, reference.workspaceRoot)
+      nextInput = removeComposerFileMentionToken(nextInput, reference.relativePath)
+    }
+    for (const attachment of attachments) {
+      onRemoveAttachment?.(attachment.id)
+    }
     if (nextInput !== input) {
       setInput(nextInput)
       window.requestAnimationFrame(() => syncComposerCursor())
@@ -1709,16 +1838,21 @@ export function FloatingComposer({
     const composing = draft.isComposingEvent(event)
 
     if (!composing && showFileMentionMenu) {
-      if (event.key === 'ArrowDown' && fileMentionSuggestions.length > 0) {
+      if (event.key === 'ArrowDown' && mentionCount > 0) {
         event.preventDefault()
-        setSelectedFileMentionIndex((current) => (current + 1) % fileMentionSuggestions.length)
+        setSelectedFileMentionIndex((current) => (current + 1) % mentionCount)
         return
       }
-      if (event.key === 'ArrowUp' && fileMentionSuggestions.length > 0) {
+      if (event.key === 'ArrowUp' && mentionCount > 0) {
         event.preventDefault()
         setSelectedFileMentionIndex((current) =>
-          current === 0 ? fileMentionSuggestions.length - 1 : current - 1
+          current === 0 ? mentionCount - 1 : current - 1
         )
+        return
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && highlightedContextMention) {
+        event.preventDefault()
+        applyContextMention(highlightedContextMention)
         return
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && highlightedFileMention) {
@@ -1814,13 +1948,24 @@ export function FloatingComposer({
   }
 
   const handleComposerPaste = (event: ReactClipboardEvent<HTMLElement>): void => {
-    handleComposerImagePaste({
-      canPickAttachment,
+    handleComposerAttachmentPaste({
+      canAttachFiles,
       clipboardData: event.clipboardData,
       preventDefault: () => event.preventDefault(),
       onPickAttachments,
       onPasteClipboardImage
     })
+  }
+
+  const handleComposerDragEnter = (event: ReactDragEvent<HTMLDivElement>): void => {
+    if (!canAttachFiles || !transferCarriesFiles(event.dataTransfer)) return
+    setAttachmentDropActive(true)
+  }
+
+  const handleComposerDragLeave = (event: ReactDragEvent<HTMLDivElement>): void => {
+    const nextTarget = event.relatedTarget
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return
+    setAttachmentDropActive(false)
   }
 
   const handleComposerDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
@@ -1922,6 +2067,7 @@ export function FloatingComposer({
   }, [getVoiceDictationLevel, voiceDictationStatus])
 
   const handleComposerDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
+    setAttachmentDropActive(false)
     const workspaceReferenceDrop = composerWorkspaceReferenceDropFromTransfer(event.dataTransfer, {
       fileReferenceEnabled,
       canAddFileReference: Boolean(onAddFileReference)
@@ -1934,10 +2080,15 @@ export function FloatingComposer({
       return
     }
 
-    const imageFiles = canPickAttachment ? imageAttachmentInputsFromTransfer(event.dataTransfer) : []
     const rawFiles = Array.from(event.dataTransfer.files ?? [])
     const isImageLike = (file: File): boolean =>
       isImageMimeType(file.type) || Boolean(imageMimeTypeFromFileName(file.name))
+    // One attachment path owns the transfer, then the drop handler routes each file
+    // by kind: images go straight through, PDFs join the picked-file path, and
+    // everything else becomes a workspace file reference.
+    const imageFiles = canPickAttachment
+      ? attachmentInputsFromTransfer(event.dataTransfer).filter((input) => isImageLike(input.file))
+      : []
     const pdfFiles = rawFiles.filter((file) => !isImageLike(file) && isPdfFile(file))
     const pathFiles = rawFiles.filter((file) => !isImageLike(file) && !isPdfFile(file))
     if (imageFiles.length === 0 && pdfFiles.length === 0 && pathFiles.length === 0) return
@@ -1988,7 +2139,7 @@ export function FloatingComposer({
         ? 'ds-floating-composer ds-no-drag pointer-events-auto w-full pb-0 pt-0'
         : 'ds-floating-composer ds-no-drag ds-chat-column-inset pointer-events-auto w-full max-w-4xl pb-3 pt-0'}
     >
-      <FloatingComposerSessionFailure failure={sessionFailure} busy={busy} onReexecute={onReexecuteQueuedMessage} />
+      <FloatingComposerSessionFailure failure={sessionFailure} runtimeId={activeThread?.runtimeId ?? activeAgentRuntime} sessionId={activeThreadId} busy={busy} onReexecute={onReexecuteQueuedMessage} />
       <FloatingComposerQueuedMessages
         messages={queuedMessages}
         persistenceDegraded={queuedMessagesPersistenceDegraded}
@@ -2013,7 +2164,7 @@ export function FloatingComposer({
                 title={contextStateTitle}
               >
                 <Minimize2 className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-5">
+                <span className="min-w-0 flex-1 truncate text-ds-sm font-medium leading-5">
                   {contextStateLabel}
                 </span>
               </div>
@@ -2021,7 +2172,7 @@ export function FloatingComposer({
             {activeThreadGoal ? (
             <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(15,23,42,0.10)] backdrop-blur-xl dark:bg-ds-card/90">
               <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] leading-5">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-ds-md leading-5">
                 <span className="shrink-0 font-semibold text-ds-ink">
                   {goalBannerLabel}
                 </span>
@@ -2080,7 +2231,7 @@ export function FloatingComposer({
         {composerMenuOpen && slashQuery == null ? (
           <div
             ref={composerMenuPanelRef}
-            className="absolute bottom-12 left-1 z-40 w-48 overflow-hidden rounded-[18px] border border-ds-border bg-white py-1.5 text-[13px] text-ds-muted shadow-[0_18px_48px_rgba(15,23,42,0.16)] dark:bg-ds-card"
+            className="absolute bottom-12 left-1 z-40 w-48 overflow-hidden rounded-[18px] border border-ds-border bg-white py-1.5 text-ds-md text-ds-muted shadow-[0_18px_48px_rgba(15,23,42,0.16)] dark:bg-ds-card"
           >
             {showImageGenerationMenuItem ? (
               <>
@@ -2170,7 +2321,7 @@ export function FloatingComposer({
 
         {slashQuery != null ? (
           <div className="ds-card-strong absolute bottom-full left-1/2 z-30 mb-2 w-[calc(100%_-_1rem)] max-w-[760px] -translate-x-1/2 overflow-hidden rounded-[16px] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.14)]">
-            <div className="flex h-7 items-center px-2.5 text-[11.5px] font-semibold text-ds-muted">
+            <div className="flex h-7 items-center px-2.5 text-ds-xs font-semibold text-ds-muted">
               {t('slashCommandMenuTitle')}
             </div>
             {filteredSlashCommands.length > 0 ? (
@@ -2198,20 +2349,20 @@ export function FloatingComposer({
                         {command.icon}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13.5px] font-semibold leading-5 text-inherit">
+                        <span className="block truncate text-ds-md font-semibold leading-5 text-inherit">
                           {command.title}
                         </span>
-                        <span className="mt-0.5 block truncate text-[12px] leading-4 text-ds-faint">
+                        <span className="mt-0.5 block truncate text-ds-sm leading-4 text-ds-faint">
                           {command.description}
                         </span>
                       </span>
                       <span className="hidden min-w-[106px] shrink-0 flex-col items-end gap-1 sm:flex">
                         {command.scopeLabel ? (
-                          <span className="text-[10.5px] font-semibold leading-none text-ds-muted">
+                          <span className="text-ds-2xs font-semibold leading-none text-ds-muted">
                             {command.scopeLabel}
                           </span>
                         ) : null}
-                        <span className="max-w-[150px] truncate rounded-full border border-ds-border-muted px-2 py-0.5 text-[10.5px] font-semibold leading-4 text-ds-faint">
+                        <span className="max-w-[150px] truncate rounded-full border border-ds-border-muted px-2 py-0.5 text-ds-2xs font-semibold leading-4 text-ds-faint">
                           {command.badge ?? `/${command.id}`}
                         </span>
                       </span>
@@ -2220,7 +2371,7 @@ export function FloatingComposer({
                 })}
               </div>
             ) : (
-              <div className="rounded-[12px] border border-dashed border-ds-border-muted px-3 py-3 text-[12px] text-ds-faint">
+              <div className="rounded-[12px] border border-dashed border-ds-border-muted px-3 py-3 text-ds-sm text-ds-faint">
                 {t('slashCommandEmpty')}
               </div>
             )}
@@ -2229,13 +2380,19 @@ export function FloatingComposer({
 
         {showFileMentionMenu ? (
           <div className="ds-card-strong absolute bottom-full left-1/2 z-30 mb-2 w-[calc(100%_-_1rem)] max-w-[680px] -translate-x-1/2 overflow-hidden rounded-[16px] p-1.5 shadow-[0_18px_46px_rgba(15,23,42,0.14)]">
-            <div className="flex h-7 items-center gap-2 px-2.5 text-[11.5px] font-semibold text-ds-muted">
+            <div className="flex h-7 items-center gap-2 px-2.5 text-ds-xs font-semibold text-ds-muted">
               <FileText className="h-3.5 w-3.5 text-ds-faint" strokeWidth={1.9} />
-              <span>{t('composerFileMentionMenuTitle')}</span>
-              {fileMentionLoading ? (
+              <span>{searchContextMentions ? '引用' : t('composerFileMentionMenuTitle')}</span>
+              {fileMentionLoading || contextMentionLoading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-ds-faint" strokeWidth={1.9} />
               ) : null}
             </div>
+            {contextMentions.length > 0 ? <div role="listbox" aria-label="引用建议" className="max-h-52 overflow-y-auto">
+              {contextMentions.map(item => <button key={item.id} type="button" role="option" aria-selected={highlightedContextMention?.id === item.id}
+                onMouseDown={event => event.preventDefault()} onClick={() => applyContextMention(item)}
+                className={`block w-full rounded-lg px-3 py-2 text-left text-ds-sm ${highlightedContextMention?.id === item.id ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover'}`}>{item.title}</button>)}
+            </div> : null}
+            {contextMentionError ? <p role="status" className="px-3 py-2 text-ds-sm">{contextMentionError}</p> : null}
             {fileMentionSuggestions.length > 0 ? (
               <div className="flex max-h-[min(280px,calc(100vh-260px))] flex-col gap-0.5 overflow-y-auto pr-1">
                 {fileMentionSuggestions.map((reference) => {
@@ -2264,25 +2421,25 @@ export function FloatingComposer({
                         )}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13.5px] font-semibold leading-5 text-inherit">
+                        <span className="block truncate text-ds-md font-semibold leading-5 text-inherit">
                           {reference.name}
                         </span>
-                        <span className="mt-0.5 block truncate text-[12px] leading-4 text-ds-faint">
+                        <span className="mt-0.5 block truncate text-ds-sm leading-4 text-ds-faint">
                           {reference.relativePath}
                         </span>
                       </span>
-                      <span className="hidden max-w-[170px] shrink-0 truncate rounded-full border border-ds-border-muted px-2 py-0.5 text-[10.5px] font-semibold leading-4 text-ds-faint sm:block">
+                      <span className="hidden max-w-[170px] shrink-0 truncate rounded-full border border-ds-border-muted px-2 py-0.5 text-ds-2xs font-semibold leading-4 text-ds-faint sm:block">
                         {formatComposerFileMentionToken(reference.relativePath)}
                       </span>
                     </button>
                   )
                 })}
               </div>
-            ) : (
-              <div className="rounded-[12px] border border-dashed border-ds-border-muted px-3 py-3 text-[12px] text-ds-faint">
-                {fileMentionLoading ? t('composerFileMentionLoading') : t('composerFileMentionEmpty')}
+            ) : !contextMentions.length ? (
+              <div className="rounded-[12px] border border-dashed border-ds-border-muted px-3 py-3 text-ds-sm text-ds-faint">
+                {fileMentionLoading || contextMentionLoading ? t('composerFileMentionLoading') : t('composerFileMentionEmpty')}
               </div>
-            )}
+            ) : null}
           </div>
         ) : null}
 
@@ -2307,7 +2464,7 @@ export function FloatingComposer({
                         autoFocus
                         value={goalEditDraft}
                         onChange={(event) => setGoalEditDraft(event.target.value)}
-                        className="h-full min-w-0 w-full resize-none overflow-y-auto rounded-lg border border-ds-border-muted bg-ds-card px-2 py-1 text-[14px] leading-5 text-ds-ink outline-none focus:border-accent"
+                        className="h-full min-w-0 w-full resize-none overflow-y-auto rounded-lg border border-ds-border-muted bg-ds-card px-2 py-1 text-ds-lg leading-5 text-ds-ink outline-none focus:border-accent"
                         aria-label={t('goalComposerPlaceholder')}
                       />
                       <button type="button" aria-label={t('goalComposerPlaceholder')} className="absolute inset-x-2 -bottom-1 z-10 h-2 cursor-ns-resize" onPointerDown={(event) => {
@@ -2316,12 +2473,12 @@ export function FloatingComposer({
                       }} />
                     </div>
                   ) : (
-                    <div className="truncate text-[14px] font-semibold text-ds-ink">
+                    <div className="truncate text-ds-lg font-semibold text-ds-ink">
                       {activeThreadGoal ? activeThreadGoal.objective : t('goalNoActiveTitle')}
                     </div>
                   )}
                   {activeThreadGoal ? (
-                    <span className="shrink-0 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-[11px] font-semibold text-ds-muted">
+                    <span className="shrink-0 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-ds-xs font-semibold text-ds-muted">
                       {t(`goalStatusShort.${activeThreadGoal.status}`)}
                     </span>
                   ) : null}
@@ -2332,7 +2489,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={!goalEditDraft.trim()}
                       onClick={updateGoalFromPanel}
-                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45"
+                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-ds-sm font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {t('goalSetCurrentInput')}
                     </button>
@@ -2341,7 +2498,7 @@ export function FloatingComposer({
                     <button
                       type="button"
                       onClick={setGoalFromComposerInput}
-                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-ds-sm font-semibold text-ds-ink transition hover:bg-ds-hover"
                     >
                       {t('goalSetCurrentInput')}
                     </button>
@@ -2409,11 +2566,13 @@ export function FloatingComposer({
         ) : null}
 
         <div
-          className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
+          className={`ds-composer-shell ds-chat-composer ds-frosted ds-no-drag relative flex flex-col gap-1 px-3 pb-2 pt-2 transition ${
             draft.focused ? 'ds-chat-composer-focus' : ''
           } ${compact ? 'rounded-[24px] px-3 py-2 shadow-none' : ''}`}
           onMouseDown={handleComposerShellMouseDown}
           onPaste={handleComposerPaste}
+          onDragEnter={handleComposerDragEnter}
+          onDragLeave={handleComposerDragLeave}
           onDragOver={handleComposerDragOver}
           onDrop={handleComposerDrop}
         >
@@ -2424,16 +2583,16 @@ export function FloatingComposer({
                   <FileEdit className="h-4 w-4" strokeWidth={1.8} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] font-semibold text-ds-ink">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ds-md font-semibold text-ds-ink">
                     <span className="truncate">{t('composerChangedFilesTitle', { count: changedFiles.length })}</span>
-                    <span className="font-mono text-[12px] text-ds-diff-added">
+                    <span className="font-mono text-ds-sm text-ds-diff-added">
                       +{effectiveChangedFileStats.added}
                     </span>
-                    <span className="font-mono text-[12px] text-ds-diff-removed">
+                    <span className="font-mono text-ds-sm text-ds-diff-removed">
                       -{effectiveChangedFileStats.removed}
                     </span>
                   </div>
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ds-muted">
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ds-sm text-ds-muted">
                     {visibleChangedFiles.map((file) => (
                       <span key={file.path} className="max-w-[220px] truncate" title={file.path}>
                         {file.path}
@@ -2451,7 +2610,7 @@ export function FloatingComposer({
                     <button
                       type="button"
                       onClick={onOpenChanges}
-                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+                      className="rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-ds-sm font-semibold text-ds-ink transition hover:bg-ds-hover"
                     >
                       {t('composerOpenChanges')}
                     </button>
@@ -2461,7 +2620,7 @@ export function FloatingComposer({
                       type="button"
                       disabled={reviewChangesDisabled}
                       onClick={onReviewChanges}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 py-1.5 text-ds-sm font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-55"
                     >
                       <SearchCode className="h-3.5 w-3.5" strokeWidth={1.8} />
                       {t('composerReviewChanges')}
@@ -2473,7 +2632,7 @@ export function FloatingComposer({
           ) : null}
           {imageGenerationMode ? (
             <div className="flex flex-wrap items-center gap-2 px-1 pb-0.5">
-              <span className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-[12px] font-semibold text-accent shadow-sm">
+              <span className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-ds-sm font-semibold text-accent shadow-sm">
                 <ImagePlus className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
                 <span className="truncate">{t('composerImageGenerationMode')}</span>
                 <button
@@ -2493,19 +2652,51 @@ export function FloatingComposer({
               </span>
             </div>
           ) : null}
+          {draftContextMentions.some(item => input.includes(item.content)) ? <div className="flex flex-wrap gap-2 px-1" aria-label="待发送引用">
+            {draftContextMentions.filter(item => input.includes(item.content)).map(item => <span key={item.id} className="inline-flex items-center gap-1 rounded-lg border border-ds-border px-2 py-1 text-ds-sm">
+              <span>{item.title}</span><button type="button" aria-label={`移除引用：${item.title}`} onClick={() => {
+                setInput(removeComposerContextReference(input, item.content).trim())
+                setDraftContextMentions(current => current.filter(value => value.id !== item.id))
+                draft.focusComposer()
+              }}><X className="h-3 w-3" /></button>
+            </span>)}
+          </div> : null}
+          {pendingEnds.length ? <div className="flex flex-wrap gap-2 px-1" aria-label="关联变更">
+            {pendingEnds.map(item => <span key={item.id} className="inline-flex items-center gap-1 rounded-lg border border-ds-border px-2 py-1 text-ds-sm">
+              <span>下次发送结束关联：{item.title}</span><button type="button" aria-label={`撤销结束关联：${item.title}`} onClick={() => setInput(removeComposerContextReference(input, item.content).trim())}>撤销</button>
+            </span>)}
+          </div> : null}
+          {activeContextMentions.length ? <div className="flex flex-wrap gap-2 px-1" aria-label="当前关联">
+            {activeContextMentions.filter(item => !input.includes(item.content)).map(item => <span key={item.id} className="inline-flex items-center gap-1 rounded-lg border border-ds-border px-2 py-1 text-ds-sm">
+              <span>{item.title}</span><button type="button" aria-label={`结束关联：${item.title}`} onClick={() => {
+                setEndingContextMentions(current => [...current.filter(value => value.id !== item.id), item])
+                setInput(`${input}${input ? '\n' : ''}${item.content}`)
+                draft.focusComposer()
+              }}><X className="h-3 w-3" /></button>
+            </span>)}
+          </div> : null}
+          <ComposerAttachmentTray
+            fileReferences={fileReferences}
+            attachments={attachments}
+            uploadError={attachmentUploadError}
+            onPreviewFileReference={onPreviewFileReference}
+            onRemoveFileReference={onRemoveFileReference ? removeFileReference : undefined}
+            onRemoveAttachment={onRemoveAttachment}
+            onClearAll={clearAllAttachments}
+          />
           <textarea
             ref={draft.textareaRef}
             data-visual-context-sensitive="true"
             rows={1}
-            className={`ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-[15px] leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
+            className={`ds-no-drag block w-full min-w-0 resize-none break-words bg-transparent px-1 py-2.5 text-ds-xl leading-[1.45] text-ds-ink placeholder:text-ds-faint focus:outline-none [overflow-wrap:anywhere] ${
               canEditComposer ? '' : 'opacity-80'
-            } ${compact ? 'text-[14px] py-2' : 'min-h-[40px]'}`}
+            } ${compact ? 'text-ds-lg py-2' : 'min-h-[40px]'}`}
             placeholder={placeholder}
-            value={input}
+            value={pendingEnds.length ? visibleInput : input}
             disabled={!canEditComposer}
             onChange={(e) => {
               draft.resetHistoryNavigation(e.target.value)
-              setInput(e.target.value)
+              setInput(pendingEnds.length ? `${e.target.value}\n${pendingEnds.map(item => item.content).join('\n')}` : e.target.value)
               setComposerCursor(e.target.selectionStart ?? e.target.value.length)
               setDismissedFileMentionKey(null)
             }}
@@ -2524,7 +2715,7 @@ export function FloatingComposer({
               {commentReferences.map((reference) => (
                 <span
                   key={reference.id}
-                  className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1 rounded-lg border border-violet-500/25 bg-violet-500/10 px-1.5 text-[12px] font-medium text-violet-800 dark:text-violet-200"
+                  className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1 rounded-lg border border-violet-500/25 bg-violet-500/10 px-1.5 text-ds-sm font-medium text-violet-800 dark:text-violet-200"
                   title={reference.comment}
                 >
                   <MessageCircleMore className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
@@ -2544,114 +2735,6 @@ export function FloatingComposer({
               ))}
             </div>
           ) : null}
-          {fileReferences.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 px-1">
-              {fileReferences.map((reference) => (
-                <span
-                  key={composerFileReferenceKey(reference)}
-                  className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-card/80 px-1.5 text-[12px] font-medium text-ds-muted"
-                  title={reference.relativePath}
-                >
-                  {onPreviewFileReference ? (
-                    <button
-                      type="button"
-                      onClick={() => onPreviewFileReference(reference)}
-                      className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                      aria-label={t('composerOpenFileReference', { name: reference.relativePath })}
-                      title={t('composerOpenFileReference', { name: reference.relativePath })}
-                    >
-                      {reference.kind === 'directory' ? (
-                        <Folder className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                      ) : (
-                        <FileText className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                      )}
-                      <span className="max-w-52 truncate">{reference.relativePath}</span>
-                    </button>
-                  ) : (
-                    <>
-                      {reference.kind === 'directory' ? (
-                        <Folder className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                      ) : (
-                        <FileText className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                      )}
-                      <span className="max-w-52 truncate">{reference.relativePath}</span>
-                    </>
-                  )}
-                  {reference.kind === 'pdf' || reference.mimeType === 'application/pdf' ? (
-                    <span className="rounded bg-ds-hover px-1 py-0.5 font-mono text-[10px] leading-none text-ds-faint">
-                      PDF
-                    </span>
-                  ) : null}
-                  {onRemoveFileReference ? (
-                    <button
-                      type="button"
-                      onClick={() => removeFileReference(reference)}
-                      className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                      aria-label={t('composerRemoveFileReference')}
-                      title={t('composerRemoveFileReference')}
-                    >
-                      <X className="h-3 w-3" strokeWidth={2} />
-                    </button>
-                  ) : null}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {attachments.length > 0 || attachmentUploadError ? (
-            <div className="flex flex-wrap items-center gap-2 px-1">
-              {attachments.map((attachment) => (
-                attachment.previewUrl ? (
-                  <span
-                    key={attachment.id}
-                    className="ds-no-drag relative block h-20 w-20 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm"
-                    title={attachment.name || attachment.id}
-                  >
-                    <img
-                      src={attachment.previewUrl}
-                      alt={attachment.name || attachment.id}
-                      className="h-full w-full object-cover"
-                    />
-                    {onRemoveAttachment ? (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveAttachment(attachment.id)}
-                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-950 text-white shadow-sm transition hover:bg-zinc-800"
-                        aria-label={t('composerRemoveAttachment')}
-                        title={t('composerRemoveAttachment')}
-                      >
-                        <X className="h-3 w-3" strokeWidth={2.2} />
-                      </button>
-                    ) : null}
-                  </span>
-                ) : (
-                  <span
-                    key={attachment.id}
-                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/80 px-2 text-[12px] font-medium text-ds-muted"
-                    title={attachment.id}
-                  >
-                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
-                    <span className="max-w-40 truncate">{attachment.name || attachment.id}</span>
-                    {onRemoveAttachment ? (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveAttachment(attachment.id)}
-                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                        aria-label={t('composerRemoveAttachment')}
-                        title={t('composerRemoveAttachment')}
-                      >
-                        <X className="h-3 w-3" strokeWidth={2} />
-                      </button>
-                    ) : null}
-                  </span>
-                )
-              ))}
-              {attachmentUploadError ? (
-                <span className="min-w-0 break-words text-[12px] font-medium text-red-600 dark:text-red-300">
-                  {attachmentUploadError}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
           {showAttachmentToolbarButton ? (
             <input
               ref={fileInputRef}
@@ -2666,7 +2749,7 @@ export function FloatingComposer({
             <div
               role="status"
               aria-live="polite"
-              className="ds-no-drag flex min-w-0 items-center gap-2 rounded-xl border border-ds-border-muted bg-ds-card/76 px-2.5 py-2 text-[12.5px] font-medium leading-5 text-ds-muted"
+              className="ds-no-drag flex min-w-0 items-center gap-2 rounded-xl border border-ds-border-muted bg-ds-card/76 px-2.5 py-2 text-ds-sm font-medium leading-5 text-ds-muted"
             >
               <span className="min-w-0 flex-1 break-words">
                 {t('composerReasoningEffortReset', {
@@ -2691,7 +2774,7 @@ export function FloatingComposer({
             <div
               role={voiceDictation.error ? 'alert' : 'status'}
               aria-live={voiceDictation.error ? 'assertive' : 'polite'}
-              className={`ds-no-drag flex min-w-0 flex-wrap items-center gap-2 rounded-xl border px-2.5 py-2 text-[12.5px] font-medium leading-5 ${
+              className={`ds-no-drag flex min-w-0 flex-wrap items-center gap-2 rounded-xl border px-2.5 py-2 text-ds-sm font-medium leading-5 ${
                 voiceDictation.error
                   ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/35 dark:bg-red-500/10 dark:text-red-200'
                   : 'border-ds-border-muted bg-ds-card/76 text-ds-muted'
@@ -2731,7 +2814,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => voiceDictation.stop('insert')}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-2.5 text-ds-sm font-semibold text-ds-ink transition hover:bg-ds-hover"
                   >
                     <Check className="h-3.5 w-3.5" strokeWidth={2} />
                     <span>{t('composerVoiceInsert')}</span>
@@ -2739,7 +2822,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => voiceDictation.stop('send')}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-zinc-950 px-2.5 text-[12px] font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-zinc-950 px-2.5 text-ds-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
                   >
                     <Send className="h-3.5 w-3.5" strokeWidth={2} />
                     <span>{t('composerVoiceSend')}</span>
@@ -2791,7 +2874,7 @@ export function FloatingComposer({
                     </button>
                     {mode === 'plan' ? (
                       <span
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-ds-md font-medium text-ds-muted"
                         title={t('slashCommandPlanTitle')}
                       >
                         <ListTodo className="h-3.5 w-3.5" strokeWidth={1.9} />
@@ -2800,7 +2883,7 @@ export function FloatingComposer({
                     ) : null}
                     {activeThreadGoal?.status === 'active' ? (
                       <span
-                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-[13px] font-medium text-ds-muted"
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-ds-hover px-2.5 text-ds-md font-medium text-ds-muted"
                         title={t('slashCommandGoalTitle')}
                       >
                         <Target className="h-3.5 w-3.5" strokeWidth={1.9} />
@@ -2893,30 +2976,39 @@ export function FloatingComposer({
               </button>
             </div>
           </div>
+          {attachmentDropActive ? (
+            <div className="ds-no-drag pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[inherit] border-2 border-dashed border-accent/70 bg-ds-card/85 backdrop-blur-sm">
+              <span className="flex items-center gap-2 px-3 text-center text-ds-md font-semibold text-accent">
+                <Paperclip className="h-4 w-4 shrink-0" strokeWidth={2} />
+                <span>{t('composerAttachmentsDropHint')}</span>
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
       {compact ? null : (
         <div className="ds-composer-footer mt-1 flex min-h-7 flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5 px-3">
           <div className="ds-composer-footer-left flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {onComposerPermissionLevelChange ? (
-              <label className="ds-no-drag inline-flex min-h-7 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2 text-[12px] font-medium text-ds-muted shadow-sm">
+              <label className="ds-no-drag inline-flex min-h-7 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2 text-ds-sm font-medium text-ds-muted shadow-sm">
                 <span className="sr-only">{t('composerPermissionLabel')}</span>
                 <select
                   aria-label={t('composerPermissionLabel')}
                   value={composerPermissionLevel}
                   onChange={(event) => onComposerPermissionLevelChange(event.target.value as AgentPermissionLevel)}
-                  className="max-w-[8.5rem] cursor-pointer appearance-none bg-transparent text-[12px] font-medium text-ds-muted outline-none"
+                  className="max-w-[8.5rem] cursor-pointer appearance-none bg-transparent text-ds-sm font-medium text-ds-muted outline-none"
                 >
-                  <option value="request-approval">{t('composerPermissionRequestApproval')}</option>
-                  <option value="assisted-approval">{t('composerPermissionAssistedApproval')}</option>
-                  <option value="full-access">{t('composerPermissionFullAccess')}</option>
+                  {composerPermissionLevel === 'external-sandbox' ? <option value="external-sandbox" disabled>{t('composerPermissionExternalSandbox')}</option> : null}
+                  <option value="read-only">{t('composerPermissionReadOnly')}</option>
+                  <option value="workspace-write">{t('composerPermissionWorkspaceWrite')}</option>
+                  <option value="danger-full-access">{t('composerPermissionFullAccess')}</option>
                 </select>
               </label>
             ) : null}
             <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
             {showThreadUsageFooter ? (
               <div
-                className="ds-composer-usage ds-no-drag inline-flex min-h-7 max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-visible rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 py-0.5 text-[12.5px] font-medium leading-5 text-ds-muted shadow-sm"
+                className="ds-composer-usage ds-no-drag inline-flex min-h-7 max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-visible rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 py-0.5 text-ds-sm font-medium leading-5 text-ds-muted shadow-sm"
                 title={
                   threadUsage
                     ? t('sessionUsageDetailsTitle', {
@@ -2990,7 +3082,7 @@ export function FloatingComposer({
             ) : null}
           </div>
           {footerHint ? (
-            <div className="ds-composer-footer-hint min-w-0 flex-1 text-right text-[12.5px] font-medium text-ds-faint">
+            <div className="ds-composer-footer-hint min-w-0 flex-1 text-right text-ds-sm font-medium text-ds-faint">
               <span className="block truncate">{footerHint}</span>
             </div>
           ) : null}

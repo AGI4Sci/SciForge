@@ -526,9 +526,9 @@ describe('MessageTimeline local runtime metadata smoke', () => {
           result: {
             ok: true,
             status: 'rendered',
-            outputPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.png',
-            manifestPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.manifest.json',
-            artifactManifestPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/artifacts/generated-image.generated-image.artifact.json'
+            outputPath: '/Users/test-user/.sciforge/default_workspace/.sciforge/images/generated-image.png',
+            manifestPath: '/Users/test-user/.sciforge/default_workspace/.sciforge/images/generated-image.manifest.json',
+            artifactManifestPath: '/Users/test-user/.sciforge/default_workspace/.sciforge/artifacts/generated-image.generated-image.artifact.json'
           }
         }
       }),
@@ -538,8 +538,8 @@ describe('MessageTimeline local runtime metadata smoke', () => {
     expect(timelineImagesFromToolBlock(block)).toEqual([
       expect.objectContaining({
         artifactKind: 'generated_image',
-        outputPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.png',
-        workspaceRoot: '/Users/yhh/.sciforge/default_workspace',
+        outputPath: '/Users/test-user/.sciforge/default_workspace/.sciforge/images/generated-image.png',
+        workspaceRoot: '/Users/test-user/.sciforge/default_workspace',
         sourceTool: 'image_generation'
       })
     ])
@@ -996,7 +996,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
     expect(html).not.toContain('grep detail should stay tucked away')
   })
 
-  it('expands the live work timeline by default while keeping tool details collapsed', () => {
+  it('keeps live technical work behind the process disclosure by default', () => {
     const blocks: ChatBlock[] = [
       {
         kind: 'user',
@@ -1029,9 +1029,8 @@ describe('MessageTimeline local runtime metadata smoke', () => {
       })
     )
 
-    expect(html).toContain('aria-expanded="true"')
-    expect(html).toContain('Read')
-    expect(html).toContain('/tmp/project/src/app.ts')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('/tmp/project/src/app.ts')
     expect(html).not.toContain('running timeline detail should stay collapsed')
   })
 

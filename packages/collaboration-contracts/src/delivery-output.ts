@@ -2,9 +2,31 @@ import { isPortableWorkspacePathSegment, portableWorkspacePathComparisonKey } fr
 import { z } from 'zod'
 
 import { objectIdSchema, sha256Schema } from './core.js'
-
 export const DELIVERY_MAX_FILE_COUNT = 20
-export const DELIVERY_MAX_TOTAL_BYTES = 200 * 1024 * 1024
+// Historical read ceilings must not track mutable staging/admission policy.
+export const DELIVERY_MAX_FILE_BYTES = 256 * 1024 * 1024
+// Read/wire ceilings are independent of deployment admission. Never lower them
+// when closing a rollout gate: already sealed facts must remain readable.
+export const DELIVERY_MAX_TOTAL_BYTES = 512 * 1024 * 1024
+export const DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES = 200 * 1024 * 1024
+export const DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES = 200 * 1024 * 1024
+
+/** Explicit operator-controlled rollout policy, not a claim about client versions. */
+export function deliveryAdmissionPolicy(largeCapacityEnabled = false) {
+  return Object.freeze({
+    maxFileBytes: largeCapacityEnabled ? DELIVERY_MAX_FILE_BYTES : DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES,
+    maxTotalBytes: largeCapacityEnabled ? DELIVERY_MAX_TOTAL_BYTES : DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES,
+    maxFileCount: DELIVERY_MAX_FILE_COUNT,
+    largeCapacityEnabled
+  })
+}
+
+export function deliveryAdmissionAllows(outputs: readonly Readonly<{ byteCount: number }>[], largeCapacityEnabled = false): boolean {
+  const policy = deliveryAdmissionPolicy(largeCapacityEnabled)
+  return outputs.length <= policy.maxFileCount && outputs.every(({ byteCount }) =>
+    Number.isSafeInteger(byteCount) && byteCount >= 0 && byteCount <= policy.maxFileBytes) &&
+    outputs.reduce((total, { byteCount }) => total + byteCount, 0) <= policy.maxTotalBytes
+}
 
 const deliveryFileNameSchema = z.string().min(1).max(255)
   .refine((value) => value === value.trim() && isPortableWorkspacePathSegment(value),
@@ -21,13 +43,9 @@ export const deliveryOutputDescriptorSchema = z.object({
   role: z.enum(['declared', 'member']),
   source: z.enum(['ai', 'member', 'attachment']),
   mediaType: z.string().trim().min(1).max(255),
-  byteCount: z.number().int().nonnegative().max(DELIVERY_MAX_TOTAL_BYTES),
+  byteCount: z.number().int().nonnegative().max(DELIVERY_MAX_FILE_BYTES),
   sha256: sha256Schema
-}).strict().superRefine((output, context) => {
-  if (output.role === 'declared' && output.source !== 'ai') {
-    context.addIssue({ code: 'custom', path: ['source'], message: 'A declared Task output must retain its AI provenance.' })
-  }
-})
+}).strict()
 export type DeliveryOutputDescriptor = z.infer<typeof deliveryOutputDescriptorSchema>
 
 function validateDeliveryOutputs(outputs: readonly DeliveryOutputDescriptor[], context: z.RefinementCtx): void {
@@ -36,7 +54,7 @@ function validateDeliveryOutputs(outputs: readonly DeliveryOutputDescriptor[], c
     context.addIssue({ code: 'custom', message: 'Delivery output paths must be unique on portable filesystems.' })
   }
   if (outputs.reduce((total, { byteCount }) => total + byteCount, 0) > DELIVERY_MAX_TOTAL_BYTES) {
-    context.addIssue({ code: 'custom', message: 'Delivery output bytes exceed the 200 MiB bundle limit.' })
+    context.addIssue({ code: 'custom', message: 'Delivery output bytes exceed the 512 MiB bundle limit.' })
   }
 }
 

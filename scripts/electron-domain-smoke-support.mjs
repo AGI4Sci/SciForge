@@ -39,18 +39,11 @@ export const CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS = Object.freeze([
   'identity.cloud.refresh-devices',
   'identity.cloud.revoke-device'
 ])
-export const CONTENT_SPACE_SMOKE_CAPABILITY_IDS = Object.freeze([
-  'content-space.list-provider-instances',
-  'content-space.describe-capabilities',
-  'content-space.list-containers',
-  'content-space.list-entries',
-  'content-space.observe-entry',
-  'content-space.create-folder',
-  'content-space.upload-new',
-  'content-space.download',
-  'content-space.resolve-portal-target',
-  'content-space.open-portal-target',
-  'content-space.observe-immutable-version'
+export const CLOUD_NOTES_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'siyuan.service.status',
+  'siyuan.space.list',
+  'siyuan.document.open',
+  'siyuan.document.create'
 ])
 export const COLLABORATION_SMOKE_CAPABILITY_IDS = Object.freeze([
   'collaboration.status.read',
@@ -64,6 +57,7 @@ export const COLLABORATION_SMOKE_CAPABILITY_IDS = Object.freeze([
   'collaboration.sync.retry',
   'collaboration.task.list',
   'collaboration.task.offer.decide',
+  'collaboration.task.session.continue',
   'collaboration.worker-delivery.read',
   'collaboration.delivery.submit',
   'collaboration.worker-residual.dispose',
@@ -92,12 +86,20 @@ export const PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS = Object.freeze([
   'collaboration.project.result.publish',
   'collaboration.project.complete'
 ])
+export const KNOWLEDGE_NET_SMOKE_CAPABILITY_IDS = Object.freeze([
+  'knowledge-net.note.commit',
+  'knowledge-net.lookup',
+  'knowledge-net.annotate',
+  'knowledge-net.library.import',
+  'knowledge-net.library.status'
+])
 export const REQUIRED_CAPABILITY_IDS = Object.freeze([
   ...IDENTITY_SMOKE_CAPABILITY_IDS,
   ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
-  ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
+  ...CLOUD_NOTES_SMOKE_CAPABILITY_IDS,
   ...COLLABORATION_SMOKE_CAPABILITY_IDS,
   ...PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS,
+  ...KNOWLEDGE_NET_SMOKE_CAPABILITY_IDS,
   'browser-preview.open',
   'browser-preview.read',
   'browser-preview.navigate',
@@ -540,22 +542,12 @@ export async function smokeRendererWorkflow({
     )
   }
 
-  const contentSpaceProviders = await api.capabilities.invoke({
-    request: { actionId: 'content-space.list-provider-instances', input: {} }
+  const cloudNotes = await api.capabilities.invoke({
+    request: { actionId: 'siyuan.service.status', input: {} }
   })
-  const providerInstances = contentSpaceProviders.output?.ok
-    ? contentSpaceProviders.output.value?.items
-    : undefined
-  const providerInstanceRefs = Array.isArray(providerInstances)
-    ? providerInstances.map(({ providerInstanceRef }) => providerInstanceRef)
-    : []
-  if (contentSpaceProviders.actionId !== 'content-space.list-provider-instances' ||
-    providerInstanceRefs.length === 0 ||
-    providerInstanceRefs.some((providerInstanceRef) =>
-      typeof providerInstanceRef !== 'string' || providerInstanceRef.length === 0
-    ) ||
-    new Set(providerInstanceRefs).size !== providerInstanceRefs.length) {
-    throw new Error('Content Space did not expose a unique installed Provider Instance directory.')
+  if (cloudNotes.actionId !== 'siyuan.service.status' ||
+    cloudNotes.output?.mode !== 'managed' || cloudNotes.output?.identity?.state !== 'signed-out') {
+    throw new Error('Cloud notes did not expose its independent managed service and signed-out identity.')
   }
 
   const collaborationStatus = await api.capabilities.invoke({
@@ -679,9 +671,9 @@ export async function smokeRendererWorkflow({
     cloudIdentityState: cloudSnapshot.identity.state,
     cloudDeviceState: cloudSnapshot.device.state,
     cloudIdentityErrorCode: cloudSnapshot.error?.code ?? null,
-    contentSpaceProviderActionId: contentSpaceProviders.actionId,
-    contentSpaceProviderInstanceRef: providerInstanceRefs[0],
-    contentSpaceProviderInstanceCount: providerInstanceRefs.length,
+    cloudNotesActionId: cloudNotes.actionId,
+    cloudNotesMode: cloudNotes.output.mode,
+    cloudNotesIdentityState: cloudNotes.output.identity.state,
     collaborationActionId: collaborationStatus.actionId,
     collaborationConfigured: collaborationStatus.output.connection.configured,
     collaborationConnectionState: collaborationStatus.output.connection.state,
@@ -748,12 +740,9 @@ export function validateSmokeResult(result, { expectedDeployment, expectedRender
       throw new Error('Cloud Identity was not ready at the frozen pre-login boundary.')
     }
   }
-  if (result.contentSpaceProviderActionId !== 'content-space.list-provider-instances' ||
-    typeof result.contentSpaceProviderInstanceRef !== 'string' ||
-    result.contentSpaceProviderInstanceRef.length === 0 ||
-    !Number.isSafeInteger(result.contentSpaceProviderInstanceCount) ||
-    result.contentSpaceProviderInstanceCount < 1) {
-    throw new Error('Content Space Provider Instance directory was not available.')
+  if (result.cloudNotesActionId !== 'siyuan.service.status' ||
+    result.cloudNotesMode !== 'managed' || result.cloudNotesIdentityState !== 'signed-out') {
+    throw new Error('Cloud notes independent managed service was not available.')
   }
   if (result.collaborationActionId !== 'collaboration.status.read' ||
     result.collaborationConfigured !== false ||

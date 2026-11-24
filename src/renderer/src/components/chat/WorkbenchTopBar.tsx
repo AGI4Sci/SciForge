@@ -65,6 +65,13 @@ export type WorkbenchTopBarProps = {
   childAgentAttentionCount?: number
   childAgentsOpen?: boolean
   onOpenChildAgents?: () => void
+  /**
+   * DOM slot owned by the workbench content row, rendered after the right panel
+   * so the vertical toolbar rail stays the outermost right-edge column. The
+   * toolbar is portaled there; without a slot (server rendering, tests, other
+   * embedders) the same rail renders inline rather than disappearing.
+   */
+  railHost?: HTMLDivElement | null
 }
 
 function contributedToolbarItems(
@@ -116,7 +123,8 @@ export function WorkbenchTopBar({
   childAgentRunningCount = 0,
   childAgentAttentionCount = 0,
   childAgentsOpen = false,
-  onOpenChildAgents
+  onOpenChildAgents,
+  railHost = null
 }: WorkbenchTopBarProps): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const [editors, setEditors] = useState<EditorInfo[]>([])
@@ -401,7 +409,7 @@ export function WorkbenchTopBar({
       <div
         ref={editorMenuPanelRef}
         data-toolbar-popup
-        role="menu"
+        data-native-view-occluder="true" role="menu"
         aria-label={t('editorPickerMenuTitle')}
         style={{
           left: editorMenuPosition.left,
@@ -410,7 +418,7 @@ export function WorkbenchTopBar({
         }}
         className="ds-card-strong fixed z-[1001] max-h-[min(26rem,calc(100vh-3rem))] overflow-y-auto rounded-[18px] border border-ds-border py-1.5 shadow-[0_18px_52px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:shadow-[0_22px_58px_rgba(0,0,0,0.38)]"
       >
-        <div className="border-b border-ds-border-muted px-3 pb-2 pt-1.5 text-[11px] font-semibold text-ds-faint">
+        <div className="border-b border-ds-border-muted px-3 pb-2 pt-1.5 text-ds-xs font-semibold text-ds-faint">
           {t('editorPickerMenuTitle')}
         </div>
         {editors.map((editor) => {
@@ -422,7 +430,7 @@ export function WorkbenchTopBar({
               role="menuitemradio"
               aria-checked={active}
               onClick={() => chooseEditor(editor)}
-              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left text-[14px] transition ${
+              className={`flex w-full items-center gap-3 px-3 py-2.5 text-left text-ds-lg transition ${
                 active
                   ? 'bg-ds-hover text-ds-ink'
                   : 'text-ds-muted hover:bg-ds-hover/70 hover:text-ds-ink'
@@ -431,7 +439,7 @@ export function WorkbenchTopBar({
               {renderEditorIcon(editor, 'h-4 w-4')}
               <span className="min-w-0 flex-1 truncate">{editor.label}</span>
               {editor.supportsLine ? (
-                <span className="shrink-0 rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
+                <span className="shrink-0 rounded-md bg-accent/10 px-1.5 py-0.5 text-ds-2xs font-semibold text-accent">
                   {t('editorLineBadge')}
                 </span>
               ) : null}
@@ -464,14 +472,14 @@ export function WorkbenchTopBar({
       onClick: onOpenChildAgents, active: childAgentsOpen,
       attention: childAgentAttentionCount > 0 || childAgentRunningCount > 0,
       badge: <>
-        {childAgentCount > 0 ? <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">{childAgentCount}</span> : null}
+        {childAgentCount > 0 ? <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-ds-2xs font-semibold leading-none text-white">{childAgentCount}</span> : null}
         {childAgentAttentionCount > 0 ? <CircleAlert className="absolute -bottom-2 -right-2 h-3 w-3 rounded-full bg-red-500 text-white" /> : null}
       </>
     }] : []),
     ...(onOpenSideChat && sideChatEnabled ? [{
       id: 'side-chat', label: t('sidePanelOpen'), icon: <MessageCircleMore className="h-4 w-4" strokeWidth={1.75} />,
       onClick: onOpenSideChat, active: sideChatOpen, attention: sideChatRunningCount > 0,
-      badge: sideChatCount > 0 ? <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">{Math.min(sideChatCount, 9)}</span> : undefined
+      badge: sideChatCount > 0 ? <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-ds-2xs font-semibold leading-none text-white">{Math.min(sideChatCount, 9)}</span> : undefined
     }] : []),
     ...contributedItems,
     ...items.map((item) => ({
@@ -480,16 +488,25 @@ export function WorkbenchTopBar({
     }))
   ]
 
+  // The rail is docked in the workbench-owned slot, outside the top bar, so it
+  // survives right-panel toggles without moving. One toolbar, one owner: a
+  // missing slot renders the same rail inline instead of a second copy.
+  const toolbarRail = (
+    <WorkbenchToolbarCustomizer
+      actions={toolbarActions}
+      preferences={toolbarPreferences}
+      saving={toolbarSaveState === 'saving'}
+      error={toolbarSaveError}
+      onChange={(next) => { void saveToolbarPreferences(next) }}
+      renderTrigger={(trigger) => <AdaptiveToolbar actions={actions} customization={trigger} />}
+    />
+  )
+
   return (
     <>
-      <WorkbenchToolbarCustomizer
-        actions={toolbarActions}
-        preferences={toolbarPreferences}
-        saving={toolbarSaveState === 'saving'}
-        error={toolbarSaveError}
-        onChange={(next) => { void saveToolbarPreferences(next) }}
-        renderTrigger={(trigger) => <AdaptiveToolbar actions={actions} customization={trigger} />}
-      />
+      {railHost && typeof document !== 'undefined'
+        ? createPortal(toolbarRail, railHost)
+        : toolbarRail}
       {typeof document === 'undefined' ? editorMenu : createPortal(editorMenu, document.body)}
     </>
   )

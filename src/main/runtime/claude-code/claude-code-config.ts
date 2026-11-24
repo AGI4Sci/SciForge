@@ -527,7 +527,7 @@ function claudePermissionMode(runtime: {
     return 'bypassPermissions'
   }
   if (runtime.approvalPolicy === 'on-request') return 'default'
-  if (runtime.approvalPolicy === 'never') return 'bypassPermissions'
+  if (runtime.approvalPolicy === 'never') return 'acceptEdits'
   return 'acceptEdits'
 }
 

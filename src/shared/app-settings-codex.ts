@@ -24,7 +24,8 @@ const CODEX_APPROVAL_POLICIES = new Set<ApprovalPolicy>([
 const CODEX_SANDBOX_MODES = new Set<SandboxMode>([
   'read-only',
   'workspace-write',
-  'danger-full-access'
+  'danger-full-access',
+  'external-sandbox'
 ])
 export function defaultCodexRuntimeSettings(): CodexRuntimeSettingsV1 {
   return {

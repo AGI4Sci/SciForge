@@ -106,7 +106,9 @@ test('runtime fails closed when generic text reasoning access is unavailable', a
   await deactivate()
 })
 
-test('manual update reads committed Evidence through its public capability and posts once', async () => {
+for (const scoped of [false, true]) test(`manual update reads committed Evidence through its public capability and posts once (workspace successor: ${scoped})`, async () => {
+  const evidenceThreadId = scoped ? 'codex:thread-1:workspace:opaque-owner-binding' : 'codex:thread-1'
+  let returnedHeadId = evidenceThreadId
   const requests: Array<{ url: string; method: string; body?: unknown }> = []
   let statusReads = 0
   const config = sidecarConfig()
@@ -138,7 +140,7 @@ test('manual update reads committed Evidence through its public capability and p
         assert.equal(options?.workspaceId, '/workspace')
         return {
           committed: {
-            threadId: 'codex:thread-1',
+            threadId: evidenceThreadId,
             version: 3,
             digest: evidenceDigest,
             inputWatermark: '186:batch:1/4',
@@ -151,7 +153,7 @@ test('manual update reads committed Evidence through its public capability and p
           // The local delta head is intentionally a different identity. The
           // Project vector must pin the Evidence owner's committed Snapshot.
           authoritativeHead: {
-            threadId: 'codex:thread-1',
+            threadId: returnedHeadId,
             headDigest: `sha256:${'d'.repeat(64)}`,
             sequence: 4,
             committedWatermark: '200',
@@ -178,8 +180,14 @@ test('manual update reads committed Evidence through its public capability and p
   assert.deepEqual(invoked, [EVIDENCE_DAG_CAPABILITY_IDS.snapshotStatus])
   const post = requests.find(({ url, method }) => url.endsWith('/updates') && method === 'POST')
   assert.deepEqual((post?.body as { evidenceVector?: unknown }).evidenceVector, [
-    { threadId: 'codex:thread-1', digest: evidenceDigest }
+    { threadId: evidenceThreadId, digest: evidenceDigest }
   ])
+  assert.deepEqual((post?.body as { capturedScope?: unknown }).capturedScope, {
+    includedSessions: [evidenceThreadId], excludedSessions: [], isolatedSessions: []
+  })
+  assert.equal(requests.filter(({ url, method }) => url.endsWith('/updates') && method === 'POST').length, 1)
+  returnedHeadId = 'codex:foreign-thread'
+  await assert.rejects(runtime.update({ workspaceRoot: '/workspace', scope: ['codex:thread-1'] }), /identity does not match/)
   assert.equal(requests.filter(({ url, method }) => url.endsWith('/updates') && method === 'POST').length, 1)
   await deactivate()
 })

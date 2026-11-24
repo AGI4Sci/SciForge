@@ -36,7 +36,8 @@ import { useChatStore } from '../../store/chat-store'
 
 const LANGUAGE_REGEX = /language-([^\s]+)/
 const TRAILING_NEWLINES_REGEX = /\n+$/
-const PLAIN_TEXT_LANGUAGES = new Set(['', 'plain', 'plaintext', 'text', 'txt'])
+const PLAIN_TEXT_LANGUAGES = new Set(['plain', 'plaintext', 'text', 'txt'])
+const SAFE_LANGUAGE_REGEX = /^[a-z0-9_+#.-]{1,32}$/i
 const COLLAPSE_HEIGHT = 200
 const COPY_RESET_MS = 2000
 const STREAM_HIGHLIGHT_IDLE_MS = 400
@@ -95,6 +96,17 @@ function downloadCode(code: string, language: string): void {
 
 function isPlainTextLanguage(language: string): boolean {
   return PLAIN_TEXT_LANGUAGES.has(language.trim().toLowerCase())
+}
+
+/**
+ * Keep an unknown or absent fence language on the code-block path instead of
+ * letting it fall through to a bare `<pre>` (which used to lose the copy
+ * button). Highlighters receive a safe default when the info string is unsafe
+ * or unfamiliar.
+ */
+function safeCodeLanguage(language: string): string {
+  const trimmed = language.trim()
+  return SAFE_LANGUAGE_REGEX.test(trimmed) ? trimmed : 'text'
 }
 
 function PlainTextBlock({ code }: { code: string }): ReactNode {
@@ -220,6 +232,14 @@ function CodeBlock({
     const el = bodyRef.current
     if (!el) return
 
+    // While an answer is still streaming, a code block keeps growing. Measuring
+    // it mid-stream used to mark it collapsible after 200px and then re-collapse
+    // it on every chunk, hiding the tail of the code the user is reading.
+    if (mode === 'streaming') {
+      setExpandable(false)
+      return
+    }
+
     const update = (): void => {
       setExpandable(el.scrollHeight > COLLAPSE_HEIGHT)
     }
@@ -230,7 +250,7 @@ function CodeBlock({
     const observer = new ResizeObserver(() => update())
     observer.observe(el)
     return () => observer.disconnect()
-  }, [html, trimmedCode])
+  }, [html, trimmedCode, mode])
 
   useEffect(() => {
     setExpanded(false)
@@ -368,13 +388,13 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
   }
 
   const match = className?.match(LANGUAGE_REGEX)
-  const language = match?.[1] ?? ''
+  const language = match?.[1]?.trim() ?? ''
 
   if (isPlainTextLanguage(language)) {
     return <PlainTextBlock code={text} />
   }
 
-  return <CodeBlock code={text} language={language} />
+  return <CodeBlock code={text} language={safeCodeLanguage(language)} />
 }
 
 const MemoCode = memo(CodeComponent, (prev, next) => {

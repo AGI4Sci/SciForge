@@ -249,3 +249,33 @@ it('skips SciForge runtime state without losing ordinary CSV and SVG outputs in 
     'test-workspaces/visible/output/species-counts.svg'
   ])
 })
+
+
+it('does not read present-day bytes or infer deletions from a delayed terminal replay', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'turn-file-delayed-'))
+  roots.push(root)
+  await writeFile(join(root, 'result.txt'), 'later unrelated overwrite')
+  let reads = 0
+  const effects = await captureDeclaredTurnFileEffects(root, [
+    { path: 'result.txt', operation: 'update' }, { path: 'missing.txt', operation: 'delete' }
+  ], '2026-11-10T00:00:00.000Z', () => new Date('2026-11-10T01:00:00.000Z'), {
+    afterInitialRealpath: () => { reads += 1 }
+  })
+  assert.equal(reads, 0)
+  assert.deepEqual(effects.effects, [])
+  assert.deepEqual(effects.issues.map(item => item.code), ['terminal-capture-delayed'])
+})
+
+
+it('never recaptures replayed terminal bytes even inside the delay allowance', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'turn-file-replay-'))
+  roots.push(root)
+  await writeFile(join(root, 'result.txt'), 'post-restart bytes')
+  const observed = new Date()
+  let reads = 0
+  const effects = await captureDeclaredTurnFileEffects(root, [{ path: 'result.txt', operation: 'add' }],
+    observed.toISOString(), () => observed, { afterInitialRealpath: () => { reads += 1 } }, 'replayed')
+  assert.equal(reads, 0)
+  assert.deepEqual(effects.effects, [])
+  assert.equal(effects.issues[0]?.code, 'terminal-capture-delayed')
+})

@@ -5,5 +5,5 @@ export function evidenceDagStorageRoot(
   userDataDir: string,
   environment: Readonly<Record<string, string | undefined>>
 ): string {
-  return environment.EDAG_STORAGE_DIR?.trim() || join(userDataDir, 'evidence-dag', 'python')
+  return environment.EDAG_STORAGE_DIR?.trim() || join(userDataDir, 'evidence-dag', 'threads')
 }

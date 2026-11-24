@@ -126,7 +126,7 @@ test('default Chat reasoning control preserves effort semantics and does not inj
   }
 });
 
-test('non-Responses conversion ignores opaque continuation items without adding empty messages', () => {
+test('non-Responses conversion drops provider-owned encrypted reasoning state', () => {
   const encryptedContent = 'opaque-encrypted-continuation-state';
   const request: ResponsesRequest = {
     model: 'neutral-model',
@@ -136,24 +136,40 @@ test('non-Responses conversion ignores opaque continuation items without adding 
         id: 'rs_1',
         type: 'reasoning',
         encrypted_content: encryptedContent,
+        content: [{ type: 'reasoning_text', text: 'Use the inspect tool.' }],
         summary: [{ type: 'summary_text', text: 'Need the tool.' }],
       },
-      { id: 'cmp_1', type: 'compaction', encrypted_content: encryptedContent },
       { type: 'function_call', call_id: 'call_1', name: 'inspect', arguments: '{}' },
       { type: 'function_call_output', call_id: 'call_1', output: 'done' },
     ],
   };
 
-  const chat = responsesToChatCompletions(request);
-  const chatMessages = chat.messages as JsonObject[];
-  assert.deepEqual(chatMessages.map((message) => message.role), ['user', 'assistant', 'tool']);
-  assert.equal(chatMessages[1]?.reasoning_content, 'Need the tool.');
-  assert.doesNotMatch(JSON.stringify(chat), new RegExp(encryptedContent, 'u'));
+  // A tool loop must survive its own continuation: the encrypted state belongs
+  // to the provider that issued it, so a chat target drops it and keeps going.
+  const chat = responsesToChatCompletions(request) as { messages: Array<Record<string, unknown>> };
+  assert.doesNotMatch(JSON.stringify(chat), /opaque-encrypted/u);
+  assert.equal(chat.messages.some((message) => Array.isArray(message.tool_calls)), true);
+  assert.equal(chat.messages.some((message) => message.role === 'tool'), true);
+  assert.equal(chat.messages.find((message) => message.reasoning_content)?.reasoning_content, 'Use the inspect tool.');
 
-  const anthropic = responsesToAnthropicMessages(request);
-  const anthropicMessages = anthropic.messages as JsonObject[];
-  assert.deepEqual(anthropicMessages.map((message) => message.role), ['user', 'assistant', 'user']);
-  assert.doesNotMatch(JSON.stringify(anthropic), new RegExp(encryptedContent, 'u'));
+  const anthropic = responsesToAnthropicMessages(request) as { messages: Array<Record<string, unknown>> };
+  assert.doesNotMatch(JSON.stringify(anthropic), /opaque-encrypted/u);
+});
+
+test('non-Responses conversion still rejects opaque compaction state', () => {
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: [
+      { role: 'user', content: [{ type: 'input_text', text: 'Inspect.' }] },
+      { id: 'cmp_1', type: 'compaction', encrypted_content: 'opaque-compaction-state' },
+      { type: 'function_call', call_id: 'call_1', name: 'inspect', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+    ],
+  };
+
+  // Compaction replaces history that is no longer present in the transcript.
+  assert.throws(() => responsesToChatCompletions(request), /cannot represent opaque/u);
+  assert.throws(() => responsesToAnthropicMessages(request), /cannot represent opaque/u);
 });
 
 test('Responses normalization removes only explicitly incompatible chat extension fields', () => {
@@ -892,4 +908,23 @@ test('reasoning effort vocabulary without effort requests leaves the request unt
     providerCompatibilityConfigurationIssue({ reasoningEfforts: [] }),
     'reasoningEfforts must be an array of non-empty effort tokens',
   );
+});
+
+
+test('provider compatibility rejects unknown empty keys and never reflects private key names or protocol values', () => {
+  const canary = 'COMPAT_PRIVATE_SENTINEL https://fixture-user:fixture-password@compat.example.invalid/?token=private-compat-token\nCONTROL';
+  for (const [value, expected] of [
+    [{ [canary]: true }, 'unknown compatibility setting'],
+    [{ '': canary }, 'unknown compatibility setting'],
+    [{ preferredProtocol: canary }, 'preferredProtocol is invalid'],
+  ] as const) {
+    assert.equal(providerCompatibilityConfigurationIssue(value as never), expected);
+    let failure: unknown;
+    try { resolveProviderCompatibility(value as never); } catch (error) { failure = error; }
+    assert.ok(failure instanceof RangeError);
+    assert.equal(failure.message, `Invalid provider compatibility configuration: ${expected}.`);
+    for (const marker of ['COMPAT_PRIVATE_SENTINEL', 'fixture-password', 'private-compat-token', 'CONTROL']) {
+      assert.equal(failure.message.includes(marker), false);
+    }
+  }
 });

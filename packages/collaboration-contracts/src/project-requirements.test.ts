@@ -17,13 +17,15 @@ const moduleOne = {
   planItemId: 'item_qc_thresholds',
   title: 'QC threshold scheme design analysis',
   objective: 'Produce the bounded QC threshold design.',
-  dependencyPlanItemIds: []
+  dependencyPlanItemIds: [],
+  output: { kind: 'delivery.output' as const, fileName: 'data.csv', mediaType: 'text/csv', maxBytes: 2048 }
 }
 const moduleTwo = {
   planItemId: 'item_ai_annotation',
   title: 'AI cell type annotation design analysis',
   objective: 'Produce the annotation design.',
-  dependencyPlanItemIds: ['item_qc_thresholds']
+  dependencyPlanItemIds: ['item_qc_thresholds'],
+  output: { kind: 'delivery.output' as const, fileName: 'report.pdf', mediaType: 'application/pdf', maxBytes: 8192 }
 }
 const criteria = [
   { target: 'item_qc_thresholds', criteria: 'The threshold table is reviewable.', evidenceMethod: 'Owner reads the table.' },
@@ -169,4 +171,15 @@ test('requirements.confirmed is the only dispatch trigger payload shape', () => 
     contentDigest: 'a'.repeat(64)
   })
   assert.equal(payload.type, 'project.requirements.confirmed')
+})
+
+
+test('historical modules remain readable but require explicit output before confirmation', () => {
+  const historical = { ...parts, workModules: parts.workModules.map(({ output: _output, ...module }) => module) }
+  const parsed = requirementsDocumentPartsSchema.parse(historical)
+  assert.equal(parsed.workModules[0]?.output, undefined)
+  assert.equal(requirementsCompletenessViolation(parsed), 'module_output_missing')
+  for (const output of [null, { ...moduleOne.output, fileName: '../data.csv' }, { ...moduleOne.output, maxBytes: 0 }]) {
+    assert.equal(requirementsDocumentPartsSchema.safeParse({ ...parts, workModules: [{ ...moduleOne, output }, moduleTwo] }).success, false)
+  }
 })

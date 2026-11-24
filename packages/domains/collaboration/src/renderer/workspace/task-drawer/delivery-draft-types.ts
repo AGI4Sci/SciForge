@@ -7,6 +7,7 @@ export type DeliveryDraftFile = Readonly<{
   relativePath: string
   mediaType: string
   byteCount: number
+  maxBytes?: number
   source: 'member' | 'attachment' | 'ai' | 'unknown'
   /** Present only for an explicit import through the standard attachment writer. */
   imported?: boolean
@@ -32,6 +33,7 @@ export type DeliveryDraftData = Readonly<{
   submissionProgress?: WorkerDeliveryView['submissionProgress']
   submitError?: string
   materialError?: string
+  saveError?: string
   saveState?: 'saved' | 'saving' | 'error'
   declaredFiles: readonly DeliveryDraftFile[]
   additionalFiles?: readonly DeliveryDraftFile[]

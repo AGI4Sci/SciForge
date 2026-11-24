@@ -14,6 +14,44 @@ export type RuntimeErrorView = {
   detail?: string
   code?: string
   settingsAction?: 'agents'
+  /** The same turn/request may be retried once the upstream recovers. */
+  retryable?: boolean
+}
+
+/**
+ * Model Router upstream failures that the router already retried with backoff.
+ * The gateway body names them (`upstream_http_429`, `upstream_timeout`), while a
+ * runtime may only forward prose (`429 Too Many Requests`, `timed out`), so both
+ * shapes are recognized. Everything else keeps its generic message.
+ */
+type UpstreamFailureKind = 'rate_limited' | 'timed_out'
+
+/** Keeps an unrelated tool or filesystem "timeout" from being reported as the model service. */
+const UPSTREAM_CONTEXT_PATTERN = /\b(?:upstream|model|provider|gateway|http|status [1-5]\d\d)\b/u
+
+function upstreamFailureKind(text: string): UpstreamFailureKind | null {
+  const lowered = text.toLowerCase()
+  if (
+    lowered.includes('upstream_http_429') ||
+    lowered.includes('too many requests') ||
+    /\brate[ _-]?limit(?:ed|ing)?\b/u.test(lowered)
+  ) {
+    return 'rate_limited'
+  }
+  if (lowered.includes('upstream_timeout') || lowered.includes('gateway timeout')) {
+    return 'timed_out'
+  }
+  if (/\btimed out\b|\btimeout\b/u.test(lowered) && UPSTREAM_CONTEXT_PATTERN.test(lowered)) {
+    return 'timed_out'
+  }
+  return null
+}
+
+function upstreamFailureSummary(text: string): string | null {
+  const kind = upstreamFailureKind(text)
+  if (kind === 'rate_limited') return i18n.t('common:runtimeUpstreamRateLimited')
+  if (kind === 'timed_out') return i18n.t('common:runtimeUpstreamTimedOut')
+  return null
 }
 
 const EXECUTION_INTEGRITY_ERROR_CODES = new Set([
@@ -30,6 +68,8 @@ const RUNTIME_ERROR_TRANSLATION_KEYS: Readonly<Record<string, string>> = Object.
   runtime_auth_required: 'runtimeAuthRequired',
   runtime_request_user_input_unsupported: 'runtimeUserInputUnsupported',
   runtime_execution_interrupted: 'runtimeExecutionInterrupted',
+  runtime_prompt_idle_timeout: 'runtimePromptIdleTimeout',
+  runtime_request_idle_timeout: 'runtimePromptIdleTimeout',
   runtime_port_conflict: 'runtimePortConflict',
   runtime_unhealthy: 'runtimeUnhealthy',
   turn_in_progress: 'runtimeActiveTurn',
@@ -95,6 +135,12 @@ function runtimeErrorCode(payload: RuntimeErrorPayload | null, raw: string): str
     return 'provider_auth_blocked'
   }
   if (lowered.includes('runtime unhealthy')) return 'runtime_unhealthy'
+  // An idle prompt budget is a silence expiry, not a duration expiry: the turn
+  // is resumable, so it must not be reported as a generic timeout/disconnect.
+  if (
+    lowered.includes('runtime_prompt_idle_timeout') ||
+    lowered.includes('runtime_request_idle_timeout')
+  ) return 'runtime_prompt_idle_timeout'
   if (lowered.includes('active turn')) return 'turn_in_progress'
   if (lowered.includes('preload bridge missing')) return 'preload_bridge_missing'
   if (
@@ -155,6 +201,11 @@ function localizedRuntimeSummary(code: string | null, text: string, details?: un
       return `${summary} ${i18n.t('common:runtimeDiscoveryVersionDetail', { version })}`
     }
     return summary
+  }
+
+  const upstreamSummary = upstreamFailureSummary(`${code ?? ''} ${text}`)
+  if (upstreamSummary) {
+    return upstreamSummary
   }
 
   if (code === 'fetch_failed' || lowered.includes('fetch failed')) {
@@ -249,7 +300,8 @@ export function describeRuntimeError(error: unknown): RuntimeErrorView {
     summary,
     ...(details.length > 0 ? { detail: details.join('\n\n') } : {}),
     ...(errorCode ? { code: errorCode } : {}),
-    ...(shouldOpenAgentsSettings(errorCode) ? { settingsAction: 'agents' as const } : {})
+    ...(shouldOpenAgentsSettings(errorCode) ? { settingsAction: 'agents' as const } : {}),
+    ...(upstreamFailureKind(`${errorCode ?? ''} ${redactedText}`) ? { retryable: true } : {})
   }
 }
 

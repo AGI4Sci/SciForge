@@ -40,13 +40,15 @@ export function ResearchSourceRetention({ view, scope, invoker, active }: { view
     finally { if (live()) setBusy(false) }
   }
   return <section aria-label="来源保全与单项导出">
-    <details><summary>来源保全容量 · {usage?.usageKnown ? `${usage.usedBytes} / ${usage.maxBytes} bytes` : 'UNKNOWN（用量未知）'}</summary>
+    <h3 className="record-text font-medium">来源与导出</h3>
+    <details><summary className="cursor-pointer record-caption text-ds-muted">技术详情：来源保全与容量</summary>
+      <p>来源保全容量 · {usage?.usageKnown ? `${usage.usedBytes} / ${usage.maxBytes} bytes` : 'UNKNOWN（用量未知）'}</p>
       {usage ? <><p>保全条目 {usage.usageKnown ? `${usage.retainedEntries} / ${usage.maxEntries}` : 'UNKNOWN'}</p><p>引用 {usage.referencedEntries} · 已检查 {usage.inspectedEntries} · {usage.complete ? '当前有界检查完成' : '验证有界 / 未完成'}</p>
         <p>missing {usage.missingEntries} · corrupt {usage.corruptEntries} · rejected {usage.rejectedEntries} · 中断写预留 {usage.reservedEntries ?? 0}</p><p>{usage.reasons.join(' · ')}</p><p>{usage.policy} · exportRequired={String(usage.exportRequired)}</p></> : <p>没有容量或验证覆盖回执，保持未知。</p>}
       <p>仅当前授权记录引用的保全来源表示；不代表全档案、完整会话或科学产物迁移。始终保留原来源，不自动删除。</p>
     </details>
     <button disabled={!active || !visible || busy || !view.node?.source} onClick={() => void request()}>请求授权的单项保全来源</button>
-    {active && visible && ready && loadedAuthority === authority && <button onClick={() => { if (mounted.current && current.current === loadedAuthority && !document.hidden) downloadEvidenceJson(ready, 'research-retained-source.json') }}>下载单项来源（保留 raw / ref / digest）</button>}
+    {active && visible && ready && loadedAuthority === authority && <button onClick={() => { if (mounted.current && current.current === loadedAuthority && !document.hidden) downloadEvidenceJson(ready, 'research-retained-source.json') }}>下载单项来源</button>}
     {notice && <p role="alert">{notice}</p>}
   </section>
 }

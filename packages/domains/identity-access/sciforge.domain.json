@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.identity-access",
     "displayName": "Identity and Access",
-    "version": "5.1.1",
+    "version": "8.0.8",
     "hostApi": {
       "minimum": "1.6.0",
       "maximumExclusive": "2.0.0"
@@ -17,12 +17,18 @@
     "priority": 900
   },
   "contributionContracts": {
+    "identity-access.host-ports": {
+      "contractVersion": 1,
+      "kind": "host-ports",
+      "portSource": "packages/domains/identity-access/src/cloud-host-contract.ts"
+    },
     "identity-access.authenticated-cloud-transport": {
       "location": "main.internal-service-descriptor",
       "serviceId": "sciforge.authenticated-cloud-transport",
-      "contractVersion": "4.0.0",
+      "contractVersion": "7.0.0",
       "allowedConsumerModuleIds": [
-        "sciforge.collaboration"
+        "sciforge.collaboration",
+        "sciforge.siyuan-content-space-provider"
       ]
     },
     "identity-access.device-fact-attestation-signing": {
@@ -50,6 +56,12 @@
       "location": "workbench.global-overlay",
       "title": "Identity"
     },
+    "identity-access.account-navigation-section": {
+      "location": "workbench.navigation-section",
+      "contractVersion": "1.0.0",
+      "label": "identityAccountSection",
+      "placement": "footer"
+    },
     "identity-access.current-user-profile": {
       "location": "main.internal-service-descriptor",
       "serviceId": "sciforge.current-user-profile",
@@ -64,6 +76,11 @@
       "process": "main",
       "export": "./main",
       "contributions": [
+        {
+          "id": "identity-access.host-ports",
+          "kind": "main.host-ports.v1",
+          "priority": 900
+        },
         {
           "id": "identity-access.capabilities",
           "kind": "main.capability-factory",
@@ -82,7 +99,7 @@
         {
           "id": "identity-access.authenticated-cloud-transport",
           "kind": "main.extension",
-          "version": "4.0.0",
+          "version": "7.0.0",
           "priority": 900
         },
         {
@@ -122,6 +139,11 @@
         {
           "id": "identity-access.account-overlay",
           "kind": "renderer.workbench-global-overlay",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.account-navigation-section",
+          "kind": "renderer.extension",
           "priority": 900
         },
         {

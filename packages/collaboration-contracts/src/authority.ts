@@ -302,6 +302,8 @@ export const publicActivityEventSchema = z.object({
   eventId: collaborationEventIdSchema,
   kind: z.enum(['state', 'comment', 'mention', 'progress', 'review', 'delivery', 'integration', 'adoption', 'exception']),
   taskId: taskIdSchema.nullable(),
+  /** Present for member comments/mentions; null for system activity and legacy rows. */
+  actorUserId: userIdSchema.nullable().default(null),
   payload: z.union([publicProgressUpdateSchema, z.object({ summary: safeProgressText }).strict()]),
   occurredAt: timestampSchema
 }).strict().superRefine((event, context) => {

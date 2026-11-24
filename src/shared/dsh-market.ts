@@ -25,7 +25,9 @@ export const dshMarketApprovalSnapshotSchema = z.object({
   entry: z.string().trim().min(1).max(1024),
   tools: z.array(dshMarketApprovalToolSchema).max(64),
   ports: z.array(z.string().trim().min(1).max(256)).max(32),
-  hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64)
+  hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64),
+  /** Requested service clients are part of the reviewed identity, never implicit authority. */
+  hostServices: z.array(z.string().trim().min(1).max(128)).max(32).optional()
 }).strict()
 export type DshMarketApprovalSnapshot = z.infer<typeof dshMarketApprovalSnapshotSchema>
 
@@ -40,10 +42,11 @@ export function normalizeDshMarketApproval(value: DshMarketApprovalSnapshot): Ds
   })).sort((a, b) => a.name.localeCompare(b.name))
   if (new Set(tools.map(tool => tool.name)).size !== tools.length
     || new Set(snapshot.ports).size !== snapshot.ports.length
-    || new Set(snapshot.hostDependencies).size !== snapshot.hostDependencies.length) {
+    || new Set(snapshot.hostDependencies).size !== snapshot.hostDependencies.length
+    || new Set(snapshot.hostServices ?? []).size !== (snapshot.hostServices ?? []).length) {
     throw new Error('Approval snapshot contains duplicate grants or dependencies.')
   }
-  return { ...snapshot, tools, ports: [...snapshot.ports].sort(), hostDependencies: [...snapshot.hostDependencies].sort() }
+  return { ...snapshot, tools, ports: [...snapshot.ports].sort(), hostDependencies: [...snapshot.hostDependencies].sort(), hostServices: [...(snapshot.hostServices ?? [])].sort() }
 }
 
 export type DshMarketToolEffect =
@@ -110,6 +113,12 @@ export type DshMarketView = Readonly<{
   notInstallable: readonly DshMarketBlockedPlugin[]
   /** Set when the catalog could not be read; the market then shows nothing usable. */
   error: string | null
+  /**
+   * True when the configured catalog was unreadable and the bundled local
+   * catalog is listed instead. Installs and updates still need the configured
+   * catalog, so the view marks itself as the local copy.
+   */
+  fallback: boolean
 }>
 
 export type DshMarketInstallPhase =

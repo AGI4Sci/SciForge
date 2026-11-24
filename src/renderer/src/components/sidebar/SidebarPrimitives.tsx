@@ -72,7 +72,7 @@ export function SidebarFrame({
       <div className="ds-sidebar-body flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
 
       {footer ? (
-        <div className="ds-no-drag mt-2 border-t border-[var(--ds-sidebar-divider)] px-1.5 pt-3">
+        <div className="ds-no-drag mt-2 shrink-0 border-t border-[var(--ds-sidebar-divider)] px-1.5 pt-3">
           {footer}
         </div>
       ) : null}
@@ -136,7 +136,7 @@ function SidebarRailButton({ command }: { command: SidebarRailCommand }): ReactE
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={cx(
-        'flex h-9 w-9 items-center justify-center rounded-[10px] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ds-accent)]',
+        'ds-button-plain flex h-9 w-9 items-center justify-center rounded-[10px] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ds-accent)]',
         disabled
           ? 'cursor-not-allowed text-ds-faint opacity-55'
           : active
@@ -184,7 +184,9 @@ export function SidebarCommandRow({
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       className={cx(
-        'ds-sidebar-command flex min-h-[38px] w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-[15px] font-medium leading-5 transition',
+        // Sidebar rows are navigation, not buttons: the resting surface comes from
+        // the selected state and the hover tint, never from a per-row border/box.
+        'ds-sidebar-command ds-button-plain flex min-h-[38px] w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-ds-xl font-medium leading-5 transition',
         disabled
           ? 'cursor-not-allowed text-[#a8a8a8] opacity-55'
           : active
@@ -206,7 +208,7 @@ export function SidebarCommandRow({
       </span>
       <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {shortcut ? (
-        <kbd className="ds-kbd hidden items-center gap-0.5 rounded-md px-1.5 py-0.5 font-mono text-[11.5px] font-medium text-ds-faint sm:inline-flex">
+        <kbd className="ds-kbd hidden items-center gap-0.5 rounded-md px-1.5 py-0.5 font-mono text-ds-xs font-medium text-ds-faint sm:inline-flex">
           <Command className="h-2.5 w-2.5" strokeWidth={2} />
           {shortcut.replace('⌘', '')}
         </kbd>
@@ -228,7 +230,7 @@ export function SidebarSectionHeader({
 }: SidebarSectionHeaderProps): ReactElement {
   return (
     <div className="flex items-center justify-between px-2.5 pb-2 pt-5">
-      <span className="min-w-0 truncate text-[13px] font-medium text-ds-muted">
+      <span className="min-w-0 truncate text-ds-md font-medium text-ds-muted">
         {label}
       </span>
       {actions ? <div className="flex shrink-0 items-center gap-0.5">{actions}</div> : null}
@@ -278,7 +280,7 @@ export function SidebarIconButton({
         onClick?.()
       }}
       className={cx(
-        'ds-no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[#9a9a9a] transition disabled:cursor-not-allowed disabled:opacity-40 dark:text-white/45',
+        'ds-button-plain ds-no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[#9a9a9a] transition disabled:cursor-not-allowed disabled:opacity-40 dark:text-white/45',
         active ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white' : toneClass,
         className
       )}
@@ -314,13 +316,13 @@ export function SidebarSearchField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-9 w-full rounded-[8px] border border-transparent bg-[var(--ds-sidebar-field-bg)] pl-7 pr-7 text-[14px] text-[#1f1f1f] outline-none transition placeholder:text-[#9aa5b5] focus:bg-[var(--ds-sidebar-field-focus)] dark:text-white"
+        className="h-9 w-full rounded-[8px] border border-transparent bg-[var(--ds-sidebar-field-bg)] pl-7 pr-7 text-ds-lg text-[#1f1f1f] outline-none transition placeholder:text-[#9aa5b5] focus:bg-[var(--ds-sidebar-field-focus)] dark:text-white"
       />
       {value.trim() ? (
         <button
           type="button"
           onClick={() => onChange('')}
-          className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[#9a9a9a] transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:hover:text-white"
+          className="ds-button-plain absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-[#9a9a9a] transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-[#1f1f1f] dark:hover:text-white"
           title={clearLabel}
           aria-label={clearLabel}
         >
@@ -386,7 +388,7 @@ export function SidebarTreeRow({
   return (
     <div
       className={cx(
-        'ds-sidebar-tree-row group relative flex w-full items-center overflow-hidden rounded-[8px] text-[14px] font-normal transition',
+        'ds-sidebar-tree-row group relative flex w-full items-center overflow-hidden rounded-[8px] text-ds-lg font-normal transition',
         outlined
           ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white'
           : active
@@ -414,7 +416,7 @@ export function SidebarTreeRow({
         aria-label={ariaLabel}
         aria-current={active ? 'page' : undefined}
         className={cx(
-          'flex min-w-0 flex-1 text-left disabled:cursor-not-allowed',
+          'ds-button-plain flex min-w-0 flex-1 text-left disabled:cursor-not-allowed',
           buttonClassName ?? 'items-center gap-2 px-2.5 py-2'
         )}
         style={buttonStyle}

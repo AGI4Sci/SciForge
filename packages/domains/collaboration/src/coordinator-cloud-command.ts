@@ -22,7 +22,7 @@ import { z } from 'zod'
 
 export const COORDINATOR_CLOUD_COMMAND_SERVICE_ID =
   'sciforge.collaboration.coordinator-cloud-command' as const
-export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '8.0.0' as const
+export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '9.0.0' as const
 
 /**
  * Coordinator orchestration and human Delivery decisions share one durable outbox.
@@ -35,14 +35,13 @@ export const coordinatorCloudCommandSchema = z.discriminatedUnion('type', [
   taskOfferCreateCommandSchema,
   taskOfferExtendCommandSchema,
   taskOfferWithdrawCommandSchema,
-  taskOfferReassignCommandSchema,
   humanNeededCreateCommandSchema,
   projectDecisionSubmitCommandSchema
 ])
 
 
 export const coordinatorUserCloudCommandSchema = z.discriminatedUnion('type', [
-  deliveryAdoptionCommandSchema, deliveryRevisionRequestCommandSchema,
+  taskOfferReassignCommandSchema, deliveryAdoptionCommandSchema, deliveryRevisionRequestCommandSchema,
   projectResultPublishCommandSchema, projectFinalSummarySubmitCommandSchema
 ])
 export type CoordinatorUserCloudCommand = z.infer<typeof coordinatorUserCloudCommandSchema>

@@ -10,8 +10,8 @@
   margin: 0 auto;
   padding: clamp(28px, 4vw, 56px) clamp(24px, 5vw, 72px) 72px;
   outline: none;
-  font-family: Georgia, Charter, 'Iowan Old Style', 'Noto Serif SC', serif;
-  font-size: 16px;
+  font-family: var(--ds-font-document);
+  font-size: var(--ds-text-xl);
   line-height: 1.78;
   color: color-mix(in srgb, var(--ds-text) 94%, var(--ds-text-muted));
 }
@@ -45,7 +45,7 @@
 .write-rich-editor h6 {
   margin: 1.6em 0 0.6em;
   color: var(--ds-text);
-  font-family: 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  font-family: var(--ds-font-display);
   font-weight: 650;
   letter-spacing: 0;
   line-height: 1.24;
@@ -132,7 +132,7 @@
   border-radius: 5px;
   padding: 0.12em 0.34em;
   background: color-mix(in srgb, var(--ds-text) 7%, transparent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--ds-font-mono);
   font-size: 0.88em;
 }
 

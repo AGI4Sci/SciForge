@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
-  researchRecordNodeSchema, researchRecordMessageSchema, researchRecordStatePatchSchema,
+  researchRecordNodeSchema, researchRecordMessageSchema, researchRecordStatePatchSchema, researchResultBindingSchema,
   type ResearchRecordNode
 } from '../research-record-contract.js'
 
@@ -9,10 +9,10 @@ export const organizationJobSchema = z.object({
   fingerprint: z.string(), sourceIds: z.array(z.string()), processedIds: z.array(z.string()), assignedIds: z.array(z.string()),
   fullExcerptIds: z.array(z.string()), truncatedIds: z.array(z.string()), unavailableIds: z.array(z.string()), changedIds: z.array(z.string()),
   semanticPendingIds: z.array(z.string()),
-  attempts: z.number(), nextAt: z.number()
+  attempts: z.number(), nextAt: z.number(), retryBlocked: z.boolean().optional()
 }).strict()
 export const phaseJobSchema = z.object({
-  dirtyRoundIds: z.array(z.string()), attempts: z.number(), nextAt: z.number()
+  dirtyRoundIds: z.array(z.string()), attempts: z.number(), nextAt: z.number(), retryBlocked: z.boolean().optional()
 }).strict()
 const common = {
   workspaceRoot: z.string(), revision: z.number(), paused: z.boolean(), model: z.string(),
@@ -23,6 +23,8 @@ const common = {
   failures: z.array(z.object({ nodeId: z.string(), message: z.string(), at: z.string() })), lastScanAt: z.string().nullable()
 }
 export const researchRecordStateSchema = z.object({ ...common, version: z.literal(2),
+  humanReviewEnabled: z.boolean().optional(),
+  resultBindings: z.array(researchResultBindingSchema).max(64).optional(),
   nodes: z.record(z.string(), researchRecordNodeSchema), jobs: z.record(z.string(), organizationJobSchema),
   phaseJobs: z.record(z.string(), phaseJobSchema),
   ingestion: z.record(z.string(), z.object({

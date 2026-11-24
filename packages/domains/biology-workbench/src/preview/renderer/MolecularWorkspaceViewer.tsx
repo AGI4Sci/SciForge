@@ -235,12 +235,12 @@ export function MolecularWorkspaceViewer({
               data-molecular-render-container
             />
             {renderState.selectionError ? (
-              <div className="absolute inset-x-2 top-2 rounded border border-ds-border bg-ds-card p-2 text-xs text-ds-ink" role="alert">
+              <div className="absolute inset-x-2 top-2 rounded border border-ds-border bg-ds-card p-2 text-ds-sm text-ds-ink" role="alert">
                 Molecular selection could not be saved: {renderState.selectionError}
               </div>
             ) : null}
             {renderState.kind !== 'ready' ? (
-              <div className="absolute inset-0 flex flex-col justify-center gap-2 bg-ds-panel/90 p-4 text-sm text-ds-text">
+              <div className="absolute inset-0 flex flex-col justify-center gap-2 bg-ds-panel/90 p-4 text-ds-lg text-ds-text">
                 <strong>{renderState.title}</strong>
                 <p>{renderState.message}</p>
               </div>
@@ -255,7 +255,7 @@ export function MolecularWorkspaceViewer({
             data-molecular-workbench-inspector
           >
             <p
-              className="workspace-preview-molecular-viewer__agent-summary text-[12px] leading-5 text-ds-muted"
+              className="workspace-preview-molecular-viewer__agent-summary text-ds-sm leading-5 text-ds-muted"
               data-molecular-agent-summary
             >
               {resolvedModel.agentSummary}
@@ -816,14 +816,14 @@ function MolecularStructureSummary({
       aria-label="Molecular structure summary"
       data-molecular-structure-summary
     >
-      <h4 className="mb-2 text-[12px] font-semibold text-ds-ink">Structure</h4>
+      <h4 className="mb-2 text-ds-sm font-semibold text-ds-ink">Structure</h4>
       <dl className="grid gap-1.5">
         {rows.map((row) => (
           <div key={row.id} data-molecular-structure-row={row.id}>
-            <dt className="text-[11px] font-semibold uppercase text-ds-faint">{row.label}</dt>
-            <dd className="text-[12px] text-ds-ink">
+            <dt className="text-ds-xs font-semibold uppercase text-ds-faint">{row.label}</dt>
+            <dd className="text-ds-sm text-ds-ink">
               {row.value}
-              {row.description ? <small className="block text-[11.5px] text-ds-muted">{row.description}</small> : null}
+              {row.description ? <small className="block text-ds-xs text-ds-muted">{row.description}</small> : null}
             </dd>
           </div>
         ))}
@@ -848,24 +848,24 @@ function MolecularSelectionSummary({
       data-selection-kind={selection.kind}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h4 className="text-[12px] font-semibold text-ds-ink">Selection</h4>
+        <h4 className="text-ds-sm font-semibold text-ds-ink">Selection</h4>
         <MolecularSelectionControls
           observation={observation}
           onApplyEdit={onApplyEdit}
         />
       </div>
-      <p className="text-[12px] text-ds-muted">{selection.summary}</p>
-      <p className="mt-1 text-[11px] leading-4 text-ds-faint">
+      <p className="text-ds-sm text-ds-muted">{selection.summary}</p>
+      <p className="mt-1 text-ds-xs leading-4 text-ds-faint">
         Click each residue to add it. Click a selected residue again to remove it. Click empty space to clear. Do not use Shift: Shift selects a whole stretch.
       </p>
       {selection.groups.length ? (
         <dl className="mt-2 grid gap-1.5">
           {selection.groups.map((group) => (
             <div key={group.id}>
-              <dt className="text-[11px] font-semibold uppercase text-ds-faint">{group.title}</dt>
-              <dd className="text-[12px] text-ds-ink">
+              <dt className="text-ds-xs font-semibold uppercase text-ds-faint">{group.title}</dt>
+              <dd className="text-ds-sm text-ds-ink">
                 {group.items.join(', ')}
-                <small className="block text-[11.5px] text-ds-muted">{group.summary}</small>
+                <small className="block text-ds-xs text-ds-muted">{group.summary}</small>
               </dd>
             </div>
           ))}
@@ -903,7 +903,7 @@ function MolecularSelectionControls({
         <button
           key={`chain:${chain}`}
           type="button"
-          className="inline-flex items-center gap-1 rounded border border-ds-border-muted px-1.5 py-0.5 text-[11px] text-ds-ink disabled:opacity-60"
+          className="inline-flex items-center gap-1 rounded border border-ds-border-muted px-1.5 py-0.5 text-ds-xs text-ds-ink disabled:opacity-60"
           disabled={disabled}
           data-molecular-select-chain={chain}
           onClick={() => {
@@ -919,7 +919,7 @@ function MolecularSelectionControls({
         <button
           key={`ligand:${ligand}`}
           type="button"
-          className="inline-flex items-center gap-1 rounded border border-ds-border-muted px-1.5 py-0.5 text-[11px] text-ds-ink disabled:opacity-60"
+          className="inline-flex items-center gap-1 rounded border border-ds-border-muted px-1.5 py-0.5 text-ds-xs text-ds-ink disabled:opacity-60"
           disabled={disabled}
           data-molecular-select-ligand={ligand}
           onClick={() => {
@@ -970,12 +970,12 @@ function MolecularCapabilitySummary({
       aria-label="Mol* capabilities"
       data-molecular-capability-summary
     >
-      <h4 className="mb-2 text-[12px] font-semibold text-ds-ink">Mol*</h4>
+      <h4 className="mb-2 text-ds-sm font-semibold text-ds-ink">Mol*</h4>
       <ul className="grid grid-cols-2 gap-1">
         {rows.map((row) => (
           <li
             key={row.id}
-            className="rounded border border-ds-border-muted px-1.5 py-1 text-[11px] text-ds-ink"
+            className="rounded border border-ds-border-muted px-1.5 py-1 text-ds-xs text-ds-ink"
             data-molecular-capability={row.id}
             data-enabled={row.active ? 'true' : 'false'}
           >

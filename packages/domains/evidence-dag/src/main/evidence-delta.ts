@@ -136,6 +136,13 @@ export type EvidenceDagSealErrorCode =
   | 'cycle_detected'
   | 'unknown_edge'
 
+export class EvidenceDagIntegrityError extends Error {
+  constructor(readonly code: 'payload_digest_mismatch' | 'delta_digest_mismatch', message: string) {
+    super(message)
+    this.name = 'EvidenceDagIntegrityError'
+  }
+}
+
 export class EvidenceDagSealError extends Error {
   readonly code: EvidenceDagSealErrorCode
 
@@ -169,6 +176,12 @@ function immutable<T>(value: T): T {
     for (const child of Object.values(item)) pending.push(child)
   }
   return value
+}
+
+// Snapshot exactly what JSON persistence retains before assigning immutable identity.
+// In particular, object undefined fields disappear and array undefined becomes null.
+function snapshotPayload(payload: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(payload))
 }
 
 /** The single append-only owner of one Evidence thread. */
@@ -419,8 +432,13 @@ export class EvidenceDeltaChain {
     return [...this.sealIdempotency.entries()]
   }
 
-  committedSnapshotClosureEntries(): readonly [string, string][] {
-    return [...this.committedSnapshotClosures.entries()]
+  committedSnapshotClosureEntries(limit = Number.POSITIVE_INFINITY): readonly [string, string][] {
+    const entries: [string, string][] = []
+    for (const entry of this.committedSnapshotClosures) {
+      if (entries.length >= limit) break
+      entries.push(entry)
+    }
+    return entries
   }
 
   importLegacyRoot(input: EvidenceDagLegacyRootInput): EvidenceDagLegacyCheckpointRoot {
@@ -720,6 +738,7 @@ export class EvidenceDeltaChain {
       ? this.legacyRoot?.snapshot.inputWatermark
       : this.records.find((record) => record.deltaDigest === headDigest)?.committedWatermark
     const gaps: EvidenceDagSealedClosure['gapCodes'][number][] = []
+    if (this.records.some(record => record.sequence <= headSequence && record.payload.recordType === 'integrity_isolation')) addGap(gaps, 'lineage_incomplete')
     // A closure may intentionally stop at an older comparable watermark, but
     // an incomparable record cannot be classified as before or after the
     // declared barrier. Keep the closure incomplete instead of silently
@@ -727,14 +746,14 @@ export class EvidenceDeltaChain {
     if (!isLegacyHead) {
       for (const record of this.records) {
         if (record.sequence > headSequence) continue
-        if (compareEvidenceDagWatermarks(record.committedWatermark, canonicalPolicy.barrierWatermark) === undefined) {
+        if (compareEvidenceDagWatermarks(closureRecordWatermark(record, canonicalPolicy), canonicalPolicy.barrierWatermark) === undefined) {
           addGap(gaps, 'missing_delta')
         }
       }
     }
     const eligible = this.records.filter((record) =>
       record.sequence <= (isLegacyHead ? 0 : headSequence) &&
-      watermarkAtOrBefore(record.committedWatermark, canonicalPolicy.barrierWatermark)
+      watermarkAtOrBefore(closureRecordWatermark(record, canonicalPolicy), canonicalPolicy.barrierWatermark)
     )
     const barrierCoverage = headWatermark
       ? compareEvidenceDagWatermarks(headWatermark, canonicalPolicy.barrierWatermark)
@@ -804,9 +823,9 @@ export class EvidenceDeltaChain {
     if (parsed.predecessorDigest !== this.head.headDigest || parsed.sequence !== this.records.length + 1) {
       throw new EvidenceDagSealError('invalid_predecessor', 'Evidence delta chain contains a missing or reordered predecessor.')
     }
-    if (parsed.payloadDigest !== digest(parsed.payload)) throw new Error('Evidence delta payload digest does not match its payload.')
+    if (parsed.payloadDigest !== digest(parsed.payload)) throw new EvidenceDagIntegrityError('payload_digest_mismatch', 'Evidence delta payload digest does not match its payload.')
     const { deltaDigest: _digest, ...content } = parsed
-    if (parsed.deltaDigest !== digest(content)) throw new Error('Evidence delta digest does not match its immutable content.')
+    if (parsed.deltaDigest !== digest(content)) throw new EvidenceDagIntegrityError('delta_digest_mismatch', 'Evidence delta digest does not match its immutable content.')
     const priorWatermark = this.head.committedWatermark
     const comparison = priorWatermark ? compareEvidenceDagWatermarks(parsed.committedWatermark, priorWatermark) : undefined
     if (comparison !== undefined && comparison < 0) throw new Error('Evidence delta chain contains a regressed committed watermark.')
@@ -845,8 +864,9 @@ export class EvidenceDeltaChain {
     }> = {}
   ): EvidenceDagDelta {
     if (input.scope.threadId !== this.threadId) throw new Error('Evidence delta scope does not match its chain thread.')
+    const payload = snapshotPayload(input.payload)
     const value = {
-      payloadDigest: digest(input.payload),
+      payloadDigest: digest(payload),
       predecessorDigest,
       sequence,
       scope: input.scope,
@@ -859,7 +879,7 @@ export class EvidenceDeltaChain {
       sourceRefs: uniqueSorted(input.sourceRefs ?? []),
       artifactRefs: uniqueSorted(input.artifactRefs ?? []),
       runRefs: uniqueSorted(input.runRefs ?? []),
-      payload: structuredClone(input.payload),
+      payload,
       createdAt: input.createdAt ?? defaults.createdAt ?? new Date().toISOString()
     }
     return evidenceDagDeltaSchema.parse({ ...value, deltaDigest: digest(value) })
@@ -877,7 +897,7 @@ export class EvidenceDeltaChain {
       recordType: input.recordType,
       closureDigest: input.closureDigest,
       idempotencyKey: input.idempotencyKey,
-      payload: structuredClone(input.payload),
+      payload: snapshotPayload(input.payload),
       producerIdentity: input.producerIdentity,
       reviewerIdentity: input.reviewerIdentity ?? null,
       createdAt: input.createdAt ?? defaults.createdAt ?? new Date().toISOString()
@@ -973,8 +993,19 @@ export class EvidenceDeltaChain {
   }
 }
 
+export type EvidenceDagRecovery = Readonly<{
+  threadId: string
+  archiveName: string
+  archiveDigest: string
+  code: EvidenceDagIntegrityError['code']
+  verifiedPrefixLength: number
+  quarantinedRecordCount: number
+  detectedAt: string
+}>
+
 type EvidenceDeltaStoreFile = Readonly<{
   version: 1
+  recoveries?: readonly EvidenceDagRecovery[]
   chains: readonly Readonly<{
     threadId: string
     records: readonly EvidenceDagDelta[]
@@ -989,34 +1020,151 @@ type EvidenceDeltaStoreFile = Readonly<{
   }>[]
 }>
 
+/** Validate in journal order without recursive archive traversal. Every historical
+ * marker must survive either in the active chain or a later committed archive.
+ * Reconstruct markers from verified prefixes, never trust descriptive metadata.
+ */
+function validateRecoveryLineage(
+  chains: ReadonlyMap<string, EvidenceDeltaChain>,
+  recoveries: readonly EvidenceDagRecovery[],
+  archives: ReadonlyMap<string, EvidenceDeltaStoreFile>
+): void {
+  const fail = (): never => { throw new Error('Evidence recovery metadata does not match immutable isolation records.') }
+  const identities = new Set<string>()
+  const expectedMarkers = new Map<string, EvidenceDagDelta>()
+  for (let index = 0; index < recoveries.length; index++) {
+    const recovery = recoveries[index]!
+    const identity = canonicalJson(recovery)
+    if (identities.has(identity)) fail()
+    identities.add(identity)
+    const archive = archives.get(recovery.archiveName)
+    if (!archive) return fail()
+    const originals = archive.chains.filter(chain => chain.threadId === recovery.threadId)
+    const original = originals[0]
+    if (originals.length !== 1 || !original || !Array.isArray(original.records) ||
+        original.records.length !== recovery.verifiedPrefixLength + recovery.quarantinedRecordCount) fail()
+    // An archive may be shared by recoveries for several chains in one load.
+    // Its journal must be an exact prefix of the retained recovery history.
+    const history = archive.recoveries ?? []
+    if (!Array.isArray(history) || history.length > index ||
+        canonicalJson(history) !== canonicalJson(recoveries.slice(0, history.length))) fail()
+    const prefix = original.records.slice(0, recovery.verifiedPrefixLength)
+    for (const record of prefix) {
+      if (record.payload.recordType === 'integrity_isolation' &&
+          canonicalJson(expectedMarkers.get(record.deltaDigest)) !== canonicalJson(record)) fail()
+    }
+    const chain = new EvidenceDeltaChain(recovery.threadId, prefix, { legacyRoot: original.legacyRoot })
+    const rejected = evidenceDagDeltaSchema.parse(original.records[recovery.verifiedPrefixLength])
+    try {
+      new EvidenceDeltaChain(recovery.threadId, [...prefix, rejected], { legacyRoot: original.legacyRoot })
+      fail()
+    } catch (error) {
+      if (!(error instanceof EvidenceDagIntegrityError) || error.code !== recovery.code) fail()
+    }
+    const marker = chain.append({
+      scope: rejected.scope,
+      requestedWatermark: chain.head.committedWatermark ?? rejected.requestedWatermark,
+      schemaVersion: 'evidence.delta.v1', extractorVersion: 'integrity-isolation.v1', verifierVersion: 'integrity-isolation.v1',
+      idempotencyKey: `integrity-isolation:${recovery.archiveDigest}:${recovery.threadId}`,
+      runRefs: rejected.runRefs,
+      payload: { recordType: 'integrity_isolation', gapCodes: ['lineage_incomplete'], recovery },
+      createdAt: recovery.detectedAt
+    }).delta
+    expectedMarkers.set(marker.deltaDigest, marker)
+    const active = chains.get(recovery.threadId)?.list() ?? []
+    const activeWitness = active.some(record => record.deltaDigest === marker.deltaDigest && canonicalJson(record) === canonicalJson(marker))
+    const archivedWitness = recoveries.slice(index + 1).some(later => {
+      if (later.threadId !== recovery.threadId) return false
+      const laterArchive = archives.get(later.archiveName)
+      return laterArchive?.recoveries?.some(prior => canonicalJson(prior) === identity) &&
+        laterArchive.chains.some(entry => entry.threadId === recovery.threadId && entry.records.some(record => {
+          if (canonicalJson(record) === canonicalJson(marker)) return true
+          // A subsequent failure may damage the isolation marker itself. Only
+          // the first rejected record may use this proof: restoring its known
+          // payload (or digest) must reproduce the entire immutable marker.
+          if (record.sequence !== later.verifiedPrefixLength + 1) return false
+          if (later.code === 'payload_digest_mismatch' && record.payloadDigest !== digest(record.payload)) {
+            return canonicalJson({ ...record, payload: marker.payload }) === canonicalJson(marker) ||
+              canonicalJson({ ...record, payloadDigest: marker.payloadDigest }) === canonicalJson(marker)
+          }
+          if (later.code === 'delta_digest_mismatch') {
+            return canonicalJson({ ...record, deltaDigest: marker.deltaDigest }) === canonicalJson(marker)
+          }
+          return false
+        }))
+    })
+    if (!activeWitness && !archivedWitness) fail()
+  }
+  for (const chain of chains.values()) {
+    for (const record of chain.list()) {
+      if (record.payload.recordType === 'integrity_isolation' &&
+          canonicalJson(expectedMarkers.get(record.deltaDigest)) !== canonicalJson(record)) fail()
+    }
+  }
+}
+
 /** Durable boundary for all Evidence deltas and their owner-derived views. */
 export class EvidenceDagDeltaStore {
   private readonly chains = new Map<string, EvidenceDeltaChain>()
   private readonly auditIndex = new OwnerAuditIndex()
   private loaded = false
+  private recoveries: EvidenceDagRecovery[] = []
+  recoveryStatus(): readonly EvidenceDagRecovery[] { return structuredClone(this.recoveries) }
   private mutationQueue: Promise<void> = Promise.resolve()
   private writeQueue: Promise<void> = Promise.resolve()
 
   private readonly storage: EvidenceFileStorage
   constructor(private readonly storagePath: string) { this.storage = new EvidenceFileStorage(storagePath) }
 
+  private loading: Promise<void> | undefined
   async load(): Promise<void> {
+    if (this.loading) return this.loading
+    this.loading = this.loadOnce()
+    try { await this.loading } finally { this.loading = undefined }
+  }
+
+  private async loadOnce(): Promise<void> {
     if (this.loaded) return
     this.loaded = true
-    let raw: string
+    let raw: Buffer
     try {
-      raw = this.storage.readText()
+      raw = this.storage.readBytes()
     } catch (error) {
       if (isMissingFile(error)) return
       this.loaded = false
       throw error
     }
     try {
-      const parsed = JSON.parse(raw) as unknown
+      const parsed = JSON.parse(raw.toString('utf8')) as unknown
       if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.chains)) {
         throw new Error('Evidence delta store has an unsupported format.')
       }
       const loadedChains = new Map<string, EvidenceDeltaChain>()
+      const recoveries: EvidenceDagRecovery[] = []
+      let recovered = false
+      // Read each content-addressed archive once. Historical isolation records
+      // can move into a later archive when the same chain is damaged again.
+      const archives = new Map<string, EvidenceDeltaStoreFile>()
+      if (parsed.recoveries !== undefined && !Array.isArray(parsed.recoveries)) throw new Error('Evidence recovery metadata is invalid.')
+      if (Array.isArray(parsed.recoveries)) {
+        for (const recovery of parsed.recoveries) {
+          if (!isRecord(recovery) || typeof recovery.threadId !== 'string' ||
+              typeof recovery.archiveName !== 'string' || !/^deltas-quarantine-[0-9a-f]{64}\.json$/u.test(recovery.archiveName) ||
+              typeof recovery.archiveDigest !== 'string' || recovery.archiveDigest !== `sha256:${recovery.archiveName.slice(18, -5)}` ||
+              !['payload_digest_mismatch', 'delta_digest_mismatch'].includes(String(recovery.code)) ||
+              !Number.isSafeInteger(recovery.verifiedPrefixLength) || Number(recovery.verifiedPrefixLength) < 0 ||
+              !Number.isSafeInteger(recovery.quarantinedRecordCount) || Number(recovery.quarantinedRecordCount) < 1 ||
+              typeof recovery.detectedAt !== 'string') throw new Error('Evidence recovery metadata is invalid.')
+          if (!archives.has(recovery.archiveName)) {
+            const archive = new EvidenceFileStorage(join(dirname(this.storagePath), recovery.archiveName)).readBytes()
+            if (digestBytes(archive) !== recovery.archiveDigest) throw new Error('Evidence quarantine archive digest mismatch.')
+            const archived = JSON.parse(archive.toString('utf8')) as EvidenceDeltaStoreFile
+            if (archived.version !== 1 || !Array.isArray(archived.chains)) throw new Error('Evidence recovery metadata archive format is invalid.')
+            archives.set(recovery.archiveName, archived)
+          }
+          recoveries.push(recovery as EvidenceDagRecovery)
+        }
+      }
       for (const entry of parsed.chains) {
         if (!isRecord(entry) || typeof entry.threadId !== 'string' || !Array.isArray(entry.records)) {
           throw new Error('Evidence delta store contains an invalid chain entry.')
@@ -1024,7 +1172,8 @@ export class EvidenceDagDeltaStore {
         if (loadedChains.has(entry.threadId)) {
           throw new Error(`Evidence delta store contains duplicate thread ${entry.threadId}.`)
         }
-        loadedChains.set(entry.threadId, new EvidenceDeltaChain(entry.threadId, entry.records as EvidenceDagDelta[], {
+        try {
+          loadedChains.set(entry.threadId, new EvidenceDeltaChain(entry.threadId, entry.records as EvidenceDagDelta[], {
           legacyRoot: entry.legacyRoot as EvidenceDagLegacyCheckpointRoot | null | undefined,
           committedSnapshot: entry.committedSnapshot as EvidenceDagCommittedSnapshot | null | undefined,
           committedSnapshotClosureDigest: typeof entry.committedSnapshotClosureDigest === 'string'
@@ -1034,10 +1183,77 @@ export class EvidenceDagDeltaStore {
           closures: entry.closures as EvidenceDagSealedClosure[] | undefined,
           sidechains: entry.sidechains as EvidenceDagSidechainRecordV1[] | undefined,
           sealIdempotency: entry.sealIdempotency as Readonly<Record<string, string>> | undefined
-        }))
+          }))
+        } catch (error) {
+          // Only known immutable-digest failures have an isolation policy.
+          // Schema, scope, ordering, filesystem and other failures stay visible.
+          if (!(error instanceof EvidenceDagIntegrityError)) throw error
+          const archiveDigest = digestBytes(raw)
+          const archiveName = `deltas-quarantine-${archiveDigest.slice(7)}.json`
+          archives.set(archiveName, parsed as EvidenceDeltaStoreFile)
+          const archiveStorage = new EvidenceFileStorage(join(dirname(this.storagePath), archiveName))
+          try {
+            if (!archiveStorage.readBytes().equals(raw)) throw new Error('Evidence quarantine archive conflicts with original bytes.')
+          } catch (archiveError) {
+            if (!isMissingFile(archiveError)) throw archiveError
+            archiveStorage.writeBytes(raw)
+          }
+          const prefix: EvidenceDagDelta[] = []
+          for (const record of entry.records) {
+            try {
+              new EvidenceDeltaChain(entry.threadId, [...prefix, record as EvidenceDagDelta], {
+                legacyRoot: entry.legacyRoot as EvidenceDagLegacyCheckpointRoot | undefined
+              })
+              prefix.push(record as EvidenceDagDelta)
+            } catch (recordError) {
+              if (!(recordError instanceof EvidenceDagIntegrityError)) throw recordError
+              break
+            }
+          }
+          const knownHeads = new Set(prefix.map(record => record.deltaDigest))
+          if (isRecord(entry.legacyRoot) && isRecord(entry.legacyRoot.snapshot)) knownHeads.add(String(entry.legacyRoot.snapshot.digest))
+          const closures = (entry.closures as EvidenceDagSealedClosure[] | undefined)?.filter(closure => knownHeads.has(closure.headDigest)) ?? []
+          const closureDigests = new Set(closures.map(closure => closure.closureDigest))
+          const snapshotBound = typeof entry.committedSnapshotClosureDigest === 'string' && closureDigests.has(entry.committedSnapshotClosureDigest)
+          const sidechains = entry.sidechains as EvidenceDagSidechainRecordV1[] | undefined
+          const firstUnboundSidechain = sidechains?.findIndex(record => !closureDigests.has(record.closureDigest)) ?? -1
+          const chain = new EvidenceDeltaChain(entry.threadId, prefix, {
+            legacyRoot: entry.legacyRoot as EvidenceDagLegacyCheckpointRoot | undefined,
+            closures,
+            committedSnapshot: snapshotBound ? entry.committedSnapshot as EvidenceDagCommittedSnapshot : null,
+            committedSnapshotClosureDigest: snapshotBound ? entry.committedSnapshotClosureDigest as string : null,
+            committedSnapshotClosures: Object.fromEntries(Object.entries(entry.committedSnapshotClosures ?? {}).filter(([key]) => closureDigests.has(key))),
+            sealIdempotency: Object.fromEntries(Object.entries(entry.sealIdempotency ?? {}).filter(([, value]) => closureDigests.has(String(value)))),
+            // Sidechain sequence is append-only: retain only the verified prefix.
+            sidechains: sidechains?.slice(0, firstUnboundSidechain < 0 ? undefined : firstUnboundSidechain)
+          })
+          const recovery: EvidenceDagRecovery = {
+            threadId: entry.threadId, archiveName, archiveDigest, code: error.code,
+            verifiedPrefixLength: prefix.length, quarantinedRecordCount: entry.records.length - prefix.length,
+            detectedAt: new Date().toISOString()
+          }
+          const rejected = evidenceDagDeltaSchema.parse(entry.records[prefix.length])
+          chain.append({
+            scope: rejected.scope,
+            requestedWatermark: chain.head.committedWatermark ?? rejected.requestedWatermark,
+            schemaVersion: 'evidence.delta.v1', extractorVersion: 'integrity-isolation.v1', verifierVersion: 'integrity-isolation.v1',
+            idempotencyKey: `integrity-isolation:${archiveDigest}:${entry.threadId}`,
+            runRefs: rejected.runRefs,
+            payload: { recordType: 'integrity_isolation', gapCodes: ['lineage_incomplete'], recovery },
+            createdAt: recovery.detectedAt
+          })
+          loadedChains.set(entry.threadId, chain)
+          recoveries.push(recovery)
+          recovered = true
+        }
       }
+      validateRecoveryLineage(loadedChains, recoveries, archives)
       this.chains.clear()
       for (const [threadId, chain] of loadedChains) this.chains.set(threadId, chain)
+      this.recoveries = recoveries
+      // The consumer can acknowledge only after archive + repaired active store
+      // have both reached their normal durable storage boundaries.
+      if (recovered) await this.persist()
     } catch (error) {
       this.chains.clear()
       this.loaded = false
@@ -1141,8 +1357,9 @@ export class EvidenceDagDeltaStore {
     })
   }
 
-  async compileProvisional(threadId: string, input: EvidenceDagProvisionalCompileInput): Promise<EvidenceDagProvisionalView> {
+  async compileProvisional(threadId: string, input: EvidenceDagProvisionalCompileInput, stillCurrent: () => boolean = () => true): Promise<EvidenceDagProvisionalView> {
     return this.mutate(async () => {
+      if (!stillCurrent()) throw new Error('Evidence derivation was superseded before publication.')
       const chain = this.chains.get(threadId) ?? new EvidenceDeltaChain(threadId)
       const view = chain.provisional(input)
       this.chains.set(threadId, chain)
@@ -1151,8 +1368,9 @@ export class EvidenceDagDeltaStore {
     })
   }
 
-  async reconcileProvisional(options: EvidenceDagProvisionalCompilerOptions): Promise<void> {
+  async reconcileProvisional(options: EvidenceDagProvisionalCompilerOptions, stillCurrent: () => boolean = () => true): Promise<void> {
     return this.mutate(async () => {
+      if (!stillCurrent()) return
       let changed = false
       for (const chain of this.chains.values()) {
         const head = chain.head
@@ -1193,6 +1411,15 @@ export class EvidenceDagDeltaStore {
     const chain = this.chains.get(threadId)
     if (!chain) return new EvidenceDeltaChain(threadId)
     return this.readView(threadId, chain)
+  }
+
+  /** Retain an existing chain's identity; workspace successors never rewrite its bytes. */
+  async threadIdForWorkspace(threadId: string, workspaceRoot: string): Promise<string> {
+    await this.load()
+    await this.mutationQueue
+    const original = this.chains.get(threadId)
+    if (!original?.workspaceRoot || resolve(original.workspaceRoot) === resolve(workspaceRoot)) return threadId
+    return `${threadId}:workspace:${digest(resolve(workspaceRoot)).slice('sha256:'.length)}`
   }
 
   /** Query the canonical owner without copying all chain histories into read views. */
@@ -1273,6 +1500,7 @@ export class EvidenceDagDeltaStore {
     const operation = this.writeQueue.then(async () => {
       const document: EvidenceDeltaStoreFile = {
         version: 1,
+        ...(this.recoveries.length ? { recoveries: this.recoveries } : {}),
         chains: [...this.chains.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([threadId, chain]) => ({
           threadId,
           records: chain.list(),
@@ -1855,6 +2083,14 @@ function sequenceAt(records: readonly EvidenceDagDelta[], digestValue: string | 
 function deltaIdentity(delta: EvidenceDagDelta): Omit<EvidenceDagDelta, 'deltaDigest'> {
   const { deltaDigest: _digest, ...identity } = delta
   return identity
+}
+
+/** Lifecycle receipt coverage remains independent; its captured thread boundary
+ * places the already-durable delta relative to a conversation closure barrier. */
+function closureRecordWatermark(record: EvidenceDagDelta, policy: EvidenceDagClosurePolicyV1): string {
+  if (policy.watermarkPolicy !== 'captured-thread-v2' || record.scope.kind !== 'artifact_lifecycle') return record.committedWatermark
+  const captured = /^(.*):artifact-lifecycle:\d+(?::batch:\d+\/\d+)?$/u.exec(record.committedWatermark)
+  return captured?.[1] || record.committedWatermark
 }
 
 function watermarkAtOrBefore(value: string, barrier: string): boolean {

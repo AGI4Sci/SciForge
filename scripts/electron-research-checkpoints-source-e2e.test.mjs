@@ -26,7 +26,7 @@ test('source Electron checkpoint E2E proves V2 exact reads and compact researche
     assert.ok(source.includes(actionId), `missing ${actionId}`)
   }
   assert.ok(source.includes('[data-research-checkpoint-state="committed"]'))
-  assert.match(source, /Open research dossier\|打开科研档案/u)
+  assert.match(source, /Open research evidence chain\|打开科研证据链/u)
   assert.match(source, /Chat timeline still exposes output artifacts/u)
   assert.match(source, /Chat timeline still exposes provenance detail/u)
 })
@@ -40,6 +40,8 @@ test('source Electron checkpoint E2E retains hostile lifecycle and persistence p
   assert.match(source, /findDurableCompletionEvent/u)
   assert.match(source, /restartPersistenceVerified:\s*true/u)
   assert.match(source, /managedCodexHomeIsolated:\s*true/u)
+  assert.match(source, /join\(userDataDirectory, 'runtime-codex', 'codex-home', 'config\.toml'\)/u)
+  assert.doesNotMatch(source, /\.codex-runtime/u)
   assert.match(source, /window\.on\('crash'/u)
   assert.match(source, /window\.on\('pageerror'/u)
   assert.match(source, /app\.on\('close'/u)

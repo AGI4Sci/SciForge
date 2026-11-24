@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { webcrypto } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesktopIdentityService } from './oidc-service.js'
+import { CloudIdentityClientError } from './cloud-identity-client.js'
 import {
   DesktopIdentitySessionStoreError,
   type StoredDesktopIdentitySession
@@ -170,8 +171,222 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('durable refresh rotation escrow', () => {
+  async function fixture() {
+    const signer = await createSigner()
+    let now = Date.parse('2026-08-18T12:00:00.000Z')
+    const seconds = now / 1000
+    const accessToken = await signer.sign({ iss: issuer, sub: 'original-subject', aud: audience, azp: clientId, exp: seconds + 300, iat: seconds, nbf: seconds, auth_time: seconds })
+    const store = memorySessionStore({ version: 1, issuer, clientId, refreshToken: 'original-refresh-token', identity: { subject: 'original-subject', userId: 'usr_CloudUser000001' } })
+    const tokenRequests: string[] = []
+    const revokedTokens: string[] = []
+    let failKeys = false
+    let failMe = false
+    let tokenBarrier: Promise<void> | undefined
+    let tokenEntered: (() => void) | undefined
+    const pauseNextToken = () => {
+      let release!: () => void
+      const entered = new Promise<void>((resolve) => { tokenEntered = resolve })
+      tokenBarrier = new Promise<void>((resolve) => { release = resolve })
+      return { entered, release }
+    }
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/.well-known/openid-configuration')) return Response.json({ issuer, authorization_endpoint: `${issuer}/auth`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/keys`, revocation_endpoint: `${issuer}/revoke` })
+      if (url.endsWith('/revoke')) {
+        revokedTokens.push(new URLSearchParams(String(init?.body)).get('token')!)
+        return new Response(null, { status: 204 })
+      }
+      if (url.endsWith('/keys')) return failKeys ? new Response('', { status: 503 }) : Response.json({ keys: [signer.publicJwk] })
+      if (url.endsWith('/token')) {
+        const token = new URLSearchParams(String(init?.body)).get('refresh_token')!
+        tokenRequests.push(token)
+        if (tokenBarrier) {
+          const barrier = tokenBarrier
+          tokenBarrier = undefined
+          tokenEntered?.()
+          await barrier
+        }
+        if (tokenRequests.slice(0, -1).includes(token)) return new Response('', { status: 400 })
+        const t = now / 1000
+        return Response.json({ access_token: tokenRequests.length === 1 ? accessToken : await signer.sign({ iss: issuer, sub: 'original-subject', aud: audience, azp: clientId, exp: t + 300, iat: t, nbf: t, auth_time: seconds }), refresh_token: `rotated-refresh-token-${tokenRequests.length}` })
+      }
+      throw new Error('Unexpected request')
+    }) as unknown as typeof fetch
+    const me = vi.fn(async () => {
+      if (failMe) throw new CloudIdentityClientError('provider_unavailable', 'Temporary cloud failure')
+      return identityClient.getCurrentUser()
+    })
+    const make = () => new DesktopIdentityService({ issuer, clientId, audience, sessionStore: store, fetchImpl, identityClient: { getCurrentUser: me }, now: () => now, openExternal: async () => undefined })
+    return { make, store, me, tokenRequests, revokedTokens, pauseNextToken, setKeysFailure: (v: boolean) => { failKeys = v }, setMeFailure: (v: boolean) => { failMe = v }, expire: () => { now += 600000 } }
+  }
+
+  it.each(['keys', 'me'])('retains R2 across %s failure and service restart without reusing R1 or publishing auth', async (stage) => {
+    const f = await fixture()
+    if (stage === 'keys') f.setKeysFailure(true)
+    else f.setMeFailure(true)
+    const first = f.make()
+    expect((await first.initialize()).ok).toBe(false)
+    expect(first.getAccessToken()).toBeNull()
+    expect(first.getStatus().state).toBe('signed-out')
+    expect(f.store.current()?.refreshToken).toBe('original-refresh-token')
+    expect(f.store.current()?.pendingRefresh?.refreshToken).toBe('rotated-refresh-token-1')
+    first.close()
+    f.setKeysFailure(false)
+    f.setMeFailure(false)
+    const restarted = f.make()
+    try {
+      expect((await restarted.initialize()).ok).toBe(true)
+      expect(restarted.getStatus().state).toBe('signed-in')
+      expect(f.tokenRequests).toEqual(['original-refresh-token'])
+      expect(f.store.current()?.refreshToken).toBe('rotated-refresh-token-1')
+      expect(f.store.current()?.pendingRefresh).toBeUndefined()
+    } finally { restarted.close() }
+  })
+
+  it.each(['keys', 'me'])('keeps the rotating credential owner when initialize joins refresh before %s failure', async (stage) => {
+    const f = await fixture()
+    const service = f.make()
+    try {
+      expect((await service.initialize()).ok).toBe(true)
+      const rejected = service.getAccessToken()!
+      const loadCount = f.store.load.mock.calls.length
+      const blocked = f.pauseNextToken()
+      if (stage === 'keys') f.setKeysFailure(true)
+      else f.setMeFailure(true)
+      const refreshing = service.renewAccessToken(rejected).catch((error: unknown) => error)
+      await blocked.entered
+      const initializing = service.initialize()
+      // Let a concurrent vault load resolve before the provider rotates R1.
+      await Promise.resolve()
+      await Promise.resolve()
+      blocked.release()
+      expect((await initializing).ok).toBe(false)
+      await refreshing
+      expect(f.store.current()?.pendingRefresh?.refreshToken).toBe('rotated-refresh-token-2')
+      f.setKeysFailure(false)
+      f.setMeFailure(false)
+      expect(await service.renewAccessToken(rejected)).toBeTruthy()
+      expect(f.tokenRequests).toEqual(['original-refresh-token', 'rotated-refresh-token-1'])
+      expect(f.store.current()?.refreshToken).toBe('rotated-refresh-token-2')
+      expect(f.store.current()?.pendingRefresh).toBeUndefined()
+      expect(f.store.clear).not.toHaveBeenCalled()
+      expect(f.store.load).toHaveBeenCalledTimes(loadCount)
+    } finally { service.close() }
+  })
+
+  it.each(['keys', 'me'])('revokes the pending rotated token on logout after %s failure', async (stage) => {
+    const f = await fixture()
+    if (stage === 'keys') f.setKeysFailure(true)
+    else f.setMeFailure(true)
+    const service = f.make()
+    try {
+      expect((await service.initialize()).ok).toBe(false)
+      expect(f.store.current()?.pendingRefresh?.refreshToken).toBe('rotated-refresh-token-1')
+      expect((await service.logout()).ok).toBe(true)
+      expect(f.revokedTokens).toEqual(['rotated-refresh-token-1'])
+      expect(f.store.current()).toBeNull()
+      expect(service.getAccessToken()).toBeNull()
+    } finally { service.close() }
+  })
+
+  it('renews expired escrow with verified R2 without granting expired access', async () => {
+    const f = await fixture()
+    f.setKeysFailure(true)
+    const first = f.make()
+    await first.initialize()
+    first.close()
+    f.expire()
+    f.setKeysFailure(false)
+    const restarted = f.make()
+    try {
+      expect((await restarted.initialize()).ok).toBe(true)
+      expect(f.tokenRequests).toEqual(['original-refresh-token', 'rotated-refresh-token-1'])
+      expect(restarted.getAccessToken()).not.toBeNull()
+    } finally { restarted.close() }
+  })
+
+  it('rejects invalid escrow before /me or another refresh and clears it', async () => {
+    const f = await fixture()
+    await f.store.save({ ...f.store.current()!, pendingRefresh: { accessToken: 'invalid-jwt', refreshToken: 'rotated-refresh-token-1' } })
+    const service = f.make()
+    try {
+      expect(await service.initialize()).toMatchObject({ ok: false, error: { code: 'OIDC_TOKEN_INVALID' } })
+      expect(f.tokenRequests).toEqual([])
+      expect(f.me).not.toHaveBeenCalled()
+      expect(f.store.current()).toBeNull()
+      expect(service.getAccessToken()).toBeNull()
+    } finally { service.close() }
+  })
+
+  it.each(['subject', 'userId'])('rejects escrow that violates the trusted %s binding', async (field) => {
+    const f = await fixture()
+    await f.store.save({ ...f.store.current()!, identity: { subject: field === 'subject' ? 'different-subject' : 'original-subject', userId: field === 'userId' ? 'another-user' : 'usr_CloudUser000001' } })
+    const service = f.make()
+    try {
+      expect((await service.initialize()).ok).toBe(false)
+      expect(service.getAccessToken()).toBeNull()
+      expect(f.store.current()).toBeNull()
+      if (field === 'subject') expect(f.me).not.toHaveBeenCalled()
+    } finally { service.close() }
+  })
+
+  it('rejects oversized stored pending data without requesting refresh or publishing auth', async () => {
+    const f = await fixture()
+    // The runtime validates pending data even when a custom session store is used.
+    await f.store.save({ ...f.store.current()!, pendingRefresh: { accessToken: 'x'.repeat(100001) } })
+    const service = f.make()
+    try {
+      expect((await service.initialize()).ok).toBe(true)
+      expect(service.getAccessToken()).toBeNull()
+      expect(f.store.current()).toBeNull()
+      expect(f.tokenRequests).toEqual([])
+    } finally { service.close() }
+  })
+
+  it('retries escrow persistence after storage failure without a second refresh', async () => {
+    const f = await fixture()
+    f.store.save.mockRejectedValueOnce(new DesktopIdentitySessionStoreError('vault unavailable'))
+    const service = f.make()
+    try {
+      expect(await service.initialize()).toMatchObject({ ok: false, error: { code: 'OIDC_SESSION_STORAGE_UNAVAILABLE' } })
+      expect(f.me).not.toHaveBeenCalled()
+      expect(service.getAccessToken()).toBeNull()
+      expect((await service.initialize()).ok).toBe(true)
+      expect(f.tokenRequests).toEqual(['original-refresh-token'])
+    } finally { service.close() }
+  })
+
+  it('shares concurrent refresh work and logout cannot resurrect an escrow save', async () => {
+    const f = await fixture()
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const barrier = new Promise<void>((resolve) => { release = resolve })
+    const save = f.store.save.getMockImplementation()!
+    f.store.save.mockImplementationOnce(async (session) => { entered(); await barrier; await save(session) })
+    const service = f.make()
+    const a = service.initialize()
+    const b = service.initialize()
+    expect(a).toBe(b)
+    await started
+    const logout = service.logout()
+    release()
+    await Promise.all([a, b, logout])
+    expect(f.store.current()).toBeNull()
+    expect(service.getStatus().state).toBe('signed-out')
+    expect(service.getAccessToken()).toBeNull()
+    service.close()
+  })
+})
+
 describe('DesktopIdentityService', () => {
-  it('completes browser PKCE login and exposes only a safe account status', async () => {
+  it.each([
+    { registeredUsername: 'nem', expectedName: 'Nem User' },
+    { registeredUsername: 'researcher-b', expectedName: 'Nem User' },
+    { registeredUsername: undefined, expectedName: 'Nem User' },
+    { registeredUsername: '   ', expectedName: 'Nem User' }
+  ])('uses the canonical cloud display name independently of login username $registeredUsername', async ({ registeredUsername, expectedName }) => {
     const signer = await createSigner()
     const port = await unusedPort()
     const redirectUri = `http://127.0.0.1:${port}/oidc/callback`
@@ -207,7 +422,7 @@ describe('DesktopIdentityService', () => {
             ...common,
             aud: audience,
             azp: clientId,
-            preferred_username: 'nem',
+            preferred_username: registeredUsername,
             email: 'nem@example.com'
           }),
           id_token: await signer.sign({
@@ -215,7 +430,7 @@ describe('DesktopIdentityService', () => {
             aud: clientId,
             nonce,
             name: 'Nem User',
-            preferred_username: 'nem',
+            preferred_username: registeredUsername,
             email: 'nem@example.com',
             email_verified: true
           }),
@@ -259,8 +474,8 @@ describe('DesktopIdentityService', () => {
           oidcIdentityId: 'oid_CloudIdent0001',
           issuer,
           subject: 'keycloak-user-123',
-          displayName: 'Nem User',
-          username: 'nem',
+          displayName: expectedName,
+          ...(registeredUsername?.trim() ? { username: registeredUsername.trim() } : {}),
           email: 'nem@example.com',
           emailVerified: true
         },
@@ -275,9 +490,20 @@ describe('DesktopIdentityService', () => {
       issuer,
       clientId,
       refreshToken: 'refresh-token-initial',
-      idToken: expect.stringMatching(/^ey/)
+      idToken: expect.stringMatching(/^ey/),
+      identity: { subject: 'keycloak-user-123', userId: 'usr_CloudUser000001' }
     })
     expect(JSON.stringify(sessionStore.current())).not.toContain(service.getAccessToken()!)
+
+    const beforeRefresh = service.sessionIdentity()
+    const profile = await identityClient.getCurrentUser()
+    identityClient.getCurrentUser.mockResolvedValueOnce({ ...profile, displayName: 'Renamed Scientist', revision: 2 })
+    const saveCount = sessionStore.save.mock.calls.length
+    await service.refreshProfile()
+    expect(service.getStatus()).toMatchObject({ state: 'signed-in', user: { displayName: 'Renamed Scientist' } })
+    expect(service.sessionIdentity()).toEqual(beforeRefresh)
+    expect(sessionStore.save).toHaveBeenCalledTimes(saveCount)
+    expect(statusListener).toHaveBeenLastCalledWith(service.getStatus())
 
     const logout = await service.logout()
     expect(logout).toEqual({ ok: true, status: { state: 'signed-out' } })
@@ -673,7 +899,7 @@ describe('DesktopIdentityService', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      status: { state: 'signed-in', user: { userId: 'usr_CloudUser000001' } }
+      status: { state: 'signed-in', user: { userId: 'usr_CloudUser000001', displayName: 'Nem User', username: 'nem' } }
     })
     expect(service.getAccessToken()).toBe(issuedAccessToken)
     expect(sessionStore.current()).toMatchObject({
@@ -1276,6 +1502,125 @@ describe('DesktopIdentityService', () => {
     })
     expect(openExternal).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['ENOTFOUND', 'DNS lookup failed'],
+    ['ECONNREFUSED', 'connection refused'],
+    ['UND_ERR_CONNECT_TIMEOUT', 'connection timed out'],
+    ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'TLS certificate chain could not be verified']
+  ])('reports safe discovery cause %s without opening a browser', async (code, description) => {
+    const openExternal = vi.fn()
+    const service = new DesktopIdentityService({
+      issuer, clientId, audience, identityClient,
+      sessionStore: memorySessionStore(), openExternal,
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError('secret request content', {
+          cause: Object.assign(new Error('Bearer secret-token https://private.example/'), { code })
+        })
+      }) as unknown as typeof fetch
+    })
+    const result = await service.login()
+    expect(result).toMatchObject({ ok: false, error: {
+      code: 'OIDC_PROVIDER_UNAVAILABLE',
+      message: `Cannot reach the SciForge login service (discovery: ${description} [${code}]).`
+    } })
+    expect(JSON.stringify(result)).not.toMatch(/secret|private\.example|Bearer/)
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('bounds aggregate causes and does not infer diagnostics from arbitrary error text', async () => {
+    const unknown = Object.assign(new Error('ENOTFOUND token=secret'), { code: 'private-token' })
+    const cycle = Object.assign(new Error('private-server-body'), { code: 'ECONNRESET', cause: unknown })
+    Object.assign(unknown, { cause: cycle })
+    const service = new DesktopIdentityService({
+      issuer, clientId, audience, identityClient,
+      sessionStore: memorySessionStore(), openExternal: vi.fn(),
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError('fetch failed with private URL', { cause: new AggregateError([unknown, cycle], 'private headers') })
+      }) as unknown as typeof fetch
+    })
+    expect(await service.login()).toMatchObject({ ok: false, error: {
+      code: 'OIDC_PROVIDER_UNAVAILABLE',
+      message: 'Cannot reach the SciForge login service (discovery: connection reset [ECONNRESET]).'
+    } })
+  })
+
+  it('bounds hanging discovery and permits a subsequent explicit login attempt', async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | null | undefined
+    const openExternal = vi.fn()
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockImplementationOnce(async (_input, init) => {
+        signal = init?.signal
+        return new Promise<Response>(() => undefined)
+      })
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+    const service = new DesktopIdentityService({
+      issuer, clientId, audience, identityClient,
+      sessionStore: memorySessionStore(), openExternal, fetchImpl
+    })
+    try {
+      const first = service.login()
+      await vi.advanceTimersByTimeAsync(14_999)
+      expect(signal?.aborted).toBe(false)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(first).resolves.toMatchObject({ ok: false, error: {
+        code: 'OIDC_PROVIDER_UNAVAILABLE',
+        message: 'Cannot reach the SciForge login service (discovery: network request timed out [TimeoutError]).'
+      } })
+      expect(signal?.aborted).toBe(true)
+      await expect(service.login()).resolves.toMatchObject({ ok: false, error: {
+        message: 'SciForge login discovery failed with HTTP 503.'
+      } })
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+      expect(openExternal).not.toHaveBeenCalled()
+    } finally {
+      service.close()
+    }
+  })
+
+  it.each(['discovery', 'token exchange', 'signing keys'] as const)(
+    'bounds a stalled %s body without repeating token exchange', async (stage) => {
+      vi.useFakeTimers()
+      let stalledSignal: AbortSignal | null | undefined
+      const sessionStore = memorySessionStore({ version: 1, issuer, clientId, refreshToken: 'saved-test-token' })
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input)
+        const current = url.endsWith('openid-configuration') ? 'discovery' :
+          url.endsWith('/token') ? 'token exchange' : 'signing keys'
+        if (current === stage) {
+          stalledSignal = init?.signal
+          return { ok: true, status: 200, json: () => new Promise(() => undefined) } as Response
+        }
+        if (current === 'discovery') return Response.json({
+          issuer, authorization_endpoint: `${issuer}/auth`,
+          token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/certs`
+        })
+        if (current === 'token exchange') return Response.json({ access_token: 'test-access-token' })
+        throw new Error('Unexpected test endpoint')
+      })
+      const service = new DesktopIdentityService({
+        issuer, clientId, audience, identityClient,
+        sessionStore, openExternal: vi.fn(), fetchImpl
+      })
+      try {
+        const restoring = service.initialize()
+        await vi.advanceTimersByTimeAsync(15_000)
+        await expect(restoring).resolves.toMatchObject({ ok: false, error: {
+          code: 'OIDC_PROVIDER_UNAVAILABLE',
+          message: `Cannot reach the SciForge login service (${stage}: network request timed out [TimeoutError]).`
+        } })
+        expect(stalledSignal?.aborted).toBe(true)
+        expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/token'))).toHaveLength(stage === 'discovery' ? 0 : 1)
+        expect(sessionStore.clear).not.toHaveBeenCalled()
+        if (stage === 'signing keys') expect(sessionStore.current()?.pendingRefresh?.accessToken).toBe('test-access-token')
+        else expect(sessionStore.save).not.toHaveBeenCalled()
+      } finally {
+        service.close()
+      }
+    }
+  )
 
   it('does not accept non-loopback HTTP issuers', () => {
     expect(() => new DesktopIdentityService({

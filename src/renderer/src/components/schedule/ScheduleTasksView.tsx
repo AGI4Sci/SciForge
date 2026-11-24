@@ -71,7 +71,7 @@ export function ScheduleTaskFilterSelect({
       value={value}
       onChange={(event) => onChange(event.target.value as TaskFilter)}
       aria-label={t('scheduleFilterLabel')}
-      className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+      className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
     >
       {SCHEDULE_FILTERS.map((item) => (
         <option key={item} value={item}>{t(`scheduleFilter_${item}`)}</option>
@@ -514,7 +514,7 @@ export function ScheduleTasksView({
                   ariaLabel={t('sidebarExpand')}
                 />
               ) : null}
-              <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium text-ds-muted">
+              <h1 className="min-w-0 flex-1 truncate text-ds-xl font-medium text-ds-muted">
                 {t('schedule')}
               </h1>
             </div>
@@ -525,7 +525,7 @@ export function ScheduleTasksView({
       <main className="ds-no-drag min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-8">
         <div className="mx-auto flex w-full max-w-[880px] flex-col gap-8">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[14px] leading-6 text-ds-faint">
+            <p className="text-ds-lg leading-6 text-ds-faint">
               {t('scheduleSubtitle')}
             </p>
             <div className="flex items-center gap-2">
@@ -542,7 +542,7 @@ export function ScheduleTasksView({
               <button
                 type="button"
                 onClick={openCreateDialog}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
               >
                 <Plus className="h-4 w-4" strokeWidth={2} />
                 {t('scheduleNewTask')}
@@ -553,11 +553,11 @@ export function ScheduleTasksView({
           <div className="flex items-center justify-between gap-3 rounded-xl border border-ds-border bg-ds-card px-4 py-3">
             <div className="flex min-w-0 items-center gap-3">
               <Clock3 className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.75} />
-              <span className="min-w-0 text-[14px] text-ds-ink">
+              <span className="min-w-0 text-ds-lg text-ds-ink">
                 {t('scheduleAwakeNotice')}
               </span>
             </div>
-            <label className="flex shrink-0 items-center gap-2 text-[13px] font-medium text-ds-muted">
+            <label className="flex shrink-0 items-center gap-2 text-ds-md font-medium text-ds-muted">
               {t('scheduleKeepAwake')}
               <input
                 type="checkbox"
@@ -572,13 +572,13 @@ export function ScheduleTasksView({
           </div>
 
           {loading ? (
-            <div className="py-20 text-center text-[14px] text-ds-faint">{t('loading')}</div>
+            <div className="py-20 text-center text-ds-lg text-ds-faint">{t('loading')}</div>
           ) : error ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-ds-md text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
               {error}
             </div>
           ) : visibleTasks.length === 0 ? (
-            <div className="flex min-h-[340px] items-center justify-center text-[13px] text-ds-faint">
+            <div className="flex min-h-[340px] items-center justify-center text-ds-md text-ds-faint">
               {tasks.length === 0 ? t('scheduleEmpty') : t('scheduleFilterEmpty')}
             </div>
           ) : (
@@ -595,14 +595,14 @@ export function ScheduleTasksView({
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
-                          <h2 className="truncate text-[15px] font-semibold text-ds-ink">
+                          <h2 className="truncate text-ds-xl font-semibold text-ds-ink">
                             {task.title || t('scheduleUntitled')}
                           </h2>
-                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(task.lastStatus)}`}>
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-ds-xs font-medium ${statusTone(task.lastStatus)}`}>
                             {running ? t('scheduleStatus_running') : t(`scheduleStatus_${task.lastStatus}`)}
                           </span>
                         </div>
-                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ds-faint">
+                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-ds-sm text-ds-faint">
                           <span>{scheduleTaskSummary(task, t)}</span>
                           <span>{t('scheduleNextRun')}: {formatDateTime(task.nextRunAt, t('scheduleNotScheduled'))}</span>
                           <span>{t('scheduleLastRun')}: {formatDateTime(task.lastRunAt, t('scheduleNeverRun'))}</span>
@@ -660,7 +660,7 @@ export function ScheduleTasksView({
                     {task.lastMessage ? (
                       <div className="mt-3 rounded-lg border border-ds-border-muted bg-ds-main/45 px-3 py-2.5">
                         <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
-                          <span className="min-w-0 truncate text-[12px] font-semibold text-ds-faint">
+                          <span className="min-w-0 truncate text-ds-sm font-semibold text-ds-faint">
                             {task.lastStatus === 'error'
                               ? t('scheduleLastError')
                               : task.lastStatus === 'running'
@@ -671,7 +671,7 @@ export function ScheduleTasksView({
                             <button
                               type="button"
                               onClick={() => toggleResultPreview(task.id)}
-                              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-ds-sm font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                               aria-expanded={expandedResultTaskIds.has(task.id)}
                             >
                               {expandedResultTaskIds.has(task.id) ? (
@@ -684,7 +684,7 @@ export function ScheduleTasksView({
                           ) : null}
                         </div>
                         <div
-                          className={`whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-ds-muted ${
+                          className={`whitespace-pre-wrap break-words font-mono text-ds-sm leading-5 text-ds-muted ${
                             expandedResultTaskIds.has(task.id)
                               ? 'max-h-80 overflow-y-auto pr-1'
                               : 'line-clamp-5 overflow-hidden'
@@ -768,7 +768,7 @@ function ScheduleTaskDialog({
       onMouseDown={onClose}
     >
       <form
-        role="dialog"
+        data-native-view-occluder="true" role="dialog"
         aria-modal="true"
         aria-labelledby="schedule-task-dialog-title"
         onSubmit={(event) => {
@@ -780,7 +780,7 @@ function ScheduleTaskDialog({
       >
         <div className="flex shrink-0 items-center justify-between gap-4 border-b border-ds-border-muted px-6 py-3">
           <div className="min-w-0">
-            <h2 id="schedule-task-dialog-title" className="truncate text-[17px] font-semibold text-ds-ink">
+            <h2 id="schedule-task-dialog-title" className="truncate text-ds-2xl font-semibold text-ds-ink">
               {title}
             </h2>
           </div>
@@ -809,9 +809,9 @@ function ScheduleTaskDialog({
                     maxLength={50}
                     onChange={(event) => updateDraft({ title: event.target.value })}
                     placeholder={t('scheduleTaskNamePlaceholder')}
-                    className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 pr-14 text-[14px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
+                    className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 pr-14 text-ds-lg text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
                   />
-                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-ds-faint">
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ds-sm text-ds-faint">
                     {draft.title.length}/50
                   </span>
                 </div>
@@ -825,9 +825,9 @@ function ScheduleTaskDialog({
                     maxLength={8_000}
                     onChange={(event) => updateDraft({ prompt: event.target.value })}
                     placeholder={t('scheduleTaskPromptPlaceholder')}
-                    className="min-h-[108px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/55 px-3 py-3 pb-8 text-[14px] leading-6 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
+                    className="min-h-[108px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/55 px-3 py-3 pb-8 text-ds-lg leading-6 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
                   />
-                  <span className="pointer-events-none absolute bottom-3 right-3 text-[12px] text-ds-faint">
+                  <span className="pointer-events-none absolute bottom-3 right-3 text-ds-sm text-ds-faint">
                     {promptCount}/8000
                   </span>
                 </div>
@@ -841,12 +841,12 @@ function ScheduleTaskDialog({
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
                 <div className="grid gap-2">
                   <FieldLabel>{t('scheduleModel')}</FieldLabel>
-                  <div className="flex min-h-10 items-center rounded-xl border border-ds-border-muted bg-ds-main/35 px-3 text-[13px] text-ds-muted">
-                    {t('scheduleModelFollowsAccess')} · <span className="ml-1 font-mono text-[12.5px] text-ds-ink">{activeModelLabel}</span>
+                  <div className="flex min-h-10 items-center rounded-xl border border-ds-border-muted bg-ds-main/35 px-3 text-ds-md text-ds-muted">
+                    {t('scheduleModelFollowsAccess')} · <span className="ml-1 font-mono text-ds-sm text-ds-ink">{activeModelLabel}</span>
                   </div>
-                  <span className="text-[11.5px] leading-4 text-ds-faint">{t('scheduleModelFollowsAccessHint')}</span>
+                  <span className="text-ds-xs leading-4 text-ds-faint">{t('scheduleModelFollowsAccessHint')}</span>
                   {scheduleLegacyModelNote(draft.model, t) ? (
-                    <span className="text-[11.5px] leading-4 text-ds-faint">
+                    <span className="text-ds-xs leading-4 text-ds-faint">
                       {scheduleLegacyModelNote(draft.model, t)}
                     </span>
                   ) : null}
@@ -905,7 +905,7 @@ function ScheduleTaskDialog({
                       type="datetime-local"
                       value={dateTimeLocalValueFromIso(draft.schedule.atTime)}
                       onChange={(event) => updateSchedule({ atTime: isoFromDateTimeLocalValue(event.target.value) })}
-                      className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-[14px] text-ds-ink outline-none transition focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
+                      className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-ds-lg text-ds-ink outline-none transition focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
                     />
                   </label>
                 ) : draft.schedule.kind === 'interval' ? (
@@ -917,11 +917,11 @@ function ScheduleTaskDialog({
                       max={10080}
                       value={draft.schedule.everyMinutes}
                       onChange={(event) => updateSchedule({ everyMinutes: Number(event.target.value) })}
-                      className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-[14px] text-ds-ink outline-none transition focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
+                      className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-ds-lg text-ds-ink outline-none transition focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
                     />
                   </label>
                 ) : (
-                  <div className="flex min-h-10 items-center rounded-xl bg-ds-subtle px-3 text-[13px] text-ds-muted">
+                  <div className="flex min-h-10 items-center rounded-xl bg-ds-subtle px-3 text-ds-md text-ds-muted">
                     {t('scheduleManualHint')}
                   </div>
                 )}
@@ -940,12 +940,12 @@ function ScheduleTaskDialog({
                       value={draft.workspaceRoot}
                       onChange={(event) => updateDraft({ workspaceRoot: event.target.value })}
                       placeholder={t('scheduleWorkspacePlaceholder')}
-                      className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-[14px] text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
+                      className="h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-ds-lg text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/15"
                     />
                     <button
                       type="button"
                       onClick={onPickWorkspace}
-                      className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                     >
                       <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
                       {draft.workspaceRoot.trim() ? t('changeWorkspace') : t('selectWorkspace')}
@@ -958,7 +958,7 @@ function ScheduleTaskDialog({
                   <button
                     type="button"
                     onClick={() => updateDraft({ enabled: !draft.enabled })}
-                    className="flex h-10 items-center justify-between gap-3 rounded-xl border border-ds-border bg-ds-main/55 px-3 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                    className="flex h-10 items-center justify-between gap-3 rounded-xl border border-ds-border bg-ds-main/55 px-3 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                     aria-pressed={draft.enabled}
                   >
                     <span className="inline-flex min-w-0 items-center gap-2">
@@ -975,7 +975,7 @@ function ScheduleTaskDialog({
           </div>
 
           {error ? (
-            <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
+            <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-ds-md text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
               {error}
             </div>
           ) : null}
@@ -985,7 +985,7 @@ function ScheduleTaskDialog({
           <button
             type="button"
             onClick={onOpenSettings}
-            className="inline-flex h-8 items-center gap-2 rounded-xl px-3 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="inline-flex h-8 items-center gap-2 rounded-xl px-3 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <MoreHorizontal className="h-4 w-4" strokeWidth={1.8} />
             {t('scheduleAdvancedSettings')}
@@ -994,13 +994,13 @@ function ScheduleTaskDialog({
             <button
               type="button"
               onClick={onClose}
-              className="h-8 rounded-xl border border-ds-border bg-ds-card px-4 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              className="h-8 rounded-xl border border-ds-border bg-ds-card px-4 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
             >
               {t('cancel')}
             </button>
             <button
               type="submit"
-              className="h-8 rounded-xl bg-ds-userbubble px-5 text-[13px] font-semibold text-ds-userbubbleFg transition hover:opacity-90"
+              className="h-8 rounded-xl bg-ds-userbubble px-5 text-ds-md font-semibold text-ds-userbubbleFg transition hover:opacity-90"
             >
               {t('confirm')}
             </button>
@@ -1022,7 +1022,7 @@ function ScheduleDialogSection({
 }): ReactElement {
   return (
     <section className="grid gap-3 border-t border-ds-border-muted pt-4 first:border-t-0 first:pt-0">
-      <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink">
+      <div className="flex items-center gap-2 text-ds-md font-semibold text-ds-ink">
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-ds-subtle text-ds-muted">
           {icon}
         </span>
@@ -1041,7 +1041,7 @@ function FieldLabel({
   required?: boolean
 }): ReactElement {
   return (
-    <span className="flex min-h-5 items-center gap-1 text-[13px] font-medium text-ds-ink">
+    <span className="flex min-h-5 items-center gap-1 text-ds-md font-medium text-ds-ink">
       <span className="min-w-0 truncate">{children}</span>
       {required ? <span className="text-red-500">*</span> : null}
     </span>
@@ -1061,7 +1061,7 @@ function SegmentButton({
     <button
       type="button"
       onClick={onClick}
-      className={`h-9 min-w-0 rounded-xl border px-2.5 text-[12.5px] font-semibold transition ${
+      className={`h-9 min-w-0 rounded-xl border px-2.5 text-ds-sm font-semibold transition ${
         selected
           ? 'border-accent/45 bg-accent/10 text-ds-ink shadow-sm'
           : 'border-ds-border bg-ds-main/55 text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -1082,7 +1082,7 @@ function ScheduleTimePicker({
   t: (key: string, values?: Record<string, unknown>) => string
 }): ReactElement {
   const [hour, minute] = splitTimeOfDay(value)
-  const selectClass = 'h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-[14px] text-ds-ink outline-none transition focus:border-accent/45 focus:ring-2 focus:ring-accent/15'
+  const selectClass = 'h-10 w-full rounded-xl border border-ds-border bg-ds-main/55 px-3 text-ds-lg text-ds-ink outline-none transition focus:border-accent/45 focus:ring-2 focus:ring-accent/15'
 
   return (
     <div className="grid grid-cols-2 gap-2">

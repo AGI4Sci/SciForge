@@ -430,6 +430,13 @@ class ArtifactVersionProjectionClient:
                     raise ArtifactVersionProjectionError(
                         f"Pinned ArtifactVersion ref conflict: {record.ref.version_id}"
                     )
+                prior_artifact = self.artifacts.get(record.artifact.artifact_id)
+                prior_version = self.versions.get(record.version.version_id)
+                if (prior_artifact is not None and prior_artifact.kind != record.artifact.kind) \
+                        or (prior_version is not None and prior_version.locator != record.version.locator):
+                    raise ArtifactVersionProjectionError(
+                        f"Artifact source projection metadata conflict: {record.ref.version_id}"
+                    )
                 self.refs[record.ref.version_id] = record.ref
                 self.artifacts[record.artifact.artifact_id] = Artifact.from_dict(
                     record.artifact.to_dict()

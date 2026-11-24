@@ -1,5 +1,7 @@
 import { withTaskExecutionGuidance } from './task-execution-guidance'
 import { join } from 'node:path'
+import { mkdir, writeFile, rename } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { workspaceReferencePrompt } from './workspace-reference-prompt'
 import { withDurableAgentRuntimeHistory } from './durable-runtime-history'
 import { createDshDeploymentTargetResolver } from './dsh-executable-discovery'
@@ -10,7 +12,7 @@ import { createAgentRuntimeMcpToolLease, type AgentRuntimeMcpToolLease } from '.
 import { createAgentRuntimeMcpSessionEndpoint } from './agent-runtime-mcp-session-endpoint'
 import { createDefaultAgentRuntimeCapabilities, type AgentRuntimeEvent, type AgentRuntimeThread, type AgentRuntimeTurnHandle } from '../../../shared/agent-runtime-contract'
 import { getModelRouterSettings, isModelRouterTextReasonerConfigured, resolveRuntimeModelRouterSettings } from '../../../shared/app-settings-model-router'
-import { isDshCommandExecutionEnabled } from '../../../shared/app-settings-dsh'
+import { getDshRuntimeSettings, isDshCommandExecutionEnabled } from '../../../shared/app-settings-dsh'
 import { resolveModelAccessRuntimePolicy } from '../../../shared/model-access-runtime-policy'
 import { isModelRouterServiceHealthy } from '../../model-router-health'
 import { resolveDshModelRouterInputModalities } from './dsh-model-router'
@@ -55,6 +57,49 @@ export function createProductionDshHostRuntimeAdapter(options: {
 
 /** ACP implementation stays package-owned; this bridge owns Host attribution only. */
 export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): AgentRuntimeAdapter & { close(): Promise<void>; invalidateModelAccess(): Promise<void> } {
+  const ordinary = createSingleDshHostRuntimeAdapter(options)
+  const minimal = createSingleDshHostRuntimeAdapter({ ...options, contextProfile: 'minimal', stateDirectory: join(options.stateDirectory, 'minimal') })
+  const minimalThreads = new Set<string>()
+  const bindings = join(options.stateDirectory, 'minimal-thread-bindings.json')
+  try {
+    const ids: unknown = JSON.parse(readFileSync(bindings, 'utf8'))
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid minimal thread bindings.')
+    ids.forEach(id => minimalThreads.add(id))
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  let writes = Promise.resolve()
+  const save = () => (writes = writes.then(async () => {
+    await mkdir(options.stateDirectory, { recursive: true })
+    const temporary = `${bindings}.tmp`
+    await writeFile(temporary, JSON.stringify([...minimalThreads]), { mode: 0o600 })
+    await rename(temporary, bindings)
+  }))
+  const choose = (input: { threadId?: string; sessionId?: string; contextProfile?: string }) => minimalThreads.has(input.threadId ?? input.sessionId ?? '') ? minimal : ordinary
+  return { ...ordinary, contextProfiles: ['minimal'],
+    startThread: async (context, input) => {
+      if (input.contextProfile === 'minimal' && (!input.allowedTools || input.allowedTools.length)) throw new Error('Minimal context requires an explicit empty tool allowlist.')
+      const target = input.contextProfile === 'minimal' ? minimal : ordinary
+      const thread = await target.startThread(context, input)
+      if (target === minimal) { minimalThreads.add(thread.id); await save() }
+      return thread
+    },
+    startTurn: (context, input) => {
+      if ((input.contextProfile === 'minimal') !== minimalThreads.has(input.threadId)) throw new Error('Runtime context profile does not match thread.')
+      return choose(input).startTurn(context, input)
+    },
+    listThreads: (context, input) => input.threadId && minimalThreads.has(input.threadId) ? minimal.listThreads(context, input) : ordinary.listThreads(context, input),
+    readThreadStatus: (context, input) => choose(input).readThreadStatus(context, input),
+    readThreadPage: (context, input) => choose(input).readThreadPage(context, input),
+    readToolArtifact: (context, input) => choose(input).readToolArtifact(context, input),
+    subscribeEvents: (context, input) => choose(input).subscribeEvents(context, input),
+    publishSyntheticEvent: (context, event) => choose(event).publishSyntheticEvent!(context, event),
+    interruptTurn: (context, input) => choose(input).interruptTurn(context, input),
+    deleteThread: (context, input) => choose(input).deleteThread(context, input),
+    resumeSession: (context, input) => choose(input).resumeSession!(context, input),
+    close: async () => { await Promise.all([ordinary.close(), minimal.close()]) },
+    invalidateModelAccess: async () => { await Promise.all([ordinary.invalidateModelAccess(), minimal.invalidateModelAccess()]) }
+  }
+}
+function createSingleDshHostRuntimeAdapter(options: DshHostRuntimeOptions): AgentRuntimeAdapter & { close(): Promise<void>; invalidateModelAccess(): Promise<void> } {
   type Active = { threadId: string; context: AgentRuntimeAdapterContext; workspace: string; allowedTools?: readonly string[]; handle?: AgentRuntimeTurnHandle; lease?: AgentRuntimeMcpToolLease; revoked: boolean }
   let active: Active | undefined
   const endpoints = new Map<string, Awaited<ReturnType<typeof createAgentRuntimeMcpSessionEndpoint>>>()
@@ -74,6 +119,7 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
     turn.handle = Object.freeze({ ...handle })
     await turn.context.onTurnAccepted?.(handle)
   }
+  const minimal = options.contextProfile === 'minimal'
   const core = createDshRuntimeAdapter({ ...options,
     getAuthorizedMcpServers: async (identity): Promise<readonly DshMcpServer[]> => {
       const turn = active
@@ -81,6 +127,8 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
       // Host durability and Principal acknowledgement must precede any tool endpoint.
       await accept(turn, identity)
       identity.signal.addEventListener('abort', () => { void revoke(turn) }, { once: true })
+      if (identity.signal.aborted) { await revoke(turn); throw new Error('runtime_turn_stale') }
+      if (minimal) return []
       const assertCurrent = (): void => {
         if (active !== turn || turn.revoked) throw new Error('runtime_turn_stale')
         identity.signal.throwIfAborted()
@@ -145,13 +193,17 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
     },
     startThread: async (context, input) => {
       if (input.workspaceLocator && !options.resolveWorkspace) throw new Error('runtime_workspace_host_unsupported')
-      const thread = project(await core.startThread(context, input))
+      const workspace = minimal ? join(options.stateDirectory, 'empty-workspace') : input.workspace
+      if (minimal) await mkdir(workspace!, { recursive: true, mode: 0o700 })
+      const thread = project(await core.startThread(context, { ...input, workspace }))
+      if (minimal) thread.workspace = input.workspace
       if (input.title) thread.title = input.title
       return thread
     },
     readThreadStatus: (context, input) => core.readThreadStatus(context, input),
     readThreadPage: unsupported, readToolArtifact: unsupported,
     startTurn: async (context, input) => {
+      if (minimal && (!input.allowedTools || input.allowedTools.length || input.fileReferences?.length || input.attachmentIds?.length || input.outputSchema)) throw new Error('Minimal context requires supplied text only and no tools.')
       if (active) throw new DshRuntimeError('runtime_busy')
       // Reserve startup before the asynchronous durable lookup/resume so a
       // second submission cannot replace the first turn's tool authority.
@@ -163,18 +215,21 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
         })).find(thread => thread.id === input.threadId)
         const workspace = thread?.workspace
         if (!workspace) throw new DshRuntimeError('runtime_workspace_required')
-        turn.workspace = workspace
+        turn.workspace = minimal ? join(options.stateDirectory, 'empty-workspace') : workspace
         try {
           await core.readThreadStatus(context, { runtimeId: 'dsh', threadId: input.threadId })
         } catch (error) {
           if (!(error instanceof DshRuntimeError) || error.code !== 'runtime_thread_not_found') throw error
-          await core.resumeSession(context, { runtimeId: 'dsh', sessionId: input.threadId, workspace })
+          await core.resumeSession(context, { runtimeId: 'dsh', sessionId: input.threadId, workspace: minimal ? join(options.stateDirectory, 'empty-workspace') : workspace })
           threads.set(input.threadId, thread!)
         }
         if (turn.revoked || active !== turn) throw new Error('runtime_turn_stale')
         const { fileReferences, ...runtimeInput } = input
-        const text = workspaceReferencePrompt(withTaskExecutionGuidance(input).text, fileReferences)
-        return await core.startTurn({ ...context, onTurnAccepted: handle => accept(turn, handle) }, { ...runtimeInput, text })
+        // Minimal text-only execution uses ACP's ordinary agent loop; the
+        // neutral execution contract explicitly names this default mode.
+        if (minimal && runtimeInput.mode === 'agent') delete runtimeInput.mode
+        const text = minimal ? input.text : workspaceReferencePrompt(withTaskExecutionGuidance(input).text, fileReferences)
+        return await core.startTurn({ ...context, onTurnAccepted: handle => accept(turn, handle) }, { ...runtimeInput, permissionLevel: input.permissionLevel ?? getDshRuntimeSettings(context.settings).sandboxMode, text })
       } catch (error) { await revoke(turn); throw error }
     },
     interruptTurn: async (context, input) => {
@@ -202,7 +257,7 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
     },
     resolveApproval: async (context, input) => { await core.resolveApproval(context, input) },
     resumeSession: async (context, input) => {
-      const workspace = threads.get(input.sessionId)?.workspace
+      const workspace = minimal ? join(options.stateDirectory, 'empty-workspace') : threads.get(input.sessionId)?.workspace
       if (!workspace) throw new Error('runtime_workspace_required')
       return core.resumeSession(context, { ...input, workspace })
     },

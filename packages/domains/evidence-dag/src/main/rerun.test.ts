@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -72,7 +72,7 @@ test('owner spec/compare identity mismatches and malformed/unbounded comparisons
 })
 test('rerun runtime authorizes real thread workspace before HTTP and refuses disabled/denied scopes', async () => {
   let enabled = true, denied = false, captured: string | undefined = '/workspace', http = 0
-  const dir = await mkdtemp(join(tmpdir(), 'rerun-read-fixture-'))
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'rerun-read-fixture-')))
   const deltaStore = new EvidenceDagDeltaStore(join(dir, 'fixture-deltas.json'))
   let lastUrl = ''
   const runtime = new EvidenceDagRuntime({ userDataDir: dir, deltaStore, sidecar: { configure() {}, endpoint: () => ({ baseUrl: 'http://fixture', apiKey: '' }), ensureReady: async () => {}, stop: async () => {} }, fetchImpl: async url => { http++; lastUrl = String(url); return Response.json({ ok: true, data: spec() }) } })

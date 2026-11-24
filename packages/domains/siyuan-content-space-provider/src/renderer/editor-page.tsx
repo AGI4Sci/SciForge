@@ -1,226 +1,299 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import type { DomainRendererWorkbenchMainAreaRenderContext } from '@sciforge/domain-sdk/renderer'
-
-import type { SiYuanEditorViewport, SiYuanServiceStatus } from '../editor-contract.js'
+import type { CloudSpace, CloudSpaceEnsureRequest } from '@sciforge/cloud-spaces-contracts'
+import type { z } from 'zod'
+import type { siyuanEditorResultSchema, SiYuanEditorViewport } from '../editor-contract.js'
+import type { SiYuanEditorConfigurationStore } from './editor-configuration.js'
 import { useNativeSiYuanPresentation } from './native-siyuan-presentation.js'
+import { useSiYuanServiceStatus, type SiYuanServiceControls } from './service-status.js'
+import { createEditorSessionStateStore, type EditorSessionStateStore } from './editor-session-state.js'
+import { SiYuanSettingsSection } from './settings-section.js'
+import { DocumentSharing, type DocumentSharingControls } from './document-sharing.js'
+import { useSiYuanLocale } from './locale.js'
 
-export type SiYuanEditorConfiguration = { url: string }
-export type SiYuanServiceControls = Readonly<{
-  status: () => Promise<SiYuanServiceStatus>
-  configure: (token: string | null) => Promise<SiYuanServiceStatus>
-}>
+type EditorSession = z.infer<typeof siyuanEditorResultSchema>
 
-const STORAGE_KEY = 'sciforge.siyuan.editor'
-const OPENING = '正在连接思源服务…（若该服务启用了访问授权码，请在内嵌页面中解锁一次）'
+/** The dock and settings contribution share one package-owned connection form. */
+const buttonClass = 'ds-no-drag rounded-md border border-ds-border bg-ds-card px-2.5 py-1 text-ds-sm text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50'
+const primaryButtonClass = buttonClass + ' border-ds-ink font-medium'
+const directoryRetryDelays = [2_000, 4_000, 8_000] as const
 
-const tokenSummary = (service: SiYuanServiceStatus | undefined): string => {
-  if (!service) return '读取中…'
-  if (service.token === 'stored') return '已配置（保存在本机加密存储）'
-  if (service.token === 'environment') return '来自环境变量 SIYUAN_API_TOKEN'
-  if (service.tokenStorage === 'unavailable') return '未配置（本机安全存储不可用，只能使用 SIYUAN_API_TOKEN）'
-  return '未配置'
-}
-
-function readConfiguration(): SiYuanEditorConfiguration {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') as Partial<SiYuanEditorConfiguration>
-    return { url: typeof value.url === 'string' ? value.url : '' }
-  } catch {
-    return { url: '' }
-  }
-}
-
-function validate(configuration: SiYuanEditorConfiguration): void {
-  // An empty address is allowed: the main process falls back to the service
-  // configured for the installation, and reports a clear error when neither exists.
-  if (!configuration.url.trim()) return
-  const parsed = new URL(configuration.url)
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
-    throw new Error('请输入有效的 HTTP 或 HTTPS 地址。')
-  }
-}
-
-/**
- * The dockable SiYuan page owns both the embedded editor and its own
- * configuration, because the Host leaves the whole surface to the package.
- * The editor itself is a native child view presented by the main process.
- */
-export function SiYuanEditorPage({ context, open, present, service }: Readonly<{
+export function SiYuanEditorPage({ context, open, spaces, ensure, projects, present, service, settings, sessionStates, visibleContext, sharing }: Readonly<{
   context: DomainRendererWorkbenchMainAreaRenderContext<ReactElement | null>
-  open: (input: SiYuanEditorConfiguration) => Promise<string>
-  present: (input: Readonly<{ url: string | null; viewport: SiYuanEditorViewport }>) => Promise<unknown>
+  sharing?: DocumentSharingControls
+  spaces?: () => Promise<readonly CloudSpace[]>
+  ensure?: (input: CloudSpaceEnsureRequest) => Promise<CloudSpace>
+  open: (input?: Readonly<{ spaceId?: string; refresh?: boolean }>) => Promise<EditorSession>
+  projects?: () => Promise<readonly Readonly<{ projectId: string; name: string; canCreate?: boolean }>[]>
+  present: (input: Readonly<{ url: string | null; sessionId?: string; reloadRevision?: number; viewport: SiYuanEditorViewport }>) => Promise<unknown>
+  visibleContext?: (input: Readonly<{ sessionId: string; nativeSessionId: string; spaceId?: string; workspaceId?: string }>) => () => void
+  sessionStates?: EditorSessionStateStore
   service: SiYuanServiceControls
+  settings: SiYuanEditorConfigurationStore
 }>): ReactElement {
-  const [configuration, setConfiguration] = useState(readConfiguration)
-  const [draft, setDraft] = useState(configuration)
-  const [tokenDraft, setTokenDraft] = useState('')
-  const [serviceStatus, setServiceStatus] = useState<SiYuanServiceStatus>()
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [panelError, setPanelError] = useState<string>()
-  const [url, setUrl] = useState<string | null>(null)
+  const { text, errorText } = useSiYuanLocale()
+  const [localStates] = useState(createEditorSessionStateStore)
+  const states = sessionStates ?? localStates
+  const configuration = useSyncExternalStore(settings.subscribe, settings.getSnapshot)
+  const [serviceStatus, , statusError] = useSiYuanServiceStatus(service, context.active)
+  const [directory, setDirectory] = useState<Readonly<{ session: string; spaces: readonly CloudSpace[] }> | null>(null)
+  const [projectDirectory, setProjectDirectory] = useState<Readonly<{ session: string; items: readonly Readonly<{ projectId: string; name: string; canCreate?: boolean }>[] }> | null>(null)
+  const [createProjectId, setCreateProjectId] = useState('')
+  const [createProjectOpen, setCreateProjectOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const actionEpoch = useRef(0)
+  const initialized = useRef(new Set<string>())
+  const [directoryError, setDirectoryError] = useState<string>()
+  const [listing, setListing] = useState(false)
+  const [resolved, setResolved] = useState<Readonly<EditorSession & { key: string }> | null>(null)
+  const managed = serviceStatus?.mode !== 'custom'
+  const identity = serviceStatus?.identity
+  const accountKey = identity?.state === 'signed-in' ? 'user:' + identity.userId : identity?.state
+  const sessionKey = context.session ? JSON.stringify([accountKey, context.session.runtimeId, context.session.id]) : accountKey
+  const stateKey = sessionKey ?? 'unavailable'
+  const liveStateKey = useRef(stateKey)
+  liveStateKey.current = stateKey
+  const sessionState = useSyncExternalStore(states.subscribe, () => states.read(stateKey))
+  const configurationReady = sessionState.configurationRevision === configuration.revision
+  const reloadRevision = sessionState.reloadRevision
+  const refreshSession = () => states.update(stateKey, { reloadRevision: reloadRevision + 1 })
+  useEffect(() => {
+    if (sessionState.configurationRevision === configuration.revision) return
+    states.update(stateKey, { configurationRevision: configuration.revision,
+      reloadRevision: sessionState.reloadRevision + (sessionState.configurationRevision === undefined ? 0 : 1) })
+  }, [states, stateKey, sessionState, configuration.revision])
+  const selectedSpaceId = sessionState.spaceId
+  const settingsOpen = sessionState.settingsOpen
+  const setSelectedSpaceId = (spaceId: string) => states.update(stateKey, { spaceId })
+  const setSettingsOpen = (settingsOpen: boolean) => states.update(stateKey, { settingsOpen })
+  const editorAvailable = serviceStatus?.editorAvailable !== false
+  const signedIn = identity?.state === 'signed-in'
+  const projectChoices = projectDirectory && projectDirectory.session === sessionKey ? projectDirectory.items : []
+  const spaceChoices = directory && directory.session === sessionKey ? directory.spaces : []
+  const creatableProjects = directory?.session === sessionKey ? projectChoices.filter(project => project.canCreate === true &&
+    !spaceChoices.some(space => space.scope.kind === 'project' && space.scope.projectId === project.projectId)) : []
+  const selectedSpace = spaceChoices.find(space => space.spaceId === selectedSpaceId)
+  const selectedProjectId = selectedSpace?.scope.kind === 'project' ? selectedSpace.scope.projectId : undefined
+  const mayEnsureSelectedSpace = selectedSpace?.scope.kind === 'personal' || projectChoices.some(project => project.projectId === selectedProjectId && project.canCreate === true)
+  const spaceId = selectedSpace?.status === 'ready' ? selectedSpace.spaceId : ''
+  const resolutionKey = `${configuration.revision}:${reloadRevision}:${managed ? 'managed:' + spaceId : 'custom'}:${sessionKey}`
+  const sessionExpired = Boolean(managed && resolved?.expiresAt && Date.parse(resolved.expiresAt) <= Date.now())
+  const url = configurationReady && editorAvailable && resolved?.key === resolutionKey && (!managed || signedIn && spaceId && !sessionExpired) ? resolved.url : null
+  const serviceUrl = serviceStatus?.url
+  const needsConfiguration = !managed && serviceUrl === null && !configuration.url && !url
+  const showingSettings = needsConfiguration || settingsOpen
   const [opening, setOpening] = useState(false)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string>()
-  const [attempt, setAttempt] = useState(0)
+  const [renewalError, setRenewalError] = useState<string>()
+  const [renewalAttempt, setRenewalAttempt] = useState(0)
   const viewport = useRef<HTMLDivElement | null>(null)
+  const openedRevisions = useRef(new Map<string, number>())
+  useEffect(() => { setCreating(false); setCreateProjectId(''); setCreateProjectOpen(false); setDirectoryError(undefined); return () => { actionEpoch.current++ } }, [stateKey, context.active])
+
+  useEffect(() => {
+    if (!configurationReady || !managed || !context.active || !signedIn || !sessionKey) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let projectTimer: ReturnType<typeof setTimeout> | undefined
+    let readFailures = 0
+    let projectFailures = 0
+    const load = async () => {
+      setListing(true)
+      let reading = false
+      try {
+        if (!spaces || !ensure) throw new Error('cloud_spaces_unavailable')
+        reading = true
+        let items = await spaces()
+        reading = false
+        if (cancelled) return
+        readFailures = 0
+        if (!initialized.current.has(accountKey!) && !items.some(item => item.scope.kind === 'personal')) {
+          const personal = await ensure({ scope: { kind: 'personal' } })
+          if (cancelled) return
+          items = [...items.filter(item => item.spaceId !== personal.spaceId), personal]
+        }
+        initialized.current.add(accountKey!)
+        const personal = items.find(item => item.scope.kind === 'personal')
+        if (!states.read(stateKey).spaceId && personal) states.update(stateKey, { spaceId: personal.spaceId })
+        setDirectory({ session: sessionKey, spaces: items })
+        setDirectoryError(undefined)
+        if (items.some(item => item.status === 'queued' || item.status === 'provisioning')) timer = setTimeout(() => { void load() }, 2_000)
+      } catch (failure) {
+        if (!cancelled) {
+          setDirectory(null)
+          setDirectoryError(errorText(failure))
+          // Only replay directory reads, never an ensure whose write outcome is unknown.
+          if (reading && readFailures < directoryRetryDelays.length) {
+            timer = setTimeout(() => { void load() }, directoryRetryDelays[readFailures++])
+          }
+        }
+      }
+      finally { if (!cancelled) setListing(false) }
+    }
+    const loadProjects = async () => {
+      if (!projects) return
+      try {
+        const items = await projects()
+        if (!cancelled) setProjectDirectory({ session: sessionKey, items })
+      } catch {
+        if (!cancelled) {
+          setProjectDirectory(null)
+          if (projectFailures < directoryRetryDelays.length) {
+            projectTimer = setTimeout(() => { void loadProjects() }, directoryRetryDelays[projectFailures++])
+          }
+        }
+      }
+    }
+    void load()
+    void loadProjects()
+    return () => { cancelled = true; clearTimeout(timer); clearTimeout(projectTimer) }
+  }, [managed, context.active, signedIn, sessionKey, spaces, ensure, projects, configuration.revision, reloadRevision, configurationReady, errorText, accountKey, states, stateKey])
+
+  const ensureSpace = async (request: CloudSpaceEnsureRequest) => {
+    if (!ensure) return
+    const captured = stateKey
+    const epoch = actionEpoch.current
+    const current = () => captured === liveStateKey.current && epoch === actionEpoch.current
+    setCreating(true)
+    try {
+      const space = await ensure(request)
+      if (!current()) return
+      states.update(captured, { spaceId: space.spaceId, reloadRevision: states.read(captured).reloadRevision + 1 })
+      setCreateProjectOpen(false)
+      setCreateProjectId('')
+      setError(undefined)
+    } catch (failure) { if (current()) setDirectoryError(errorText(failure)) }
+    finally { if (current()) setCreating(false) }
+  }
 
   const onReady = useCallback((): void => { setReady(true); setError(undefined) }, [])
-  const onError = useCallback((message: string): void => { setReady(false); setError(message) }, [])
+  const onError = useCallback((message: string): void => { setReady(false); setError(errorText(message)) }, [errorText])
   useNativeSiYuanPresentation({
-    active: context.active, url, viewportRef: viewport, present, onReady, onError
+    active: context.active && !showingSettings && editorAvailable, ownerDocument: context.ownerDocument, url, sessionKey, reloadRevision, viewportRef: viewport, present, onReady, onError
   })
 
   useEffect(() => {
-    if (!context.active) return
+    if (!context.active || !ready || !url || showingSettings || !editorAvailable || !context.session || !sessionKey) return
+    return visibleContext?.({ sessionId: context.session.id, nativeSessionId: sessionKey,
+      ...(managed ? { spaceId } : {}), ...(context.session.workspaceRoot ? { workspaceId: context.session.workspaceRoot } : {}) })
+  }, [context.active, ready, url, showingSettings, editorAvailable, context.session?.id, context.session?.workspaceRoot, sessionKey, managed, spaceId, resolutionKey, visibleContext])
+
+  useEffect(() => {
+    if (!configurationReady || !context.active || !editorAvailable || showingSettings || !serviceStatus || (managed ? !signedIn || !spaceId : serviceUrl === null && !configuration.url)) return
+    // A still-valid managed view keeps its editor state when the panel returns.
+    // Its renewal timer below handles the approaching expiry.
+    if (managed && resolved?.key === resolutionKey && !sessionExpired) {
+      // A different chat may have started an open that was cancelled when we
+      // returned. Its finally callback cannot clear this page's pending UI.
+      setOpening(false)
+      return
+    }
     let cancelled = false
     setOpening(true)
     setReady(false)
     setError(undefined)
-    void open(configuration).then((next) => {
-      if (!cancelled) setUrl(next)
+    setRenewalError(undefined)
+    // Restoring a chat starts at its saved revision; only a later explicit
+    // Refresh/Retry asks for new authorization. Keys include account and chat.
+    if (!openedRevisions.current.has(stateKey)) openedRevisions.current.set(stateKey, reloadRevision)
+    const refresh = reloadRevision > openedRevisions.current.get(stateKey)!
+    void (managed ? open({ spaceId, ...(refresh ? { refresh: true } : {}) }) : open()).then((next) => {
+      if (!cancelled) {
+        openedRevisions.current.set(stateKey, reloadRevision)
+        setResolved({ ...next, key: resolutionKey })
+      }
     }).catch((failure: unknown) => {
-      if (cancelled) return
-      setError(failure instanceof Error ? failure.message : String(failure))
+      if (!cancelled) setError(errorText(failure))
     }).finally(() => { if (!cancelled) setOpening(false) })
     return () => { cancelled = true }
-  }, [context.active, configuration, attempt, open])
+  }, [context.active, configuration, open, serviceUrl, errorText, managed, signedIn, spaceId, resolutionKey, showingSettings, serviceStatus !== undefined, sessionExpired, renewalAttempt, editorAvailable, configurationReady, stateKey, reloadRevision])
 
-  // Dropping the url first detaches the native view, so a reload always loads
-  // the resolved address again instead of reusing the previous page.
-  const reload = useCallback((): void => {
-    setUrl(null)
-    setReady(false)
-    setError(undefined)
-    setAttempt((value) => value + 1)
-  }, [])
-
-  // The token state lives in the main process, so the page re-reads it whenever
-  // it is about to show the configuration it belongs to.
   useEffect(() => {
-    if (!panelOpen) return
+    if (!configurationReady || !context.active || !editorAvailable || showingSettings || !managed || !signedIn || !spaceId ||
+      resolved?.key !== resolutionKey || !resolved.expiresAt || sessionExpired) return
     let cancelled = false
-    void service.status().then((next) => { if (!cancelled) setServiceStatus(next) })
-      .catch((failure: unknown) => {
-        if (!cancelled) setPanelError(failure instanceof Error ? failure.message : String(failure))
+    const timer = setTimeout(() => {
+      void open({ spaceId }).then(next => {
+        if (cancelled) return
+        setResolved({ ...next, key: resolutionKey })
+        setRenewalError(undefined)
+      }).catch(failure => {
+        if (!cancelled) setRenewalError(errorText(failure))
       })
-    return () => { cancelled = true }
-  }, [panelOpen, service])
+    }, Math.max(1_000, Date.parse(resolved.expiresAt) - Date.now() - 30_000))
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [context.active, showingSettings, managed, signedIn, spaceId, resolved, resolutionKey, sessionExpired, open, errorText, renewalAttempt, editorAvailable, configurationReady])
 
-  const save = useCallback((): void => {
-    try {
-      validate(draft)
-      const next = { url: draft.url.trim() }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      setConfiguration(next)
-      setPanelOpen(false)
-      setUrl(null)
-      setReady(false)
-      setError(undefined)
-      setAttempt((value) => value + 1)
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
-    }
-  }, [draft])
+  const failureMessage = error ?? directoryError ?? (statusError ? errorText(statusError) : undefined)
+  const managedMessage = !serviceStatus ? text('正在确认账号…', 'Checking your account…')
+    : !signedIn ? text('登录 SciForge 即可使用个人和项目空间。', 'Sign in to SciForge to access personal and project spaces.')
+      : selectedSpace?.status === 'failed' ? !mayEnsureSelectedSpace ? text('项目空间创建失败，请联系项目负责人重试。', 'Project space provisioning failed. Ask its owner to retry.') : selectedSpace.failure?.retryable ? text('空间创建失败，可以重试。', 'Space provisioning failed. You can retry.') : text('空间暂不可用，请联系管理员。', 'This space is unavailable. Contact an administrator.')
+        : selectedSpace && selectedSpace.status !== 'ready' ? text('正在准备空间，请稍候…', 'Preparing your space…')
+          : !spaceId ? listing ? text('正在读取空间…', 'Loading spaces…') : text('请选择一个空间。', 'Choose a space.')
+            : opening || !url ? text('正在安全登录云空间…', 'Signing in to your cloud space…')
+              : !ready ? text('正在加载云文档编辑器…', 'Loading the cloud document editor…') : undefined
+  const message = !editorAvailable ? text('请在 SciForge 桌面应用中打开云服务。当前浏览器无法显示内嵌编辑器。', 'Open Cloud Services in the SciForge desktop app. This browser cannot display the embedded editor.') : failureMessage ?? (managed ? managedMessage : opening || !ready ? text('正在连接云服务…（若服务启用了访问授权码，请在内嵌页面中解锁一次）', 'Connecting to cloud services… If your service uses an access code, unlock it in the embedded page.') : undefined)
 
-  /** Saving runs in two steps so a rejected token never leaves the address
-   * changed without a matching credential: store, then persist the address. */
-  const saveSettings = useCallback(async (): Promise<void> => {
-    setPanelError(undefined)
-    try {
-      validate(draft)
-      const token = tokenDraft.trim()
-      if (token) {
-        setServiceStatus(await service.configure(token))
-        setTokenDraft('')
-      }
-      save()
-    } catch (failure) {
-      setPanelError(failure instanceof Error ? failure.message : String(failure))
-    }
-  }, [draft, save, service, tokenDraft])
-
-  const clearToken = useCallback(async (): Promise<void> => {
-    setPanelError(undefined)
-    try {
-      setServiceStatus(await service.configure(null))
-    } catch (failure) {
-      setPanelError(failure instanceof Error ? failure.message : String(failure))
-    }
-  }, [service])
-
-  const message = error ?? (opening || !ready ? OPENING : undefined)
-  const address = url ?? (configuration.url.trim() || '未配置服务地址')
   return (
-    <section className={`${context.className} flex-col`} aria-label="思源笔记">
-      <header
-        className="flex h-9 shrink-0 items-center gap-2 border-b border-ds-border pr-3"
-        style={{ paddingLeft: 'var(--ds-main-area-leading-inset, 0px)' }}
-      >
-        <span className="mr-auto truncate text-xs text-ds-muted">思源笔记 · {address}</span>
-        <button type="button" className="ds-no-drag rounded border border-ds-border px-2 py-1 text-xs"
-          onClick={reload}>重新加载</button>
-        <button type="button" className="ds-no-drag rounded border border-ds-border px-2 py-1 text-xs"
-          aria-expanded={panelOpen}
-          onClick={() => {
-            setDraft(configuration)
-            setTokenDraft('')
-            setPanelError(undefined)
-            setPanelOpen((value) => !value)
-          }}>设置</button>
-      </header>
-      <div className="relative flex min-h-0 min-w-0 flex-1">
+    <section className={context.className + ' flex-col'} aria-label={text('云服务', 'Cloud Services')}>
+      {managed && !showingSettings ? <div className="flex min-w-0 items-center gap-2 border-b border-ds-border bg-ds-card px-3 py-2">
+        <label className="flex min-w-0 flex-1 items-center">
+          <select aria-label={text('云空间', 'Cloud space')} className="min-w-0 flex-1 rounded-md border border-ds-border bg-ds-bg px-2 py-1 text-ds-sm text-ds-ink"
+            disabled={!signedIn} value={selectedSpace?.spaceId ?? ''} onChange={event => {
+              if (event.target.value === selectedSpaceId) return
+              setSelectedSpaceId(event.target.value); setError(undefined); setReady(false)
+            }}>
+            <option value="">{text('选择空间', 'Choose a space')}</option>
+            {spaceChoices.map(space => <option key={space.spaceId} value={space.spaceId}>{space.scope.kind === 'personal' ? text('个人空间', 'Personal space') : projectChoices.find(project => space.scope.kind === 'project' && project.projectId === space.scope.projectId)?.name ?? text('项目空间', 'Project space')}</option>)}
+          </select>
+        </label>
+        {sharing && context.active && url && sessionKey && spaceId && mayEnsureSelectedSpace ? <DocumentSharing key={JSON.stringify([sessionKey, spaceId])} controls={sharing} sessionId={sessionKey} spaceId={spaceId} /> : null}
+        <button type="button" className={buttonClass} onClick={refreshSession}>{text('刷新', 'Refresh')}</button>
+        <button type="button" className={buttonClass} onClick={() => setSettingsOpen(true)}>{text('设置', 'Settings')}</button>
+      </div> : null}
+      {renewalError && managed && !showingSettings ? <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-ds-border px-3 py-2 text-ds-sm text-ds-danger">
+        <span>{text('云服务登录续期失败：', 'Cloud Services sign-in could not be renewed: ')}{renewalError}</span>
+        <button type="button" className={buttonClass} onClick={() => {
+          setRenewalError(undefined)
+          setRenewalAttempt(value => value + 1)
+        }}>{text('重试', 'Retry')}</button>
+      </div> : null}
+      {showingSettings ? <div className="min-h-0 flex-1 overflow-auto p-6">
+        <div className="mx-auto max-w-2xl space-y-5">
+          <h1 className="text-xl font-semibold">{text('连接云服务', 'Connect cloud services')}</h1>
+          <p className="text-ds-muted">{managed ? text('个人和项目云空间随 SciForge 账号登录，无需填写服务地址或令牌。', 'Personal and project spaces use your SciForge account. No service address or token is needed.') : text('填写团队提供的服务地址即可开始。设置会保存在此设备，保存后自动连接。', 'Enter the service address provided by your team. Settings stay on this device; saving connects automatically.')}</p>
+          {!needsConfiguration ? <button type="button" onClick={() => setSettingsOpen(false)}>{text('返回云服务', 'Back to cloud services')}</button> : null}
+          {managed && directoryError ? <p role="alert" className="text-ds-sm text-ds-danger">{directoryError}</p> : null}
+          {managed && (creatableProjects.length > 0 || selectedSpace?.status === 'failed' && selectedSpace.failure?.retryable && mayEnsureSelectedSpace) ? <div className="space-y-3 border-t border-ds-border pt-5">
+            <h2 className="text-ds-md font-semibold text-ds-ink">{text('项目空间', 'Project spaces')}</h2>
+            {creatableProjects.length > 0 && !createProjectOpen ? <button type="button" className={primaryButtonClass} onClick={() => setCreateProjectOpen(true)}>{text('开通项目空间', 'Set up project space')}</button> : null}
+            {creatableProjects.length > 0 && createProjectOpen ? <div className="flex flex-wrap items-center gap-2" role="group" aria-label={text('开通项目空间', 'Set up project space')}>
+              <select className="w-full min-w-0 rounded-md border border-ds-border bg-ds-bg px-2 py-1 text-ds-sm text-ds-ink" aria-label={text('待开通项目', 'Project to set up')} value={createProjectId} onChange={event => setCreateProjectId(event.target.value)} disabled={creating}>
+                <option value="">{text('选择项目', 'Choose a project')}</option>
+                {creatableProjects.map(project => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}
+              </select>
+              <button type="button" className={primaryButtonClass} disabled={!creatableProjects.some(project => project.projectId === createProjectId) || creating} onClick={() => { void ensureSpace({ scope: { kind: 'project', projectId: createProjectId } }) }}>{text('确认开通', 'Confirm')}</button>
+              <button type="button" className={buttonClass} disabled={creating} onClick={() => { setCreateProjectOpen(false); setCreateProjectId('') }}>{text('取消', 'Cancel')}</button>
+            </div> : null}
+            {selectedSpace?.status === 'failed' && selectedSpace.failure?.retryable && mayEnsureSelectedSpace ? <button type="button" className={primaryButtonClass} disabled={creating} onClick={() => { void ensureSpace({ scope: selectedSpace.scope.kind === 'personal' ? { kind: 'personal' } : selectedSpace.scope, retryFailed: true }) }}>{text('重试创建', 'Retry provisioning')}</button> : null}
+          </div> : null}
+          <SiYuanSettingsSection service={service} settings={settings} onSaved={() => setSettingsOpen(false)} />
+        </div>
+      </div> : <div className="relative flex min-h-0 min-w-0 flex-1">
         <div ref={viewport} className="flex min-h-0 min-w-0 flex-1" data-siyuan-editor-slot="" />
         {message ? <div data-siyuan-scaffold="" role="presentation"
-          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ds-bg p-6 text-center text-sm text-ds-muted">
-          <p role={error ? 'alert' : 'status'}>{message}</p>
-          {error ? <div className="flex gap-2">
-            <button type="button" className="ds-no-drag rounded border border-ds-border px-3 py-2"
-              onClick={reload}>重试</button>
-            <button type="button" className="ds-no-drag rounded border border-ds-border px-3 py-2"
-              onClick={() => { setDraft(configuration); setPanelOpen(true) }}>打开设置</button>
-          </div> : null}
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ds-bg p-6 text-center text-ds-muted">
+          <p role={failureMessage ? 'alert' : 'status'} className={failureMessage ? 'max-w-xs text-ds-md text-ds-danger' : 'max-w-xs text-ds-md text-ds-ink'}>{message}</p>
+          {failureMessage ? <>
+            <div className="flex flex-wrap justify-center gap-2">
+            <button type="button" className={primaryButtonClass}
+              onClick={refreshSession}>{text('重试', 'Retry')}</button>
+            <button type="button" className={buttonClass} onClick={() => setSettingsOpen(true)}>{text('连接设置', 'Connection settings')}</button>
+            </div>
+          </> : null}
         </div> : null}
-        {panelOpen ? <div role="dialog" aria-label="思源笔记设置"
-          className="absolute inset-0 space-y-4 overflow-auto bg-ds-bg p-6">
-          <h2 className="text-lg font-semibold">思源笔记</h2>
-          <p className="text-sm text-ds-muted">
-            Agent 成功结束一轮回复后，会把该轮的目标与结论自动归档到所配置的思源笔记本；中间进度、失败和取消的轮次不会归档。
-          </p>
-          <label className="block text-sm">服务地址
-            <input className="mt-2 block w-full rounded border border-ds-border bg-ds-bg px-3 py-2"
-              placeholder="http://192.168.1.10:6806"
-              value={draft.url}
-              onChange={(event) => setDraft({ url: event.target.value })} />
-          </label>
-          <p className="text-sm text-ds-muted">
-            填写可访问的思源服务地址（局域网或 HTTPS）。SciForge 不再随附思源内核，请确保该服务已启动；
-            留空则使用安装时配置的默认地址。若该服务要求 API 令牌，可设置环境变量 SIYUAN_API_TOKEN。
-          </p>
-          <label className="block text-sm">API 令牌
-            <input className="mt-2 block w-full rounded border border-ds-border bg-ds-bg px-3 py-2"
-              type="password" autoComplete="off" placeholder="仅在该服务启用鉴权时填写"
-              aria-label="API 令牌"
-              value={tokenDraft}
-              onChange={(event) => setTokenDraft(event.target.value)} />
-          </label>
-          <p className="text-sm text-ds-muted">
-            令牌：{tokenSummary(serviceStatus)}。令牌只写入本机加密存储，不会回显到这个页面、日志或对话里；
-            留空保存则保持当前令牌不变。若服务端启用了访问授权码，还需要在内嵌页面里解锁一次。
-          </p>
-          {serviceStatus?.token === 'stored' ? <div>
-            <button type="button" className="ds-no-drag rounded border border-ds-border px-3 py-2 text-sm"
-              onClick={() => { void clearToken() }}>清除已保存令牌</button>
-          </div> : null}
-          {panelError ? <p role="alert" className="text-sm text-red-600">{panelError}</p> : null}
-          <div className="flex gap-2">
-            <button type="button" className="ds-no-drag rounded bg-ds-accent px-4 py-2 text-sm text-white"
-              onClick={() => { void saveSettings() }}>保存设置</button>
-            <button type="button" className="ds-no-drag rounded border border-ds-border px-4 py-2 text-sm"
-              onClick={() => setPanelOpen(false)}>取消</button>
-          </div>
-        </div> : null}
-      </div>
+      </div>}
     </section>
   )
 }

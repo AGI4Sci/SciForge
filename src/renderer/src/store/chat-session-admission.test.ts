@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const bridge = vi.hoisted(() => ({ completeInputRecovery: vi.fn(), acceptQueuedInput: vi.fn(),
-  readQueuedInputs: vi.fn(), abandonQueuedInput: vi.fn(), auxiliary: vi.fn() }))
+  readQueuedInputs: vi.fn(), abandonQueuedInput: vi.fn(), auxiliary: vi.fn(), startTurn: vi.fn() }))
 const legacy = vi.hoisted(() => ({ readLegacyInputRecovery: vi.fn() }))
 vi.mock('../agent/agent-runtime-client', () => ({ agentRuntimeClient: bridge }))
 vi.mock('./chat-session-persistence', () => legacy)

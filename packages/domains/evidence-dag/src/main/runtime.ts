@@ -1,6 +1,10 @@
+import { appendCheckpointArtifactTrace } from './checkpoint-artifact-trace.js'
+import { readHumanReviews } from './human-review-read.js'
 import { evidenceDagRerunSpecInputSchema, evidenceDagRerunCompareInputSchema, type EvidenceDagRerunSpecInput, type EvidenceDagRerunCompareInput } from '../contract.js'
 import { verifyProducerArtifactRefs } from './producer-artifact-refs.js'
 import { join, resolve } from 'node:path'
+import { lstat, readdir } from 'node:fs/promises'
+import { prepareEvidenceStorage } from './secure-storage.js'
 import type {
   ArtifactVersionCommitPortV1,
   ArtifactVersionEventListPortV1,
@@ -96,9 +100,11 @@ import {
 } from './producer-provenance-consumer.js'
 import { scientificPlottingReceiptAdapter } from './scientific-plotting-receipt-adapter.js'
 import { ResearchRecordRuntime } from './research-record.js'
+import { prepareSubmittedClaims } from './claim-submission.js'
+import { evidenceDagSubmitClaimsInputSchema, evidenceDagSubmitClaimsOutputSchema, type EvidenceDagSubmitClaimsInput, type EvidenceDagSubmitClaimsOutput } from '../contract.js'
 
 export type EvidenceDagRuntimePort = Readonly<{
-  records: Pick<ResearchRecordRuntime, 'view' | 'edit' | 'review' | 'audit'>
+  records: Pick<ResearchRecordRuntime, 'view' | 'edit' | 'review' | 'audit' | 'submitHumanReview'>
   activate(context: DomainMainRuntimeLifecycleContext): Promise<DomainMainRuntimeDisposer>
   consume(event: DomainArtifactEvent): Promise<void>
   view(input: EvidenceDagViewInput): Promise<EvidenceDagViewOutput>
@@ -106,6 +112,7 @@ export type EvidenceDagRuntimePort = Readonly<{
   sealClosure(input: EvidenceDagSealClosureInput): Promise<EvidenceDagSealClosureOutput>
   appendSidechain(input: EvidenceDagSidechainAppendInput): Promise<EvidenceDagSidechainAppendOutput>
   update(input: EvidenceDagUpdateInput): Promise<EvidenceDagUpdateOutput>
+  submitClaims(input: EvidenceDagSubmitClaimsInput): Promise<EvidenceDagSubmitClaimsOutput>
   priority(input: EvidenceDagPriorityInput): Promise<EvidenceDagCanonicalStatus>
   preview(input: EvidenceDagPreviewInput): Promise<EvidenceDagPreviewOutput>
   exportSnapshotProducts(
@@ -120,11 +127,37 @@ export type EvidenceDagRuntimePort = Readonly<{
   close(): Promise<void>
 }>
 
+/**
+ * Enforces the protected Windows DACL for every evidence file that startup
+ * opens, in one asynchronous batch. The synchronous storage primitive spawns
+ * PowerShell and compiles its C# bridge per file identity (~3s each), so
+ * pre-authorizing this known set removes that from the synchronous read path.
+ */
+async function preauthorizeEvidenceStorage(root: string): Promise<void> {
+  if (process.platform !== 'win32') return
+  const rootInfo = await lstat(root, { bigint: true }).catch(() => undefined)
+  if (!rootInfo?.isDirectory()) return
+  const entries: { path: string; dev: bigint; ino: bigint; directory: boolean }[] = [
+    { path: root, dev: rootInfo.dev, ino: rootInfo.ino, directory: true }
+  ]
+  const names = await readdir(root).catch(() => [] as string[])
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const filePath = join(root, name)
+    const info = await lstat(filePath, { bigint: true }).catch(() => undefined)
+    if (info?.isFile() && info.nlink === 1n) {
+      entries.push({ path: filePath, dev: info.dev, ino: info.ino, directory: false })
+    }
+  }
+  await prepareEvidenceStorage(entries)
+}
+
 export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   readonly records: ResearchRecordRuntime
   private context: DomainMainRuntimeLifecycleContext | undefined
   private enabled = false
   private closed = false
+  private derivationEpoch = 0
   private closePromise: Promise<void> | undefined
   private enablementDisposer: DomainMainRuntimeDisposer | undefined
   private readonly sidecar: EvidenceDagSidecarPort
@@ -138,6 +171,14 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   private readonly artifactVersionRead: (workspaceRoot: string) => ArtifactVersionReadPortV1
   private readonly visibleSurfacesByThread = new Map<string, Set<string>>()
   private readonly sealQueues = new Map<string, Promise<unknown>>()
+  private captureQueue: Promise<unknown> = Promise.resolve()
+  /**
+   * Legacy snapshot import, provisional reconciliation and the evidence ACL
+   * warm-up are idempotent housekeeping. Awaiting them during lifecycle
+   * activation delayed the first window by seconds, so they run after
+   * activation; every read/write path awaits this promise first.
+   */
+  private startupMaintenance: Promise<void> = Promise.resolve()
 
   constructor(options: Readonly<{
     userDataDir: string
@@ -239,19 +280,13 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     }
     this.context = context
     this.sidecar.configure(context)
-    await this.deltaStore.load()
-    await this.deltaStore.importLegacySnapshots(join(context.userDataDir, 'evidence-dag', 'threads'))
-    await this.deltaStore.reconcileProvisional({
-      compilerVersion: 'evidence-provisional.v1',
-      policyVersion: 'evidence-provisional-policy.v1',
-      now: this.now().toISOString()
-    })
     this.enabled = await context.enablement.isEnabled()
     this.records.start(context, this.enabled)
-    await this.artifactVersionLifecycle.start(this.enabled)
-    await this.producerProvenance.start(this.enabled)
     if (this.enabled) this.ensureSidecarInBackground()
+    this.startupMaintenance = this.runStartupMaintenance(context)
     this.enablementDisposer = context.enablement.subscribe((enabled) => {
+      if (this.closed) return
+      this.derivationEpoch++
       this.enabled = enabled
       this.records.setEnabled(enabled)
       void this.artifactVersionLifecycle.setEnabled(enabled)
@@ -267,8 +302,71 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     }
   }
 
+  /**
+   * Runs the startup housekeeping that must never block lifecycle activation.
+   * Read/write paths await this promise, so callers still observe a fully
+   * migrated store; only activation itself returns early.
+   */
+  private runStartupMaintenance(context: DomainMainRuntimeLifecycleContext): Promise<void> {
+    const task = (async (): Promise<void> => {
+      const startedAt = Date.now()
+      const traced = process.env.SCIFORGE_STARTUP_TRACE === '1'
+      const step = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
+        const at = Date.now()
+        try {
+          return await run()
+        } finally {
+          if (traced) {
+            context.log({
+              level: 'info',
+              message: 'Evidence DAG startup step.',
+              detail: { step: name, elapsedMs: Date.now() - at }
+            })
+          }
+        }
+      }
+      const evidenceRoot = join(context.userDataDir, 'evidence-dag')
+      await step('storage-acl', () => preauthorizeEvidenceStorage(evidenceRoot))
+      await step('delta-store-load', () => this.deltaStore.load())
+      for (const recovery of this.deltaStore.recoveryStatus()) context.log({
+        level: 'warn',
+        message: 'Evidence 历史完整性校验失败；损坏原件已隔离保留，有效前缀及其他会话历史已保留。新输入可继续，历史证据仍不完整。',
+        detail: recovery
+      })
+      await step('legacy-import', () => this.deltaStore.importLegacySnapshots(join(evidenceRoot, 'threads')))
+      const epoch = this.derivationEpoch
+      if (!this.closed && this.enabled) await step('provisional-reconcile', () => this.deltaStore.reconcileProvisional({
+        compilerVersion: 'evidence-provisional.v1',
+        policyVersion: 'evidence-provisional-policy.v1',
+        now: this.now().toISOString()
+      }, () => !this.closed && this.enabled && epoch === this.derivationEpoch))
+      if (this.closed) return
+      await step('artifact-version-lifecycle-start', () => this.artifactVersionLifecycle.start(this.enabled))
+      if (this.closed) return
+      // start only schedules the canonical consumer; draining must not be
+      // awaited here because appendTrace waits for startupMaintenance.
+      await step('producer-provenance-start', () => this.producerProvenance.start(this.enabled))
+      if (traced) {
+        context.log({
+          level: 'info',
+          message: 'Evidence DAG startup maintenance finished.',
+          detail: { elapsedMs: Date.now() - startedAt }
+        })
+      }
+    })()
+    task.catch((error) => {
+      context.log({
+        level: 'warn',
+        message: 'Evidence DAG startup maintenance failed.',
+        detail: error instanceof Error ? error.message : String(error)
+      })
+    })
+    return task.catch(() => undefined)
+  }
+
   async consume(event: DomainArtifactEvent): Promise<void> {
     if (!this.context || !this.enabled) return
+    await this.startupMaintenance
     const scope = domainArtifactEventScope(event)
     if (!scope.workspaceRoot) return
     const trace = await this.artifactVersions.pinTrace(
@@ -276,7 +374,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       {
         runtimeId: scope.runtimeId,
         threadId: scope.threadId,
-        operationId: event.kind === 'turn-completed' ? event.turnId : event.runId,
+        operationId: event.kind !== 'execution-completed' ? event.turnId : event.runId,
         workspaceRoot: scope.workspaceRoot,
         occurredAt: event.occurredAt
       }
@@ -295,10 +393,10 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       runtimeId,
       threadId,
       workspaceRoot,
-      operationId: event.kind === 'turn-completed' ? event.turnId : event.runId,
-      kind: event.kind === 'turn-completed' ? 'turn' : 'execution',
+      operationId: event.kind !== 'execution-completed' ? event.turnId : event.runId,
+      kind: event.kind !== 'execution-completed' ? 'turn' : 'execution',
       requestedWatermark: event.targetWatermark,
-      idempotencyKey: `artifact-event:${event.kind}:${evidenceDagThreadId(runtimeId, threadId)}:${event.kind === 'turn-completed' ? event.turnId : event.runId}`,
+      idempotencyKey: `artifact-event:${event.kind}:${evidenceDagThreadId(runtimeId, threadId)}:${event.kind !== 'execution-completed' ? event.turnId : event.runId}`,
       eventKind: event.kind,
       trace,
       createdAt: event.occurredAt
@@ -319,12 +417,29 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       runtimeId: input.runtimeId,
       threadId: input.threadId
     })
-    evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
+    const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
+    if (thread.id !== input.threadId || thread.runtimeId !== input.runtimeId) throw new Error('Graph thread identity mismatch.')
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot)
+    if (input.snapshotDigest || input.artifactVersionRef) {
+      try {
+        if (input.artifactVersionRef) await verifyProducerArtifactRefs([input.artifactVersionRef], this.artifactVersionRead(workspaceRoot))
+        // Starting the read service loads stored facts; no update or model execution is requested.
+        await this.sidecar.ensureReady()
+        const result = await this.client.graphBinding(engineThreadId, input)
+        return evidenceDagViewOutputSchema.parse({
+          url: result.binding.status === 'resolved' ? this.client.uiUrl(undefined, engineThreadId, result.binding.snapshotDigest, input.artifactVersionRef) : null,
+          threadId: engineThreadId, binding: result.binding,
+          status: { ...this.emptyStatus(), committed: result.snapshot }
+        })
+      } catch {
+        return evidenceDagViewOutputSchema.parse({ url: null, binding: { status: 'missing', reason: 'snapshot_unavailable_or_restricted' }, status: this.emptyStatus() })
+      }
+    }
     await this.sidecar.ensureReady()
-    const status = await this.status(input.runtimeId, input.threadId)
+    const status = await this.localStatus(input.runtimeId, input.threadId, workspaceRoot)
     return evidenceDagViewOutputSchema.parse({
-      url: this.client.uiUrl(input.runtimeId, input.threadId),
-      threadId: evidenceDagThreadId(input.runtimeId, input.threadId),
+      url: this.client.uiUrl(undefined, engineThreadId),
+      threadId: engineThreadId,
       status
     })
   }
@@ -365,15 +480,16 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   }
 
   async appendSidechain(raw: EvidenceDagSidechainAppendInput): Promise<EvidenceDagSidechainAppendOutput> {
+    await this.startupMaintenance
     const input = evidenceDagSidechainAppendInputSchema.parse(raw)
     const context = await this.requireEnabled()
     const thread = await context.agentThreads.read({
       runtimeId: input.runtimeId,
       threadId: input.threadId
     })
-    evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
+    const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
     const result = await this.deltaStore.appendSidechain({
-      threadId: evidenceDagThreadId(input.runtimeId, input.threadId),
+      threadId: await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot),
       recordId: input.recordId,
       recordType: input.recordType,
       closureDigest: input.closureDigest,
@@ -386,7 +502,46 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     return evidenceDagSidechainAppendOutputSchema.parse(result)
   }
 
+  async submitClaims(raw: EvidenceDagSubmitClaimsInput): Promise<EvidenceDagSubmitClaimsOutput> {
+    await this.startupMaintenance
+    const input = evidenceDagSubmitClaimsInputSchema.parse(raw)
+    const context = await this.requireEnabled()
+    const epoch = this.derivationEpoch
+    const detail = await context.agentThreads.read({ runtimeId: input.runtimeId, threadId: input.threadId })
+    if (detail.id !== input.threadId || detail.runtimeId !== input.runtimeId) throw new Error('Claim thread identity mismatch.')
+    const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, detail.workspaceRoot)
+    const prepared = await prepareSubmittedClaims({ ...input, workspaceRoot }, this.artifactVersionRead(workspaceRoot))
+    const { claims } = prepared
+    const append = this.captureQueue.then(async () => {
+      if (this.closed || !this.enabled || epoch !== this.derivationEpoch || context.signal.aborted) {
+        throw new Error('Claim submission superseded before append.')
+      }
+      const chain = await this.deltaStore.chain(await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot))
+      const existing = chain.list().find(record => record.idempotencyKey === `claims:${input.idempotencyKey}`)
+      if (this.closed || !this.enabled || epoch !== this.derivationEpoch || context.signal.aborted) {
+        throw new Error('Claim submission superseded before append.')
+      }
+      const priorTrace = existing?.payload.trace
+      const priorSubmission = Array.isArray(priorTrace) ? priorTrace.find((item): item is Record<string, unknown> =>
+        item !== null && typeof item === 'object' && item.kind === 'sciforge.claim-submission.v1') : undefined
+      // Revalidation above checks current access and bytes; immutable retries keep
+      // the first captured metadata, which may have changed on the live Artifact.
+      const submission = priorSubmission ? { ...priorSubmission, claims } : { kind: 'sciforge.claim-submission.v1', ...prepared }
+      return this.appendTraceLocked({
+        runtimeId: input.runtimeId, threadId: input.threadId, workspaceRoot,
+        operationId: `claims:${input.idempotencyKey}`, kind: 'manual', requestedWatermark: existing?.requestedWatermark ?? detail.watermark,
+        idempotencyKey: `claims:${input.idempotencyKey}`,
+        eventKind: 'claim-submission', trace: [submission]
+      })
+    })
+    this.captureQueue = append.catch(() => undefined)
+    const appended = await append
+    return evidenceDagSubmitClaimsOutputSchema.parse({ threadId: appended.delta.scope.threadId,
+      deltaDigest: appended.delta.deltaDigest, idempotent: appended.idempotent, claims })
+  }
+
   async update(raw: EvidenceDagUpdateInput): Promise<EvidenceDagUpdateOutput> {
+    await this.startupMaintenance
     const input = evidenceDagUpdateInputSchema.parse(raw)
     const context = await this.requireEnabled()
     const detail = await context.agentThreads.read({
@@ -422,10 +577,11 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       workspaceRoot,
     })
     this.artifactVersionLifecycle.requestPoll()
-    const status = await this.status(input.runtimeId, input.threadId)
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot)
+    const status = await this.localStatus(input.runtimeId, input.threadId, workspaceRoot)
     return evidenceDagUpdateOutputSchema.parse({
-      url: this.client.uiUrl(input.runtimeId, input.threadId),
-      threadId: evidenceDagThreadId(input.runtimeId, input.threadId),
+      url: this.client.uiUrl(undefined, engineThreadId),
+      threadId: engineThreadId,
       itemCount: trace.length,
       deltaDigest: appended.delta.deltaDigest,
       idempotent: appended.idempotent,
@@ -436,6 +592,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   async sealClosure(
     raw: EvidenceDagSealClosureInput
   ): Promise<EvidenceDagSealClosureOutput> {
+    await this.startupMaintenance
     const input = evidenceDagSealClosureInputSchema.parse(raw)
     const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
     const previous = this.sealQueues.get(engineThreadId) ?? Promise.resolve()
@@ -457,7 +614,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       threadId: input.threadId
     })
     const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
-    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot)
     const closure = await this.deltaStore.seal(engineThreadId, input.policy, input.idempotencyKey)
     // A closure is the formal Evidence boundary. The delta chain remains the
     // desktop capture authority, while the package-owned sidecar remains the
@@ -509,7 +666,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       runtimeId: input.runtimeId,
       threadId: input.threadId
     })
-    evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
+    const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
     const visible = updateEvidenceDagVisibleSurfaces(
       this.visibleSurfacesByThread,
       input.runtimeId,
@@ -518,15 +675,16 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       input.visible
     )
     return evidenceDagPriorityOutputSchema.parse(
-      await this.status(input.runtimeId, input.threadId)
+      await this.localStatus(input.runtimeId, input.threadId, workspaceRoot)
     )
   }
 
   async rerunSpec(raw: EvidenceDagRerunSpecInput) {
     const input = evidenceDagRerunSpecInputSchema.parse(raw)
     const workspaceRoot = await this.authorizeRerunRead(input)
-    if ('snapshotDigest' in input) return this.client.rerunSpec(input)
-    const chain = await this.deltaStore.chain(evidenceDagThreadId(input.runtimeId, input.threadId))
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot)
+    if ('snapshotDigest' in input) return this.client.rerunSpec({ ...input, threadId: engineThreadId })
+    const chain = await this.deltaStore.chain(engineThreadId)
     const first = chain.list()[0]
     if (first) {
       if (first.scope.runtimeId !== input.runtimeId) throw new Error('Rerun closure runtime mismatch.')
@@ -534,14 +692,14 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     }
     const snapshotDigest = chain.committedSnapshotClosureEntries().find(([closure]) => closure === input.closureDigest)?.[1]
     if (!snapshotDigest) throw new Error('Exact closure has no retained committed Snapshot binding; rerun unavailable.')
-    return this.client.rerunSpec({ runtimeId: input.runtimeId, threadId: input.threadId, workspaceRoot: input.workspaceRoot,
+    return this.client.rerunSpec({ runtimeId: input.runtimeId, threadId: engineThreadId, workspaceRoot,
       snapshotDigest, conclusionId: input.conclusionId })
   }
 
   async rerunCompare(raw: EvidenceDagRerunCompareInput) {
     const input = evidenceDagRerunCompareInputSchema.parse(raw)
-    await this.authorizeRerunRead(input)
-    return this.client.rerunCompare(input)
+    const workspaceRoot = await this.authorizeRerunRead(input)
+    return this.client.rerunCompare({ ...input, threadId: await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot) })
   }
 
   private async authorizeRerunRead(input: { runtimeId: string; threadId: string; workspaceRoot?: string }) {
@@ -573,10 +731,11 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
         message: error instanceof Error ? error.message : String(error)
       }
     }
-    const snapshotEvidence = await this.client.evidencePreview(input)
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot)
+    const snapshotEvidence = await this.client.evidencePreview({ ...input, threadId: engineThreadId })
     return evidenceDagPreviewOutputSchema.parse(await resolveEvidenceDagPreview({
       request: input,
-      engineThreadId: evidenceDagThreadId(input.runtimeId, input.threadId),
+      engineThreadId,
       workspaceRoot,
       snapshotEvidence
     }))
@@ -593,7 +752,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     })
     const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
     await this.sidecar.ensureReady()
-    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, workspaceRoot)
     const chain = await this.deltaStore.chain(engineThreadId)
     const requestedDigest = input.snapshotDigest
     const boundToClosure = chain.committedSnapshotClosureEntries().some(([, digest]) => digest === requestedDigest)
@@ -622,17 +781,43 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     // `workspaceRoot` is host caller scope injected by the capability handler,
     // not part of the public query contract, so it stays out of the strict
     // subject-only input schema.
-    const input = evidenceDagAuditQueryInputSchema.parse({ subject: raw.subject })
+    const input = evidenceDagAuditQueryInputSchema.parse({ subject: raw.subject, asOf: raw.asOf })
     await this.requireEnabled()
     // The Evidence-side read port of `research-audit.query`: sidechain records
     // come only from this domain's own store and revision-bound exact index.
     // Cross-domain facets stay reported as gap codes; no aggregate is built
     // here and no write path is reachable.
-    const { evaluation, review } = await this.deltaStore.queryAudit(input.subject, raw.workspaceRoot)
+    const { evaluation, review, bindings } = await this.deltaStore.queryAudit(input.subject, raw.workspaceRoot)
+    let readServiceReady: Promise<void> | undefined
+    const reviewDecisions = await readHumanReviews({ bindings, subject: input.subject, asOf: input.asOf, client: this.client,
+      authorize: async scope => {
+        const context = await this.requireEnabled()
+        // The canonical engine encoder is idempotent: both a native ID and an
+        // already-prefixed native ID can encode to the same engine key. Ask
+        // the authority for those two exact preimages; ambiguity is unavailable.
+        const prefix = `${scope.runtimeId}:`
+        const baseId = scope.threadId.replace(/:workspace:[0-9a-f]{64}$/u, '')
+        const candidates = [...new Set([scope.threadId, baseId, ...(baseId.startsWith(prefix) ? [baseId.slice(prefix.length)] : [])])]
+        const threads = []
+        for (const threadId of candidates) {
+          try {
+            const thread = await (context.agentThreads.readMetadata ?? context.agentThreads.read)({ runtimeId: scope.runtimeId, threadId })
+            if (thread.id === threadId && thread.runtimeId === scope.runtimeId && thread.workspaceRoot &&
+              await this.engineThreadId(thread.runtimeId, thread.id, thread.workspaceRoot) === scope.engineThreadId) threads.push(thread)
+          } catch { /* Not an authorized preimage; never discover other threads. */ }
+        }
+        if (threads.length !== 1) throw new Error('Review thread identity is missing or ambiguous.')
+        const workspaceRoot = evidenceDagWorkspaceRoot(raw.workspaceRoot, threads[0].workspaceRoot)
+        if ('artifactVersionRef' in input.subject) await verifyProducerArtifactRefs([input.subject.artifactVersionRef], this.artifactVersionRead(workspaceRoot))
+        readServiceReady ??= this.sidecar.ensureReady()
+        await readServiceReady
+      }
+    })
     return evidenceDagAuditQueryOutputSchema.parse({
       subject: input.subject,
       records: evaluation.records,
       scientificReview: review,
+      reviewDecisions,
       completeness: { complete: evaluation.complete, gapCodes: [...evaluation.gapCodes] },
       freshness: evaluation.freshness,
       source: 'evidence-dag'
@@ -676,7 +861,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       }
       await this.sidecar.ensureReady()
       audit = evidenceDagAuditForGate(await this.client.audit(
-        evidenceDagThreadId(input.runtimeId, input.threadId),
+        status.committed!.threadId,
         targetDigest
       ))
     } catch (error) {
@@ -704,6 +889,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
 
   private async closeOnce(): Promise<void> {
     this.closed = true
+    this.derivationEpoch++
     await this.records.close()
     await this.enablementDisposer?.()
     this.enablementDisposer = undefined
@@ -714,18 +900,30 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     await this.sidecar.stop()
   }
 
-  private async status(runtimeId: string, threadId: string): Promise<EvidenceDagCanonicalStatus> {
-    return this.localStatus(runtimeId, threadId)
+  private async engineThreadId(runtimeId: string, threadId: string, workspaceRoot: string): Promise<string> {
+    return this.deltaStore.threadIdForWorkspace(evidenceDagThreadId(runtimeId, threadId), workspaceRoot)
   }
 
   private async appendTrace(input: EvidenceDagTraceAppendInput): Promise<EvidenceDagAppendResult> {
+    const next = this.captureQueue.then(() => this.appendTraceLocked(input))
+    this.captureQueue = next.catch(() => undefined)
+    return next
+  }
+
+  private async appendTraceLocked(input: EvidenceDagTraceAppendInput): Promise<EvidenceDagAppendResult> {
+    const epoch = this.derivationEpoch
+    const stillCurrent = () => !this.closed && this.enabled && epoch === this.derivationEpoch
+    await this.startupMaintenance
+    const engineThreadId = await this.engineThreadId(input.runtimeId, input.threadId, input.workspaceRoot)
     const result = await this.deltaStore.append(evidenceDagDeltaInputFromTrace({
       ...input,
-      threadId: evidenceDagThreadId(input.runtimeId, input.threadId)
+      threadId: engineThreadId
     }))
+    if (!stillCurrent()) return result
     const authoritativeHead = await this.deltaStore.head(
-      evidenceDagThreadId(input.runtimeId, input.threadId)
+      engineThreadId
     )
+    if (!stillCurrent()) return result
     const compileInput = {
       compilerVersion: 'evidence-provisional.v1',
       policyVersion: 'evidence-provisional-policy.v1',
@@ -736,12 +934,13 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     }
     try {
       await this.deltaStore.compileProvisional(
-        evidenceDagThreadId(input.runtimeId, input.threadId),
-        compileInput
+        engineThreadId,
+        compileInput, stillCurrent
       )
     } catch (error) {
+      if (!stillCurrent()) return result
       await this.deltaStore.compileProvisional(
-        evidenceDagThreadId(input.runtimeId, input.threadId),
+        engineThreadId,
         {
           ...compileInput,
           failure: {
@@ -750,7 +949,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
             retryable: true,
             occurredAt: this.now().toISOString()
           }
-        }
+        }, stillCurrent
       )
     }
     return result
@@ -761,9 +960,12 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     threadId: string,
     workspaceRoot?: string
   ): Promise<EvidenceDagCanonicalStatus> {
-    const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
+    const engineThreadId = workspaceRoot
+      ? await this.engineThreadId(runtimeId, threadId, workspaceRoot)
+      : evidenceDagThreadId(runtimeId, threadId)
     const chain = await this.deltaStore.chain(engineThreadId)
     const records = chain.list()
+    if (engineThreadId !== evidenceDagThreadId(runtimeId, threadId) && !records.length && !chain.legacyCheckpointRoot) return this.emptyStatus()
     const first = records[0]
     if (first && (
       first.scope.runtimeId !== runtimeId ||
@@ -777,6 +979,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
         : null
     )
     const summary = provisional?.summary
+    const recovery = this.deltaStore.recoveryStatus().find(item => item.threadId === engineThreadId)
     const updatedAt = [head.updatedAt, provisional?.updatedAt, committed?.createdAt]
       .filter((value): value is string => Boolean(value))
       .sort()
@@ -789,11 +992,16 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       provisional,
       desiredHeadDigest: summary?.desiredHeadDigest ?? head.headDigest,
       appliedHeadDigest: summary?.appliedHeadDigest ?? provisional?.appliedHeadDigest ?? null,
-      freshness: summary?.freshness ?? (head.headDigest ? 'pending' : 'unknown'),
+      freshness: recovery ? 'failed' : summary?.freshness ?? (head.headDigest ? 'pending' : 'unknown'),
       coverage: summary?.coverage ?? { complete: false, gapCount: 0 },
       materialRiskCount: summary?.materialRiskCount ?? 0,
       lastSuccessAt: summary?.lastSuccessAt ?? null,
-      failure: summary?.failure ?? null
+      failure: recovery ? {
+        code: 'internal_error',
+        message: `历史证据完整性校验失败，已保留原件并隔离 ${recovery.quarantinedRecordCount} 条记录。新输入可继续；历史证据不完整，不能作为完整可信证据使用。`,
+        retryable: false,
+        occurredAt: recovery.detectedAt
+      } : summary?.failure ?? null
     })
   }
 
@@ -819,6 +1027,9 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   private async requireEnabled(): Promise<DomainMainRuntimeLifecycleContext> {
     if (this.closed) throw new Error('Evidence DAG runtime is closed.')
     if (!this.context) throw new Error('Evidence DAG runtime lifecycle is not active.')
+    // Reads and writes must observe the migrated store even though the
+    // housekeeping above now finishes in the background after activation.
+    await this.startupMaintenance
     if (!this.enabled || !await this.context.enablement.isEnabled()) {
       throw new Error('Evidence DAG is disabled.')
     }
@@ -864,7 +1075,11 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       threadId: thread.threadId
     })
     const workspaceRoot = evidenceDagWorkspaceRoot(thread.workspaceRoot, detail.workspaceRoot)
-    const trace = await this.artifactVersions.pinTrace(evidenceTraceFromThread(detail), {
+    const sourceTrace = await appendCheckpointArtifactTrace(context, {
+      runtimeId: thread.runtimeId, threadId: thread.threadId, workspaceRoot,
+      knownTurnIds: detail.turns.map(turn => turn.id)
+    }, evidenceTraceFromThread(detail))
+    const trace = await this.artifactVersions.pinTrace(sourceTrace, {
       runtimeId: thread.runtimeId,
       threadId: thread.threadId,
       operationId: `artifact-lifecycle:${detail.watermark}`,

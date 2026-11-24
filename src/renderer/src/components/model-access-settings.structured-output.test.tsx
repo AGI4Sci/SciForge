@@ -76,7 +76,11 @@ describe('ModelAccessSettings structured-output control', () => {
     })
   })
 
-  it('is hidden for wires that do not use Chat response_format', async () => {
-    expect(await render(settings({ protocol: 'responses' }))).toBeNull()
+  it('is available for Responses json_object compatibility', async () => {
+    expect((await render(settings({ protocol: 'responses', chatStructuredOutputMode: 'json_object' })))?.value).toBe('json_object')
+  })
+
+  it('is hidden for Anthropic native schema output', async () => {
+    expect(await render(settings({ protocol: 'anthropic-messages' }))).toBeNull()
   })
 })

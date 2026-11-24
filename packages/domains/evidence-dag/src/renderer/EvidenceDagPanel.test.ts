@@ -89,3 +89,14 @@ test('polls visible active and failed attempts without inventing progress', () =
   assert.equal(evidenceDagPollInterval(true, failed), 10_000)
   assert.equal(evidenceDagPollInterval(false, failed), null)
 })
+
+test('activation preserves exact graph selectors and invalid selectors fail closed', () => {
+  const session = { id: 'thread-session', runtimeId: 'codex', workspaceRoot: '/workspace' }
+  const snapshotDigest = 'sha256:' + 'a'.repeat(64)
+  const artifactVersionRef = { artifactId: 'artifact:one', versionId: 'artifact-version:one', contentDigest: 'b'.repeat(64), byteLength: 1,
+    availability: 'available' as const, retention: 'snapshot' as const, accessPolicy: { visibility: 'workspace' as const, principals: [], allowExport: false } }
+  const activation = { contributionId: 'evidence-dag.workbench-right-panel', revision: 1, payload: { snapshotDigest, artifactVersionRef } }
+  assert.deepEqual(evidenceDagPanelViewInput(evidenceDagPanelTarget(session, activation)), { runtimeId: session.runtimeId, workspaceRoot: session.workspaceRoot, threadId: session.id, snapshotDigest, artifactVersionRef })
+  assert.equal(evidenceDagPanelViewInput(evidenceDagPanelTarget(session, { ...activation, payload: { snapshotDigest: 'invalid' } })), null)
+  assert.equal(evidenceDagPanelViewInput({ workspaceRoot: '/workspace', snapshotDigest }), null)
+})

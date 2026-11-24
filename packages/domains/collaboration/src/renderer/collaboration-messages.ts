@@ -1,3 +1,12 @@
+import { workspaceTranslationResources } from './workspace/workspace-i18n.js'
+import { modelMessages } from './workspace/model-messages.js'
+import { pageMessages } from './workspace/page-messages.js'
+import { sectionMessages } from './workspace/section-messages.js'
+import { navigationMessages, navigationContextMessages } from './workspace/navigation-messages.js'
+import { helperMessages } from './workspace/helper-messages.js'
+import { deliveryMessages } from './workspace/task-drawer/messages.js'
+
+const workspaceMessages = { ...modelMessages, ...pageMessages, ...sectionMessages, ...navigationMessages, ...helperMessages, ...deliveryMessages }
 import { projectCoordinatorMessages } from '../coordinator/renderer/messages.js'
 
 const collaborationPanelMessages = Object.freeze({
@@ -294,10 +303,14 @@ export const collaborationI18nResourceContribution = Object.freeze({
     en: Object.freeze({
       ...projectCoordinatorMessages.en,
       ...collaborationPanelMessages.en,
+      ...workspaceTranslationResources(workspaceMessages, 'en'),
+      ...navigationContextMessages.en,
     }),
     zh: Object.freeze({
       ...projectCoordinatorMessages.zh,
       ...collaborationPanelMessages.zh,
+      ...workspaceTranslationResources(workspaceMessages, 'zh'),
+      ...navigationContextMessages.zh,
     })
   })
 })

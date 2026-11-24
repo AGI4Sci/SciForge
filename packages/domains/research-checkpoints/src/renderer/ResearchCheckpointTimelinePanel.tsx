@@ -218,11 +218,11 @@ export function ResearchCheckpointStatusCard({
         type="button"
         disabled={!onOpenExact}
         onClick={() => onOpenExact?.(status)}
-        className="group inline-flex max-w-full items-center gap-2 rounded-lg border border-ds-border bg-ds-card/70 px-2.5 py-1.5 text-left text-[11.5px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:hover:bg-ds-card/70 disabled:hover:text-ds-muted"
-        title={t('researchCheckpointOpenDossier')}
+        className="group inline-flex max-w-full items-center gap-2 rounded-lg border border-ds-border bg-ds-card/70 px-2.5 py-1.5 text-left text-ds-xs text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-default disabled:hover:bg-ds-card/70 disabled:hover:text-ds-muted"
+        title={t('researchCheckpointOpenEvidenceChain')}
       >
         <BookOpen className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate font-medium">{t('researchCheckpointOpenDossier')}</span>
+        <span className="truncate font-medium">{t('researchCheckpointOpenEvidenceChain')}</span>
         <ExternalLink className="h-3 w-3 shrink-0 text-ds-faint group-hover:text-ds-muted" aria-hidden="true" />
       </button>
     </article>

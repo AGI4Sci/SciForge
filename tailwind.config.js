@@ -9,6 +9,30 @@ export default {
   ],
   theme: {
     extend: {
+      /*
+       * One typography ladder for the whole product. Every surface sizes text
+       * from these twelve steps instead of inventing a new pixel value.
+       */
+      fontSize: {
+        'ds-2xs': 'var(--ds-text-2xs)',
+        'ds-xs': 'var(--ds-text-xs)',
+        'ds-sm': 'var(--ds-text-sm)',
+        'ds-md': 'var(--ds-text-md)',
+        'ds-lg': 'var(--ds-text-lg)',
+        'ds-xl': 'var(--ds-text-xl)',
+        'ds-2xl': 'var(--ds-text-2xl)',
+        'ds-3xl': 'var(--ds-text-3xl)',
+        'ds-4xl': 'var(--ds-text-4xl)',
+        'ds-5xl': 'var(--ds-text-5xl)',
+        'ds-6xl': 'var(--ds-text-6xl)',
+        'ds-7xl': 'var(--ds-text-7xl)'
+      },
+      fontFamily: {
+        sans: 'var(--ds-font-sans)',
+        display: 'var(--ds-font-display)',
+        mono: 'var(--ds-font-mono)',
+        document: 'var(--ds-font-document)'
+      },
       colors: {
         accent: {
           DEFAULT: 'var(--ds-accent)',

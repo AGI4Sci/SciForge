@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleDashed } from 'lucide-react'
+import { AlertTriangle, CircleDashed, FileText } from 'lucide-react'
 import type { ReactElement } from 'react'
 import type {
   EvidenceDagCanonicalStatus,
@@ -38,15 +38,15 @@ export function EvidenceDagProgressiveView({
       aria-label={t('evidenceDagCommittedLayer')}
       data-dag-progressive-view="true"
     >
-      <div className="flex flex-wrap items-center gap-1.5 text-[10.5px]">
+      <div className="flex flex-wrap items-center gap-1.5 text-ds-2xs">
         <span
-          className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700"
+          className="inline-flex items-center gap-1 rounded-full border border-ds-border bg-ds-main px-2 py-0.5 font-medium text-ds-muted"
           data-dag-layer="committed"
         >
-          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+          <FileText className="h-3 w-3" aria-hidden="true" />
           {status.committed
             ? t('evidenceDagCommitted', { version: status.committed.version })
-            : t('evidenceDagCommittedLayer')}
+            : t('evidenceDagEmpty')}
         </span>
         {pending ? (
           <span
@@ -65,11 +65,7 @@ export function EvidenceDagProgressiveView({
           </span>
         ) : null}
       </div>
-      {pending ? (
-        <div className="mt-1.5 text-[10.5px] leading-4 text-amber-800">
-          {t('evidenceDagAuditWarning')}
-        </div>
-      ) : null}
+      {pending && status.committed ? <p className="mt-1.5 text-ds-2xs text-ds-muted">{t('evidenceDagPreviousContentRetained')}</p> : null}
     </section>
   )
 }

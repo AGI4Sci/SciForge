@@ -426,4 +426,15 @@ describe('chat session persistence', () => {
       queuedMessages: [{ id: 'kept-q', threadId: 'missing-thread', text: 'keep this instruction' }]
     })
   })
+  it('restores exact discussion notes and handoff edits without requeuing or authorizing work', () => {
+    const discussionCheckpoints = { side: {
+      threadId: 'side', parentThreadId: 'parent', runtimeId: 'codex' as const, title: '原材料', createdAt: '2026-11-08', input: '问题草稿',
+      context: { id: 'version-1', title: '原材料版本', text: '旧版本仍有反例', sourceRefs: [{ label: '精确来源', uri: '{"version":1}' }] },
+      handoffDraft: { document: '讨论结论', instruction: '保留反例继续', memory: '', preserve: '负结果', verification: '匹配条件比较' }
+    } }
+    expect(persistChatSession({ activeThreadId: 'parent', queuedMessages: [], discussionCheckpoints }).degraded).toBe(false)
+    expect(readPersistedChatSession()).toMatchObject({ discussionCheckpoints, queuedMessages: [] })
+    clearPersistedActiveThread()
+    expect(readPersistedChatSession().discussionCheckpoints).toEqual(discussionCheckpoints)
+  })
 })

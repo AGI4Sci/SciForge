@@ -17,7 +17,7 @@ import {createSiYuanNativeView} from '${repo}/packages/domains/siyuan-content-sp
 import {prepareCommentIdentityPreload} from '${repo}/packages/domains/siyuan-content-space-provider/src/main/comment-identity-bridge.ts'
 app.setPath('userData',${JSON.stringify(join(root,'profile'))})
 const progress=(stage)=>writeFile(${JSON.stringify(join(root,'progress.txt'))},stage)
-let server,host,view
+let server,host,view,peerHost,peerView
 async function main() {
 try {
  await progress('before ready')
@@ -34,18 +34,46 @@ try {
  view=createSiYuanNativeView({preloadPath,readIdentity:()=>identity})
  await view.present({hostId:host.webContents.id,url,viewport:{x:0,y:0,width:600,height:400,visible:true}})
  await progress('view loaded')
- const page=host.contentView.children[0].webContents
+ let page=host.contentView.children[0].webContents
  const read=()=>page.executeJavaScript('window.sciforgeCommentIdentity.read()')
  assert.deepEqual(await read(),identity)
  await progress('first identity read')
  assert.equal(await page.executeJavaScript('typeof window.require'),'undefined')
  assert.equal(await page.executeJavaScript('typeof window.sciforge'),'undefined')
  assert.equal(await page.executeJavaScript('typeof document.querySelector("iframe").contentWindow.sciforgeCommentIdentity'),'undefined')
+ await page.executeJavaScript('localStorage.setItem("account-draft","user-a");document.cookie="account=user-a;path=/"')
+ const firstPage=page
+ const identityB={state:'signed-in',userId:'user-b',displayName:'同名'}
+ peerHost=new BrowserWindow({show:false,width:900,height:600,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
+ await peerHost.loadURL('data:text/html,<body>Peer host</body>')
+ peerView=createSiYuanNativeView({preloadPath,readIdentity:()=>identityB})
+ await peerView.present({hostId:peerHost.webContents.id,url,viewport:{x:0,y:0,width:600,height:400,visible:true}})
+ const peerPage=peerHost.contentView.children[0].webContents
+ assert.deepEqual(await peerPage.executeJavaScript('window.sciforgeCommentIdentity.read()'),identityB)
+ assert.equal(await peerPage.executeJavaScript('localStorage.getItem("account-draft")'),null)
+ assert.equal(await peerPage.executeJavaScript('document.cookie'),'')
+ await peerPage.executeJavaScript('localStorage.setItem("account-draft","user-b");document.cookie="account=user-b;path=/"')
  identity={state:'signed-in',userId:'user-b',displayName:'同名'}
+ assert.deepEqual(await read().catch(()=>({state:'unavailable'})),{state:'unavailable'})
+ await view.present({hostId:host.webContents.id,url,viewport:{x:0,y:0,width:600,height:400,visible:true}})
+ page=host.contentView.children[0].webContents
+ assert.equal(firstPage.isDestroyed(),true)
  assert.deepEqual(await read(),identity)
+ assert.equal(await page.executeJavaScript('localStorage.getItem("account-draft")'),'user-b')
+ assert.equal(await page.executeJavaScript('document.cookie'),'account=user-b')
+ const oldPage=page
+ await view.present({hostId:host.webContents.id,url,viewport:{x:0,y:0,width:600,height:400,visible:false}})
+ const retired=new Promise(resolve=>oldPage.once('destroyed',resolve))
  identity={state:'signed-out'}
- assert.deepEqual(await read(),identity)
+ await retired
+ assert.equal(oldPage.isDestroyed(),true)
+ assert.deepEqual(await peerPage.executeJavaScript('window.sciforgeCommentIdentity.read()'),identityB)
  identity={state:'signed-in',userId:'user-a',displayName:'改名后'}
+ await view.present({hostId:host.webContents.id,url,viewport:{x:0,y:0,width:600,height:400,visible:true}})
+ page=host.contentView.children[0].webContents
+ assert.deepEqual(await read(),identity)
+ assert.equal(await page.executeJavaScript('localStorage.getItem("account-draft")'),'user-a')
+ assert.equal(await page.executeJavaScript('document.cookie'),'account=user-a')
  await new Promise(resolve=>{page.once('did-finish-load',resolve);page.reload()})
  await progress('reloaded')
  assert.deepEqual(await read(),identity)
@@ -53,10 +81,10 @@ try {
  await new Promise(resolve=>setTimeout(resolve,300))
  assert.equal(new URL(page.getURL()).hostname,'127.0.0.1')
  assert.deepEqual(await read(),identity)
- const snapshot={passed:true,checks:['sandbox preload','main-frame identity','no Node API','no generic SciForge API','no child-frame bridge','same-name account switch','logout','rename and reload','cross-origin navigation blocked'],profile:app.getPath('userData')}
+ const snapshot={passed:true,checks:['sandbox preload','main-frame identity','no Node API','no generic SciForge API','no child-frame bridge','two clients on same server','independent cookies and localStorage','same-name account switch','hidden-page logout','peer account unaffected','account state restored on return','rename and reload','cross-origin navigation blocked'],profile:app.getPath('userData')}
  await writeFile(${JSON.stringify(result)},JSON.stringify(snapshot,null,2))
  console.log(JSON.stringify(snapshot))
- view.dispose();host.destroy();server.close();app.exit(0)
+ view.dispose();peerView.dispose();host.destroy();peerHost.destroy();server.close();app.exit(0)
 } catch(error){await writeFile(${JSON.stringify(result)},JSON.stringify({passed:false,error:String(error),stack:error.stack},null,2));view?.dispose();host?.destroy();server?.close();app.exit(1)}
 }
 void main()

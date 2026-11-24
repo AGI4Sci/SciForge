@@ -2,7 +2,7 @@ import { useId, useMemo, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 
 const FIELD =
-  'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-60'
+  'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-60'
 
 export type ModelPickerGroup = {
   id: string
@@ -47,7 +47,7 @@ export function ModelPicker({
   return (
     <div className="flex flex-col gap-2">
       <label className="flex flex-col gap-1.5">
-        <span className="text-[12px] font-medium text-ds-muted">{t('scheduleProvider')}</span>
+        <span className="text-ds-sm font-medium text-ds-muted">{t('scheduleProvider')}</span>
         <select
           className={FIELD}
           value={selected ? providerId : ''}
@@ -63,7 +63,7 @@ export function ModelPicker({
       </label>
 
       <label className="flex flex-col gap-1.5">
-        <span className="text-[12px] font-medium text-ds-muted">{modelLabel ?? t('scheduleModel')}</span>
+        <span className="text-ds-sm font-medium text-ds-muted">{modelLabel ?? t('scheduleModel')}</span>
         <input
           className={FIELD}
           list={selected ? listId : undefined}
@@ -83,7 +83,7 @@ export function ModelPicker({
       ) : null}
 
       {emptyHint && (!selected || !model.trim()) ? (
-        <span className="text-[11px] leading-4 text-ds-faint">{emptyHint}</span>
+        <span className="text-ds-xs leading-4 text-ds-faint">{emptyHint}</span>
       ) : null}
     </div>
   )

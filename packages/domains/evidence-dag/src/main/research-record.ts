@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
-import type { DomainAgentThreadDetail, DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
+import type { DomainAgentThreadDetail, DomainMainRuntimeLifecycleContext, DomainMainHumanActionsHost } from '@sciforge/domain-sdk/host'
 import { domainMainAgentExecutionOutputSchemaSchema } from '@sciforge/domain-sdk/agent-execution'
 import {
   researchRecordPhaseSynthesisSchema, researchRecordContextBoundarySchema,
@@ -8,13 +8,16 @@ import {
   researchRecordReviewInputSchema, researchRecordAuditInputSchema, researchRecordAuditOutputSchema,
   type ResearchRecordReview, type ResearchRecordAudit,
   type ResearchRecordNode, type ResearchRecordScope, type ResearchRecordView,
-  type ResearchRecordEdit
+  type ResearchRecordEdit, researchHumanReviewInputSchema, researchHumanReviewReceiptSchema
 } from '../research-record-contract.js'
+import { readCheckpointTurnArtifactReferences } from './checkpoint-artifact-trace.js'
 import { recordArtifactReferences } from '../research-record-artifact-refs.js'
+import { resultImpact, refreshResultMaterials } from './research-result-impact.js'
+import { bindingIdentity, projectHumanReviews } from './research-human-review.js'
 import { ResearchSourceStore } from './research-source-store.js'
 import { ResearchRecordStore } from './research-record-store.js'
 import { researchSourceDigest as sourceDigest, visibleResearchItems, visibleResearchContextBoundaries } from './research-record-ingestion.js'
-import { reasonAboutResearchRecord, researchRecordTextDigest, researchRecordGenerationSchema, researchRecordCompactClassificationSchema } from './research-record-model.js'
+import { ResearchRecordExecutionError, reasonAboutResearchRecord, researchRecordTextDigest, researchRecordGenerationSchema, researchRecordCompactClassificationSchema } from './research-record-model.js'
 import { reviewResearchRecord, historyOrigin, historySources, recordFields, nodePath, object } from './research-record-review.js'
 import { researchRecordQueryIndex, researchRecordPagePosition } from './research-record-query.js'
 import { buildResearchRecordIndex } from './research-record-index.js'
@@ -26,6 +29,37 @@ const sameWorkspace = (a: string, b: string) => resolve(a) === resolve(b)
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const string = (value: unknown) => typeof value === 'string' ? value : ''
 
+/** Failure logging and retry pacing for the polling scan below. */
+const MAX_SCAN_BACKOFF_MS = 60_000
+const SCAN_FAILURE_LOG_EVERY = 10
+const MAX_SCAN_FAILURE_DETAIL = 300
+
+/**
+ * Error identity for a log line: type, code and message, or a bounded summary of
+ * a ZodError's issues. Flattened to one line — ZodError messages are
+ * multi-line JSON and the log keeps only the first line. No stack, because
+ * frames carry filesystem paths that must not reach the log unreviewed.
+ */
+function describeScanFailure(error: unknown): string {
+  if (typeof error === 'string') return flattenFailure(error)
+  if (!(error instanceof Error)) return `non-Error rejection (${typeof error})`
+  const details = record(error)
+  const code = details.code
+  const label = typeof code === 'string' || typeof code === 'number' ? `${error.name || 'Error'} (${code})` : error.name || 'Error'
+  const issues = Array.isArray(details.issues) ? details.issues as unknown[] : []
+  if (issues.length) {
+    const first = record(issues[0])
+    const path = Array.isArray(first.path) ? first.path.map(String).join('.') : ''
+    return flattenFailure(`${label}: ${issues.length} validation issue(s)${path ? ` at ${path}` : ''}: ${string(first.message)}`)
+  }
+  return flattenFailure(`${label}: ${error.message}`)
+}
+
+function flattenFailure(text: string): string {
+  const flat = text.replace(/\s+/gu, ' ').trim()
+  return flat.length > MAX_SCAN_FAILURE_DETAIL ? `${flat.slice(0, MAX_SCAN_FAILURE_DETAIL)}…` : flat
+}
+
 /** Derived organization only. Raw actions stay in the runtime's canonical snapshot. */
 export class ResearchRecordRuntime {
   private context?: DomainMainRuntimeLifecycleContext
@@ -34,6 +68,7 @@ export class ResearchRecordRuntime {
   private timer?: ReturnType<typeof setTimeout>
   private scanning?: Promise<void>
   private working?: Promise<void>
+  private workingState?: State
   private controller = new AbortController()
   private states = new Map<string, State>()
   private files = new Map<string, ResearchRecordStore>()
@@ -47,6 +82,7 @@ export class ResearchRecordRuntime {
   private indexes = new WeakMap<State, { revision: number; index: ReturnType<typeof buildResearchRecordIndex> }>()
   // Completed ingestion passes only; inspection always re-verifies disk bytes.
   private retentionSnapshots = new Map<string, string>()
+  private consecutiveScanFailures = 0
 
   constructor(private readonly options: { userDataDir: string; sanitizeText?: (text: string) => string; pollMs?: number }) {}
 
@@ -75,11 +111,47 @@ export class ResearchRecordRuntime {
     if (this.closed) return
     if (this.timer) clearTimeout(this.timer)
     this.timer = setTimeout(() => {
-      void this.scan().catch(() => {
-        this.context?.log({ level: 'warn', message: 'Research record snapshot scan failed; canonical records were not changed.' })
-      }).finally(() => this.schedule())
+      void this.scan()
+        .then(() => this.reportScanSuccess())
+        .catch((error: unknown) => this.reportScanFailure(error))
+        .finally(() => this.schedule(this.nextScanDelay()))
     }, delay)
     this.timer.unref?.()
+  }
+
+  /** Poll normally, then back off geometrically while scans keep failing. */
+  private nextScanDelay(): number {
+    const base = this.options.pollMs ?? 2500
+    if (this.consecutiveScanFailures === 0) return base
+    const factor = 2 ** Math.min(this.consecutiveScanFailures - 1, 5)
+    return Math.min(base * factor, MAX_SCAN_BACKOFF_MS)
+  }
+
+  /**
+   * A failing scan used to log one fixed sentence every poll interval, with no
+   * error and no backoff: the cause was unrecoverable from the log and the app
+   * spent the session retrying at full rate. Report the first failure with its
+   * sanitized identity, then stay quiet until every Nth consecutive failure so
+   * a long outage does not refill the log.
+   */
+  private reportScanFailure(error: unknown): void {
+    this.consecutiveScanFailures += 1
+    const repeat = this.consecutiveScanFailures === 1 || this.consecutiveScanFailures % SCAN_FAILURE_LOG_EVERY === 0
+    if (!repeat) return
+    const detail = this.sanitize(describeScanFailure(error))
+    const count = this.consecutiveScanFailures === 1 ? '' : ` ${this.consecutiveScanFailures} consecutive failures;`
+    this.context?.log({
+      level: 'warn',
+      message: `Research record snapshot scan failed; canonical records were not changed.${count} retrying in ${Math.round(this.nextScanDelay() / 1000)}s: ${detail}`
+    })
+  }
+
+  private reportScanSuccess(): void {
+    const failures = this.consecutiveScanFailures
+    this.consecutiveScanFailures = 0
+    if (failures > 1) {
+      this.context?.log({ level: 'info', message: `Research record snapshot scan recovered after ${failures} consecutive failures.` })
+    }
   }
 
   async close(): Promise<void> {
@@ -148,6 +220,9 @@ export class ResearchRecordRuntime {
 
   private async scanOnce(): Promise<void> {
     const context = this.requireContext()
+    for (const state of this.states.values()) {
+      try { await refreshResultMaterials(context, state) } catch { /* Read projection fails closed. */ }
+    }
     const threads = await context.agentThreads.list({ includeArchived: true, includeSide: false })
     // Recent sessions stay responsive while historical sessions backfill fairly.
     const recent = threads.slice(0, 4), history = threads.slice(4)
@@ -458,7 +533,15 @@ export class ResearchRecordRuntime {
     const messageEnd = Math.max(0, messages.length - messageOffset)
     const visibleMessages = messages.slice(Math.max(0, messageEnd - 20), messageEnd)
     const synthesisImpact = input.includeScientificReview ? await this.synthesisImpact(state, node ? query.project(node, input.synthesisOffset) : null, visibleMessages) : []
+    const resultImpacts = input.includeScientificReview ? await resultImpact(this.requireContext(), state,
+      new Set([input.nodeId, ...this.descendants(state, input.nodeId).map(child => child.id)])) : []
+    projectHumanReviews(state, resultImpacts)
     const auditReferences = recordArtifactReferences('raw' in source ? source.raw : undefined)
+    const archiveSources: NonNullable<ResearchRecordNode['source']>[] = []
+    if (node?.source && 'retainedSource' in source) {
+      if (source.retainedSource === 'denied') auditReferences.limited = true
+      else archiveSources.push(node.source)
+    }
     // Summary links are resolved through the same authorized retained observation path.
     const linkedSourceIds = [...new Set(synthesisImpact.flatMap(item => item.sourceIds))]
     const referenceSources = linkedSourceIds.slice(0, 8)
@@ -468,11 +551,28 @@ export class ResearchRecordRuntime {
       const linked = state.nodes[id]
       if (!linked?.source) continue
       const observation = await this.retainedSource(linked, referenceCache, referenceAuthorization)
+      if (observation.retainedSource === 'denied') auditReferences.limited = true
+      else archiveSources.push(linked.source!)
       const found = recordArtifactReferences(observation.raw)
       auditReferences.limited ||= found.limited
       for (const ref of found.refs) if (!auditReferences.refs.some(item => item.artifactId === ref.artifactId && item.versionId === ref.versionId && item.contentDigest === ref.contentDigest)) {
         if (auditReferences.refs.length < 8) auditReferences.refs.push(ref)
         else auditReferences.limited = true
+      }
+    }
+    if (input.includeScientificReview && archiveSources.length) {
+      const groups = new Map<string, { scope: ResearchRecordScope; turns: Set<string> }>()
+      for (const ref of archiveSources) {
+        const identity = key(ref.runtimeId, ref.threadId, ref.workspaceRoot)
+        let group = groups.get(identity)
+        if (!group) { group = { scope: { runtimeId: ref.runtimeId, threadId: ref.threadId, workspaceRoot: ref.workspaceRoot }, turns: new Set() }; groups.set(identity, group) }
+        group.turns.add(ref.turnId)
+      }
+      for (const group of groups.values()) {
+        if (auditReferences.refs.length >= 8) { auditReferences.limited = true; break }
+        const found = await readCheckpointTurnArtifactReferences(this.requireContext(), { ...group.scope, knownTurnIds: [...group.turns] }, 8 - auditReferences.refs.length)
+        auditReferences.limited ||= found.limited
+        for (const ref of found.refs) if (!auditReferences.refs.some(existing => existing.versionId === ref.versionId && existing.contentDigest === ref.contentDigest)) auditReferences.refs.push(ref)
       }
     }
     // Native source IO may yield while ingestion or a human edit advances the
@@ -487,14 +587,14 @@ export class ResearchRecordRuntime {
       reasons: 'rawOrigin' in source && source.rawOrigin === 'retained' ? [] : ['selected-source-not-retained-or-not-authorized'],
       strategy: 'page-authorized-record-nodes; export-one-retained-source-per-view; preserve-ref-and-digest; never-delete-originals'
     } : undefined
-    return { sourceRetention, ...(sourceExport ? { sourceExport } : {}), revision: state.revision, node: node ? counted(node, input.synthesisOffset) : null,
+    return { humanReview: { enabled: state.humanReviewEnabled ?? false }, sourceRetention, ...(sourceExport ? { sourceExport } : {}), revision: state.revision, node: node ? counted(node, input.synthesisOffset) : null,
       ancestors: path.slice(0, -1).map(child => counted(child)), children: children.map(child => counted(child)), totalChildren: selection.nodes.length,
       page: { nextCursor: nextOffset === null ? null : position.cursor(nextOffset), nextOffset, total: selection.nodes.length,
         scanned: selection.scanned, indexBuildNodes: built, indexRevision: state.revision },
       locations: children.map(child => ({ nodeId: child.id, ancestorIds: query.index.ancestors(child.id).slice(0, -1).map(parent => parent.id) })),
       latestRecordPath: query.index.latestRecordPath(),
       messages: visibleMessages, messageTotal: messages.length,
-      synthesisImpact, auditReferences, messageNextOffset: messageEnd > 20 ? messageOffset + 20 : null, ...source, ...(discussionContext ? { discussionContext } : {}), paused: state.paused, model: state.model,
+      synthesisImpact, resultImpact: resultImpacts, auditReferences, messageNextOffset: messageEnd > 20 ? messageOffset + 20 : null, ...source, ...(discussionContext ? { discussionContext } : {}), paused: state.paused, model: state.model,
       pending: query.pendingOrganization.get('root') ?? 0, failures: state.failures.slice(-20),
       organizationCoverage: query.organizationCoverage(input.nodeId),
       auditCoverage: { kind: 'visible-session-snapshots', completeness: 'unknown', contextBoundaries: query.boundaryCount(input.nodeId),
@@ -545,7 +645,7 @@ export class ResearchRecordRuntime {
     if (!entry) throw new Error('修订记录不存在。')
     const value = object(entry.value), origin = historyOrigin(entry.kind)
     const previous = object(value.previous ?? (entry.kind.startsWith('human-') ? value : null)), after = object(value.after)
-    const changes = ['title', 'summary', 'parentId', 'locks', 'paused', 'model'].filter(field => field in previous || field in after)
+    const changes = ['title', 'summary', 'parentId', 'locks', 'paused', 'model', 'result', 'inputs', 'presentations'].filter(field => field in previous || field in after)
       .filter(field => JSON.stringify(previous[field]) !== JSON.stringify(after[field]))
       .map(field => ({ field, before: previous[field] ?? null, after: after[field] ?? null }))
     const sourceIds = historySources(value), cache = new Map<string, DomainAgentThreadDetail>(), authorization = new Map<string, boolean>()
@@ -581,6 +681,7 @@ export class ResearchRecordRuntime {
         }
       } catch { /* The receipt remains readable even when its native Session is unavailable. */ }
     }
+    if (entry.kind === 'human-result-review') changes.push({ field: 'humanReview', before: null, after: researchHumanReviewReceiptSchema.parse(value) })
     return { sourceRetention: this.sourceStore().coverage(sources.map(source => source.ref)), sequence: input.sequence, at: entry.at, nodeId: entry.nodeId, kind: entry.kind, origin, changes, sources,
       sourcesLimited: sources.length < sourceIds.length,
       ...(entry.kind === 'context-boundary' ? { contextBoundary: researchRecordContextBoundarySchema.parse(value) } : {}), execution, recipe, input: modelInput, output: modelOutput, inputStatus, outputStatus }
@@ -594,7 +695,19 @@ export class ResearchRecordRuntime {
     if (replay) return replay as { revision: number }
     if (input.expectedRevision !== state.revision) throw new Error('记录已更新，请刷新后重试。')
     const change = input.change
-    if (change.kind === 'phase' || change.kind === 'move') {
+    if (change.kind === 'human-review-settings') {
+      const previous = state.humanReviewEnabled ?? false
+      state.humanReviewEnabled = change.enabled
+      state.history.push({ at: time(), nodeId: 'root', kind: 'human-review-settings', value: { previous: { enabled: previous }, after: { enabled: change.enabled } } })
+    } else if (change.kind === 'result-binding') {
+      const binding = change.binding
+      if (binding.nodeId !== 'root' && !state.nodes[binding.nodeId]) throw new Error('绑定节点不存在。')
+      const bindings = state.resultBindings ?? []
+      const previous = bindings.find(item => item.id === binding.id)
+      if (!previous && bindings.length >= 64) throw new Error('结果绑定数量已达上限。')
+      state.resultBindings = [...bindings.filter(item => item.id !== binding.id), binding]
+      state.history.push({ at: time(), nodeId: binding.nodeId, kind: 'human-result-binding', value: { previous: previous ?? null, after: binding } })
+    } else if (change.kind === 'phase' || change.kind === 'move') {
       if (change.parentId !== 'root' && state.nodes[change.parentId]?.kind !== 'phase') throw new Error('长阶段只能归入课题根或另一阶段。')
       const nodeId = change.kind === 'phase' ? change.nodeId ?? key(input.requestId) : change.nodeId
       const previous = state.nodes[nodeId]
@@ -620,6 +733,9 @@ export class ResearchRecordRuntime {
       for (const round of this.descendants(state, node.id).filter(child => child.kind === 'round')) this.dirtyPhases(state, round.id)
     } else if (change.kind === 'settings') {
       state.history.push({ at: time(), nodeId: 'root', kind: 'human-settings', value: { previous: { paused: state.paused, model: state.model }, after: { paused: change.paused, model: change.model } } })
+      if (this.workingState === state && (change.paused || state.model !== change.model)) {
+        this.controller.abort(); this.controller = new AbortController()
+      }
       state.paused = change.paused; state.model = change.model
     } else {
       state.history.push({ at: time(), nodeId: 'root', kind: 'human-retry', value: {} })
@@ -627,18 +743,54 @@ export class ResearchRecordRuntime {
         job.processedIds = job.processedIds.filter(id => job.assignedIds.includes(id))
         job.unavailableIds = job.unavailableIds.filter(id => job.assignedIds.includes(id) && !job.semanticPendingIds.includes(id))
         job.changedIds = job.changedIds.filter(id => job.assignedIds.includes(id) && !job.semanticPendingIds.includes(id))
-        job.attempts = 0; job.nextAt = 0
+        job.attempts = 0; job.nextAt = 0; delete job.retryBlocked
       }
-      for (const job of Object.values(state.phaseJobs)) { job.attempts = 0; job.nextAt = 0 }
+      for (const job of Object.values(state.phaseJobs)) { job.attempts = 0; job.nextAt = 0; delete job.retryBlocked }
     }
     for (const item of state.history.slice(historyStart)) {
       const value = object(item.value)
       item.value = { ...value, revision: state.revision + 1, pathAfter: nodePath(state, item.nodeId),
-        ...(item.nodeId !== 'root' ? { after: recordFields(state.nodes[item.nodeId]) } : {}) }
+        ...(item.nodeId !== 'root' && item.kind !== 'human-result-binding' ? { after: recordFields(state.nodes[item.nodeId]) } : {}) }
     }
     const output = { revision: state.revision + 1 }
     state.receipts[input.requestId] = { digest: hash(input), output }
     this.save(state); this.kickWorker()
+    return output
+  }
+
+  async submitHumanReview(raw: z.input<typeof researchHumanReviewInputSchema>, humanActions?: DomainMainHumanActionsHost): Promise<{ revision: number }> {
+    const { target } = researchHumanReviewInputSchema.parse(raw)
+    if (!humanActions) throw new Error('需要系统人工确认及当前账户身份。')
+    const action = humanActions.capture({ target })
+    const lease = humanActions.validate({ target, action })
+    lease.assertCurrent()
+    const { state } = await this.authorized(target)
+    lease.assertCurrent()
+    const identity = { target, principal: lease.principal }
+    const replay = this.receipt(state, target.requestId, identity)
+    if (replay) return replay as { revision: number }
+    if (!state.humanReviewEnabled) throw new Error('此项目未开启人工复核。')
+    if (target.expectedRevision !== state.revision) throw new Error('记录已更新，请刷新后重试。')
+    const current = state.resultBindings?.find(item => item.id === target.binding.id)
+    if (!current || bindingIdentity(current) !== bindingIdentity(target.binding)) throw new Error('复核版本与当前绑定不一致。')
+    const revision = state.revision
+    let refreshFailed = false
+    try { await refreshResultMaterials(this.requireContext(), state) }
+    catch { refreshFailed = true }
+    const impacts = await resultImpact(this.requireContext(), state, new Set([current.nodeId]))
+    lease.assertCurrent()
+    if (state.revision !== revision || this.states.get(state.workspaceRoot) !== state) throw new Error('记录已更新，请刷新后重试。')
+    const impact = impacts.find(item => item.id === current.id)
+    if (refreshFailed || !impact || impact.status !== 'no-recorded-impact' || impact.presentations.some(item => item.status !== 'no-recorded-impact')) {
+      if (target.decision === 'approved') throw new Error('材料已变化或状态未知，请核对并更新版本后再认可。')
+    }
+    const receipt = researchHumanReviewReceiptSchema.parse({ requestId: target.requestId, binding: current, decision: target.decision,
+      opinion: target.opinion, principal: lease.principal, at: time(), action })
+    const output = { revision: state.revision + 1 }
+    lease.assertCurrent()
+    state.history.push({ at: receipt.at, nodeId: current.nodeId, kind: 'human-result-review', value: receipt })
+    state.receipts[target.requestId] = { digest: hash(identity), output }
+    this.save(state)
     return output
   }
 
@@ -678,31 +830,33 @@ export class ResearchRecordRuntime {
     for (const state of rotated) {
       if (state.paused) continue
       const entry = Object.entries(state.jobs)
-        .filter(([, job]) => remainingSources(job).length > 0 && job.attempts < 3 && job.nextAt <= Date.now())
+        .filter(([, job]) => remainingSources(job).length > 0 && !job.retryBlocked && job.attempts < 3 && job.nextAt <= Date.now())
         .sort(([left], [right]) => state.nodes[right].updatedAt.localeCompare(state.nodes[left].updatedAt))[0]
       // Drain eligible round updates before summarizing a partial phase batch.
       // Backoff/blocked rounds do not prevent synthesis of already-ready work.
       const phaseEntry = entry ? undefined : Object.entries(state.phaseJobs)
-        .filter(([id, job]) => job.dirtyRoundIds.length && job.attempts < 3 && job.nextAt <= Date.now() && job.dirtyRoundIds.some(roundId => this.phaseRoundReady(state, state.nodes[id], roundId)))
+        .filter(([id, job]) => job.dirtyRoundIds.length && !job.retryBlocked && job.attempts < 3 && job.nextAt <= Date.now() && job.dirtyRoundIds.some(roundId => this.phaseRoundReady(state, state.nodes[id], roundId)))
         .sort(([, left], [, right]) => left.nextAt - right.nextAt)[0]
       if (!entry && !phaseEntry) continue
       this.nextModelAt = Date.now() + 15000
       this.lastWorkspace = state.workspaceRoot
+      this.workingState = state
       this.working = (entry ? this.organize(state, entry[0], structuredClone(entry[1])) : this.synthesizePhase(state, phaseEntry![0]))
         .catch(() => this.context?.log({ level: 'warn', message: 'Research record organization could not persist; no canonical source was changed.' }))
-        .finally(() => { this.working = undefined })
+        .finally(() => { this.working = undefined; this.workingState = undefined })
       return
     }
   }
 
   private async organize(state: State, roundId: string, job: OrganizationJob): Promise<void> {
-    const signal = this.controller.signal
+    const signal = AbortSignal.any([this.controller.signal, this.requireContext().signal])
     let attempted: Awaited<ReturnType<typeof reasonAboutResearchRecord>> | undefined
     let attemptedSources: string[] = []
     try {
       const context = this.requireContext()
       const nodes = remainingSources(job).map(id => state.nodes[id]).filter(Boolean)
       const data = await this.contextFor(state, nodes)
+      if (signal.aborted || this.closed || !this.enabled || state.paused || this.states.get(state.workspaceRoot) !== state) return
       const current = state.jobs[roundId]
       current.unavailableIds = union(current.unavailableIds, data.unavailableIds)
       current.changedIds = union(current.changedIds, data.changedIds)
@@ -735,10 +889,11 @@ export class ResearchRecordRuntime {
         assigned.add(id)
       }
       if (signal.aborted || this.closed || !this.enabled || state.paused || this.states.get(state.workspaceRoot) !== state) return
-      if ((round.synthesis?.revision ?? 0) !== baseRevision || data.evidence.some(item => !state.jobs[roundId].sourceIds.includes(item.id) || state.jobs[roundId].processedIds.includes(item.id) && !state.jobs[roundId].semanticPendingIds.includes(item.id))) throw new Error('本批累计状态或当前来源已变化，保留来源等待重试。')
       const sourceChecks: { sourceStatus: 'current' | 'changed' | 'unavailable' }[] = []
       const sourceCache = new Map<string, DomainAgentThreadDetail>()
       for (const item of data.evidence) sourceChecks.push(await this.source(state.nodes[item.id], sourceCache))
+      if (signal.aborted || this.closed || !this.enabled || state.paused || this.states.get(state.workspaceRoot) !== state) return
+      if ((round.synthesis?.revision ?? 0) !== baseRevision || data.evidence.some(item => !state.jobs[roundId].sourceIds.includes(item.id) || state.jobs[roundId].processedIds.includes(item.id) && !state.jobs[roundId].semanticPendingIds.includes(item.id))) throw new Error('本批累计状态或当前来源已变化，保留来源等待重试。')
       const latestJob = state.jobs[roundId]
       latestJob.changedIds = union(latestJob.changedIds, data.evidence.filter((_, index) => sourceChecks[index].sourceStatus === 'changed').map(item => item.id))
       latestJob.unavailableIds = union(latestJob.unavailableIds, data.evidence.filter((_, index) => sourceChecks[index].sourceStatus === 'unavailable').map(item => item.id))
@@ -797,7 +952,7 @@ export class ResearchRecordRuntime {
     } catch (error) {
       if (signal.aborted || this.closed || this.states.get(state.workspaceRoot) !== state) return
       const current = state.jobs[roundId]
-      current.attempts++; current.nextAt = Date.now() + 60000 * current.attempts
+      current.attempts++; current.retryBlocked = error instanceof ResearchRecordExecutionError && !error.retryable; current.nextAt = Date.now() + 60000 * current.attempts
       this.rejectedModelReceipt(state, roundId, attempted, attemptedSources, error)
       state.failures.push({ nodeId: roundId, message: this.sanitize(error instanceof Error ? error.message : '整理失败。').slice(0, 1000), at: time() })
       this.save(state)
@@ -814,7 +969,7 @@ export class ResearchRecordRuntime {
   }
 
   private async synthesizePhase(state: State, phaseId: string): Promise<void> {
-    const signal = this.controller.signal
+    const signal = AbortSignal.any([this.controller.signal, this.requireContext().signal])
     let attempted: Awaited<ReturnType<typeof reasonAboutResearchRecord>> | undefined
     const phase = state.nodes[phaseId], job = state.phaseJobs[phaseId]
     const existing = synthesisContext(phase, 6000)
@@ -856,6 +1011,11 @@ export class ResearchRecordRuntime {
       })
       const result = researchRecordPhaseSynthesisSchema.parse(JSON.parse(response.text))
       if (signal.aborted || this.closed || !this.enabled || state.paused || this.states.get(state.workspaceRoot) !== state) return
+      const sourceCache = new Map<string, DomainAgentThreadDetail>()
+      const sourcesCurrent: boolean[] = []
+      for (const id of allowed) sourcesCurrent.push(Boolean(state.nodes[id]?.source) && (await this.source(state.nodes[id], sourceCache)).sourceStatus === 'current')
+      if (signal.aborted || this.closed || !this.enabled || state.paused || this.states.get(state.workspaceRoot) !== state) return
+      if (sourcesCurrent.some(current => !current)) throw new Error('阶段来源已变化或不可读，未提交综合结果。')
       if ((phase.synthesis?.revision ?? 0) !== existing.revision || changedRounds.some(round => !this.phaseRoundReady(state, phase, round.id) || state.nodes[round.id].title !== round.title || state.nodes[round.id].summary.slice(0, 1000) !== round.summary || state.nodes[round.id].status !== round.status || hash(this.ancestors(state, round.id).map(node => node.id)) !== hash(round.path) || round.entries.some(entry => hash(state.nodes[round.id]?.synthesis?.entries.find(current => current.id === entry.id)) !== hash(entry)))) throw new Error('阶段已提供的条目、字段或归属发生变化，等待局部更新。')
       const patched = structuredClone(phase)
       applyStatePatch(patched, result.statePatch, allowed, new Set(existing.entries.map(entry => entry.id)), text => this.sanitize(text))
@@ -883,7 +1043,7 @@ export class ResearchRecordRuntime {
       this.save(state)
     } catch (error) {
       if (signal.aborted || this.closed || this.states.get(state.workspaceRoot) !== state) return
-      job.attempts++; job.nextAt = Date.now() + 60000 * job.attempts
+      job.attempts++; job.retryBlocked = error instanceof ResearchRecordExecutionError && !error.retryable; job.nextAt = Date.now() + 60000 * job.attempts
       this.rejectedModelReceipt(state, phaseId, attempted, [...allowed], error)
       state.failures.push({ nodeId: phaseId, message: this.sanitize(error instanceof Error ? error.message : '阶段综合失败。').slice(0, 1000), at: time() })
       this.save(state)

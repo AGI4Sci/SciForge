@@ -93,6 +93,20 @@ test('renderer bridge forwards a canonical spec through client.rerun with fresh 
   }])
 })
 
+test('testing a real workflow node carries the same confirmation as running it', async () => {
+  const calls: unknown[] = []
+  const client = createCreateLoopCapabilityClient({
+    invoke: async (contract: unknown, input: unknown, options: unknown) => {
+      calls.push({ contract, input, options }); return {} as never
+    }
+  } as unknown as DomainRendererCapabilityInvoker)
+  await client.testNode('/workspace', 'workflow', 'node', '{}')
+  const call = calls[0] as { contract: { actionId: string; effect: string }; options: { approval: { mode: string } } }
+  assert.equal(call.contract.actionId, CREATE_LOOP_CAPABILITY_IDS.testNode)
+  assert.equal(call.contract.effect, 'external-write')
+  assert.equal(call.options.approval.mode, 'confirmation')
+})
+
 test('run history exports before rerunning and closes only after rerun succeeds', async () => {
   const events: string[] = []
   const spec = { schemaVersion: 'sciforge.rerun.v1', specId: 'spec-1' } as SciForgeReproSpecV1

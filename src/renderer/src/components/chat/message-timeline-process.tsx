@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Minimize2 } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
+import { stripAnsiEscapes } from '@shared/markdown-normalize'
 import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
 import { openSafeExternalUrl } from '../../lib/open-external'
@@ -166,7 +167,7 @@ function ReasoningMetaBadges({
   t: (key: string, opts?: Record<string, unknown>) => string
 }): ReactElement | null {
   if (!metadata) return null
-  const chipClass = 'inline-flex max-w-full shrink-0 items-center rounded border border-ds-border-muted bg-ds-card/70 px-1.5 py-0.5 text-[10.5px] font-medium leading-none text-ds-faint'
+  const chipClass = 'inline-flex max-w-full shrink-0 items-center rounded border border-ds-border-muted bg-ds-card/70 px-1.5 py-0.5 text-ds-2xs font-medium leading-none text-ds-faint'
   return (
     <>
       {metadata.visibility ? (
@@ -223,11 +224,7 @@ export function ProcessSectionRow({
       : []
   const hasDetails = sectionHasDetails(section, t)
   const active = isProcessSectionActive(section, processing)
-  const hasError = section.blocks.some(
-    (block) =>
-      (block.kind === 'tool' && block.status === 'error') ||
-      (block.kind === 'system' && block.severity === 'error')
-  )
+  const hasError = section.blocks.some(processBlockHasError)
   const defaultExpanded =
     hasError ||
     (active && section.kind === 'reasoning') ||
@@ -280,7 +277,7 @@ export function ProcessSectionRow({
         <button
           type="button"
           onClick={() => setUserExpanded(!(userExpanded ?? defaultExpanded))}
-          className={`group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[14px] font-medium transition hover:opacity-85 ${
+          className={`ds-button-plain group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-ds-lg font-medium transition hover:opacity-85 ${
             hasError ? 'text-red-600 dark:text-red-300' : 'text-ds-muted'
           }`}
         >
@@ -299,7 +296,7 @@ export function ProcessSectionRow({
         </button>
       ) : (
         <div
-          className={`flex w-fit max-w-full items-center gap-1.5 py-0.5 text-[14px] font-medium ${
+          className={`flex w-fit max-w-full items-center gap-1.5 py-0.5 text-ds-lg font-medium ${
             hasError ? 'text-red-600 dark:text-red-300' : 'text-ds-muted'
           }`}
         >
@@ -339,11 +336,11 @@ export function ProcessSectionRow({
                       className="rounded-md border border-ds-border-muted/40 bg-ds-bg/45 px-2 py-1.5"
                     >
                       {block.createdAt ? (
-                        <span className="mb-1 block text-[9.5px] font-mono tabular-nums text-ds-faint">
+                        <span className="mb-1 block text-ds-2xs font-mono tabular-nums text-ds-faint">
                           {reasoningBlockTime(block.createdAt)}
                         </span>
                       ) : null}
-                      <div className="ds-markdown text-[13.5px] leading-6 text-ds-muted">
+                      <div className="ds-markdown text-ds-md leading-6 text-ds-muted">
                         <AssistantMarkdown text={block.text} streaming={streaming} />
                       </div>
                     </div>
@@ -382,7 +379,7 @@ function processBlockIsActive(block: ChatBlock, processing: boolean): boolean {
   )
 }
 
-function processBlockHasError(block: ChatBlock): boolean {
+export function processBlockHasError(block: ChatBlock): boolean {
   return (
     (block.kind === 'tool' && block.status === 'error') ||
     (block.kind === 'compaction' && block.status === 'error') ||
@@ -456,7 +453,7 @@ function ProcessStackRows({
               aria-expanded={canToggle ? open : undefined}
               onClick={handleToggle}
               onKeyDown={handleKeyDown}
-              className={`group flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13.5px] leading-6 transition ${
+              className={`ds-button-plain group flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-ds-md leading-6 transition ${
                 isError
                   ? 'text-red-600 dark:text-red-300'
                   : 'text-ds-faint hover:text-ds-muted'
@@ -539,7 +536,7 @@ function ProcessEntryRow({
         aria-expanded={canToggle ? open : undefined}
         onClick={handleToggle}
         onKeyDown={handleKeyDown}
-        className={`group flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-[13.5px] leading-[1.55] transition ${
+        className={`ds-button-plain group flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-ds-md leading-[1.55] transition ${
           isError
             ? 'text-red-600 dark:text-red-300'
             : 'text-ds-faint hover:text-ds-ink'
@@ -569,7 +566,7 @@ function ProcessEntryRow({
                 {verb}
               </span>
               {rest ? (
-                <span className="ml-1.5 font-mono text-[13px]">
+                <span className="ml-1.5 font-mono text-ds-md">
                   <ProcessSummaryText block={block} summary={rest} />
                 </span>
               ) : null}
@@ -892,7 +889,7 @@ function RuntimeMetaBadges({
   ) {
     return null
   }
-  const chipClass = 'inline-flex max-w-full items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-[11px] font-medium text-ds-faint'
+  const chipClass = 'inline-flex max-w-full items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-ds-xs font-medium text-ds-faint'
   return (
     <div className="ml-7 mt-1 flex min-w-0 flex-wrap gap-1.5">
       {childLabel ? (
@@ -1043,6 +1040,11 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
   return { kind: 'none' }
 }
 
+/** Tool output keeps its ANSI colour codes; they render as `[31m` noise here. */
+function toolDetailText(text: string): string {
+  return stripAnsiEscapes(text)
+}
+
 function ProcessEntryDetail({
   block,
   detail,
@@ -1055,14 +1057,14 @@ function ProcessEntryDetail({
   if (detail.kind === 'reasoning') {
     const streamReason = block.id === 'live-reasoning' && processing
     return (
-      <div className="ds-markdown text-[13.5px] leading-6 text-ds-muted">
+      <div className="ds-markdown text-ds-md leading-6 text-ds-muted">
         <AssistantMarkdown text={detail.text} streaming={streamReason} />
       </div>
     )
   }
   if (detail.kind === 'assistant') {
     return (
-      <div className="ds-markdown text-[13.5px] leading-6 text-ds-ink">
+      <div className="ds-markdown text-ds-md leading-6 text-ds-ink">
         <AssistantMarkdown
           text={detail.text}
           streaming={processing && block.kind === 'assistant' && block.id === 'live-assistant'}
@@ -1078,24 +1080,24 @@ function ProcessEntryDetail({
       return (
         <div className="overflow-hidden rounded-[10px] border border-red-200/80 bg-red-50/80 dark:border-red-800/40 dark:bg-red-500/10">
           {detail.filePath ? (
-            <div className="border-b border-red-200/70 bg-red-100/50 px-3 py-1.5 font-mono text-[12px] text-red-700 dark:border-red-800/40 dark:bg-red-500/15 dark:text-red-300">
+            <div className="border-b border-red-200/70 bg-red-100/50 px-3 py-1.5 font-mono text-ds-sm text-red-700 dark:border-red-800/40 dark:bg-red-500/15 dark:text-red-300">
               {detail.filePath}
             </div>
           ) : null}
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[12px] leading-6 text-red-800 dark:text-red-200">
-            {detail.text}
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-ds-sm leading-6 text-red-800 dark:text-red-200">
+            {toolDetailText(detail.text)}
           </pre>
         </div>
       )
     }
     return (
-      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-ds-ink">
-        {detail.text}
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-ds-sm leading-6 text-ds-ink">
+        {toolDetailText(detail.text)}
       </pre>
     )
   }
   if (detail.kind === 'text') {
-    return <p className="whitespace-pre-wrap text-[13.5px] leading-6 text-ds-muted">{detail.text}</p>
+    return <p className="whitespace-pre-wrap text-ds-md leading-6 text-ds-muted">{detail.text}</p>
   }
   return null
 }

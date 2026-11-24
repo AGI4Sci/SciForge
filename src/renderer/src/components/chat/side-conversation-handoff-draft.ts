@@ -4,6 +4,13 @@ import type { SideConversation } from '../../store/chat-store-types'
 export function sideConversationHandoffDraft(side: SideConversation): string {
   const answer = [...side.blocks].reverse().find(block => block.kind === 'assistant')
   const result = answer?.kind === 'assistant' ? answer.text : ''
+  const questions = side.blocks.filter(block => block.kind === 'user').map(block => block.text)
+  const quoted: string[] = []
+  let remaining = 12000
+  for (const question of [...questions].reverse()) {
+    if (question.length > remaining) break
+    quoted.unshift(question); remaining -= question.length
+  }
   const references = [...new Set(side.context?.sourceRefs?.flatMap(ref => {
     const label = readableLabel(ref.label, [ref.threadId, ref.turnId, ref.itemId])
     const uri = readableLocation(ref.uri)
@@ -11,9 +18,10 @@ export function sideConversationHandoffDraft(side: SideConversation): string {
     return source ? [`- ${source}`] : []
   }) ?? [])]
   return [
-    `# ${side.title}`, '', '## 讨论成果（发送前请核对）', '',
-    result || '请填写要交给主对话的结论或建议。', '', '## 待验证与下一步', '',
-    '请补充尚未验证的部分和希望主对话继续完成的事项。', '', '## 来源', '',
+    result || '请填写要带回主对话的内容。',
+    ...(quoted.length ? ['', '你的问题与补充：', '', ...quoted] : []),
+    ...(quoted.length < questions.length ? ['部分用户消息未带入，请回看讨论并补齐关键条件。', ''] : []),
+    ...(side.context || references.length ? ['', '参考：'] : []),
     ...(side.context ? [`- 讨论范围：${side.context.title}`] : []), ...references
   ].join('\n')
 }

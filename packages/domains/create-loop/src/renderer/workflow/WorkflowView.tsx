@@ -385,8 +385,8 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
       <header className="flex shrink-0 items-center gap-2 border-b border-ds-border bg-ds-sidebar px-3 py-2.5">
         <WorkflowIcon className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-semibold text-ds-ink">{t('workflow')}</h1>
-          <p className="truncate text-[10.5px] text-ds-faint">{t('workflowChatHint')}</p>
+          <h1 className="truncate text-ds-md font-semibold text-ds-ink">{t('workflow')}</h1>
+          <p className="truncate text-ds-2xs text-ds-faint">{t('workflowChatHint')}</p>
         </div>
         {onCollapse ? (
           <button
@@ -404,7 +404,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
       <main className="ds-no-drag min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3">
         <div className="mx-auto flex w-full max-w-none flex-col gap-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[14px] leading-6 text-ds-faint">{t('workflowSubtitle')}</p>
+            <p className="text-ds-lg leading-6 text-ds-faint">{t('workflowSubtitle')}</p>
             <div className="flex items-center gap-2">
               <input
                 ref={importInputRef}
@@ -420,7 +420,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
               <button
                 type="button"
                 onClick={() => setShowHooks(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3.5 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                className="inline-flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3.5 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
               >
                 <Zap className="h-4 w-4" strokeWidth={1.8} />
                 {t('workflowHooks')}
@@ -428,7 +428,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
               <button
                 type="button"
                 onClick={() => importInputRef.current?.click()}
-                className="inline-flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3.5 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                className="inline-flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3.5 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
               >
                 <Upload className="h-4 w-4" strokeWidth={1.8} />
                 {t('workflowImport')}
@@ -436,7 +436,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
               <button
                 type="button"
                 onClick={() => void handleCreate()}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
               >
                 <Plus className="h-4 w-4" strokeWidth={2} />
                 {t('workflowNew')}
@@ -445,18 +445,18 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
           </div>
 
           {error ? (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-[13px] text-red-700 dark:text-red-200">
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-ds-md text-red-700 dark:text-red-200">
               {error}
             </div>
           ) : null}
 
           {loading ? (
-            <p className="text-[13px] text-ds-faint">{t('loading')}</p>
+            <p className="text-ds-md text-ds-faint">{t('loading')}</p>
           ) : workflows.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-ds-border px-6 py-16 text-center">
               <WorkflowIcon className="h-8 w-8 text-ds-faint" strokeWidth={1.5} />
-              <p className="text-[14px] font-medium text-ds-ink">{t('workflowEmpty')}</p>
-              <p className="max-w-[360px] text-[13px] text-ds-faint">{t('workflowEmptyHint')}</p>
+              <p className="text-ds-lg font-medium text-ds-ink">{t('workflowEmpty')}</p>
+              <p className="max-w-[360px] text-ds-md text-ds-faint">{t('workflowEmptyHint')}</p>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -476,14 +476,14 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
                             <WorkflowIcon className="h-4 w-4" strokeWidth={1.9} />
                           </span>
-                          <h3 className="truncate text-[15px] font-semibold text-ds-ink">
+                          <h3 className="truncate text-ds-xl font-semibold text-ds-ink">
                             {workflow.name || t('workflowUntitled')}
                           </h3>
-                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(lastStatus)}`}>
+                          <span className={`rounded-full px-2 py-0.5 text-ds-xs font-medium ${statusTone(lastStatus)}`}>
                             {t(`workflowStatus_${lastStatus}`)}
                           </span>
                         </div>
-                        <p className="mt-1 pl-9 text-[12px] text-ds-faint">
+                        <p className="mt-1 pl-9 text-ds-sm text-ds-faint">
                           {t('workflowNodeCount', { count: workflow.nodes.length })} ·{' '}
                           {t('workflowLastRun')}: {formatDateTime(workflow.lastRunAt, t('workflowNeverRun'))}
                         </p>
@@ -492,7 +492,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                         <button
                           type="button"
                           onClick={() => (running ? void handleStop(workflow.id) : requestRun(workflow))}
-                          className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12.5px] font-semibold transition ${
+                          className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-ds-sm font-semibold transition ${
                             running
                               ? 'bg-red-500/90 text-white hover:bg-red-500'
                               : 'bg-ds-userbubble text-ds-userbubbleFg shadow-sm hover:opacity-90'
@@ -533,7 +533,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                     </div>
 
                     {workflow.lastMessage.trim() ? (
-                      <p className="rounded-lg bg-ds-subtle px-3 py-2 text-[12.5px] text-ds-muted">
+                      <p className="rounded-lg bg-ds-subtle px-3 py-2 text-ds-sm text-ds-muted">
                         <span className="font-medium text-ds-faint">{t('workflowLastResult')}: </span>
                         {workflow.lastMessage.length > 240
                           ? `${workflow.lastMessage.slice(0, 240)}…`
@@ -548,16 +548,16 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                             <div className="flex items-center gap-2">
                               <UserCheck className="h-4 w-4 shrink-0 text-amber-600" strokeWidth={1.9} />
                               <div className="min-w-0 flex-1">
-                                <div className="truncate text-[12.5px] font-semibold text-ds-ink">
+                                <div className="truncate text-ds-sm font-semibold text-ds-ink">
                                   {approval.title || t('workflowApprovalPending')}
                                 </div>
-                                <div className="text-[11.5px] text-ds-faint">
+                                <div className="text-ds-xs text-ds-faint">
                                   {approval.nodeName || t('workflowNode_human-approval')}
                                 </div>
                               </div>
                             </div>
                             {approval.instruction ? (
-                              <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-[12px] leading-5 text-ds-muted">
+                              <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-ds-sm leading-5 text-ds-muted">
                                 {approval.instruction}
                               </div>
                             ) : null}
@@ -565,7 +565,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                               <button
                                 type="button"
                                 onClick={() => void handleResolveApproval(approval.token, 'approved')}
-                                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/90 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-emerald-500"
+                                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/90 px-3 py-1.5 text-ds-sm font-semibold text-white transition hover:bg-emerald-500"
                               >
                                 <Check className="h-3.5 w-3.5" strokeWidth={2.2} />
                                 {t('workflowApprovalApprove')}
@@ -573,7 +573,7 @@ export function WorkflowView({ onCollapse }: Props): ReactElement {
                               <button
                                 type="button"
                                 onClick={() => void handleResolveApproval(approval.token, 'rejected')}
-                                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 py-1.5 text-[12.5px] font-semibold text-red-600 transition hover:bg-red-500/10"
+                                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 py-1.5 text-ds-sm font-semibold text-red-600 transition hover:bg-red-500/10"
                               >
                                 <X className="h-3.5 w-3.5" strokeWidth={2.2} />
                                 {t('workflowApprovalReject')}
@@ -676,7 +676,7 @@ function WorkflowToggle({
           }`}
         />
       </span>
-      <span className={`flex items-center gap-1 text-[12.5px] font-medium ${active ? 'text-ds-ink' : 'text-ds-muted'}`}>
+      <span className={`flex items-center gap-1 text-ds-sm font-medium ${active ? 'text-ds-ink' : 'text-ds-muted'}`}>
         {icon}
         {label}
       </span>
@@ -685,7 +685,7 @@ function WorkflowToggle({
 }
 
 const RUN_INPUT_FIELD =
-  'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'
+  'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'
 
 /** Generated form that collects a manual trigger's typed inputs before a one-off run. */
 function RunInputDialog({
@@ -719,7 +719,7 @@ function RunInputDialog({
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-ds-border px-5 py-3.5">
-          <span className="text-[14px] font-semibold text-ds-ink">{t('workflowRunWithInputs')}</span>
+          <span className="text-ds-lg font-semibold text-ds-ink">{t('workflowRunWithInputs')}</span>
           <button
             type="button"
             onClick={onClose}
@@ -731,11 +731,11 @@ function RunInputDialog({
         <div className="flex flex-col gap-3 overflow-y-auto px-5 py-4">
           {schema.map((field) => (
             <label key={field.key} className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-ds-muted">
+              <span className="text-ds-sm font-medium text-ds-muted">
                 {field.label.trim() || field.key}
                 {field.required ? <span className="ml-1 text-red-500">*</span> : null}
               </span>
-              {field.description ? <span className="text-[11px] text-ds-faint">{field.description}</span> : null}
+              {field.description ? <span className="text-ds-xs text-ds-faint">{field.description}</span> : null}
               {field.type === 'boolean' ? (
                 <input
                   type="checkbox"
@@ -745,7 +745,7 @@ function RunInputDialog({
                 />
               ) : field.type === 'paragraph' || field.type === 'json' ? (
                 <textarea
-                  className={`${RUN_INPUT_FIELD} min-h-[80px] resize-y ${field.type === 'json' ? 'font-mono text-[12px]' : ''}`}
+                  className={`${RUN_INPUT_FIELD} min-h-[80px] resize-y ${field.type === 'json' ? 'font-mono text-ds-sm' : ''}`}
                   value={String(values[field.key] ?? '')}
                   onChange={(event) => set(field.key, event.target.value)}
                 />
@@ -777,7 +777,7 @@ function RunInputDialog({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover"
+            className="inline-flex items-center rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover"
           >
             {t('cancel')}
           </button>
@@ -785,7 +785,7 @@ function RunInputDialog({
             type="button"
             disabled={missing}
             onClick={() => onRun(values)}
-            className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-50"
           >
             <Play className="h-4 w-4" strokeWidth={2} />
             {t('workflowRunNow')}

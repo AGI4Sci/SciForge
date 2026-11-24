@@ -79,7 +79,8 @@ describe('composer workspace attachment import', () => {
       name: 'notes.htm',
       workspaceRoot: '/workspace',
       kind: 'text',
-      mimeType: 'text/html'
+      mimeType: 'text/html',
+      size: 13
     })
   })
 
@@ -202,4 +203,21 @@ describe('composer workspace attachment import', () => {
     expect(writeWorkspaceFile).not.toHaveBeenCalled()
   })
 
+})
+
+for (const type of ['text/x-python', 'application/octet-stream']) {
+  it(`imports a scientific script with ${type} as canonical plain text without changing bytes`, async () => {
+    const writeWorkspaceFile = vi.fn(successfulWrite)
+    const bytes = new TextEncoder().encode('\ufeff# 科研\r\nraise RuntimeError("do not execute")\r\n')
+    const file = new File([bytes], 'analysis.PY', { type })
+    const reference = await importComposerWorkspaceAttachment({ file }, { workspaceRoot: '/workspace', threadId: 'task', writeWorkspaceFile })
+    expect(reference.mimeType).toBe('text/plain')
+    expect(writeWorkspaceFile.mock.calls[0]![0].contentBase64).toBe(btoa(String.fromCharCode(...bytes)))
+  })
+}
+it('rejects binary bytes disguised as a script before calling the attachment writer', async () => {
+  const writeWorkspaceFile = vi.fn(successfulWrite)
+  const file = new File([new Uint8Array([77, 90, 0, 255])], 'fake.py', { type: 'text/plain' })
+  await expect(importComposerWorkspaceAttachment({ file }, { workspaceRoot: '/workspace', threadId: 'task', writeWorkspaceFile })).rejects.toThrow(/text|UTF-8/u)
+  expect(writeWorkspaceFile).not.toHaveBeenCalled()
 })

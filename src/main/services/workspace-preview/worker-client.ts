@@ -1,6 +1,11 @@
 import { open, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import {
+  countDelimitedDataRows,
+  countJsonlDataRows,
+  detectTabularDelimiter
+} from '@sciforge/workspace-tabular'
+import {
   type BuiltInWorkspaceDeckPreviewResult,
   type BuiltInWorkspaceTabularPreviewResult,
   type WorkspacePreviewBuiltInHostProviderAdapters,
@@ -41,6 +46,8 @@ import {
 
 export const WORKSPACE_PREVIEW_WORKER_TEXT_BYTES = 2_000_000
 export const WORKSPACE_PREVIEW_WORKER_BINARY_BYTES = 4 * 1024 * 1024
+/** Full-file row counts stay exact up to this size; larger files fall back to estimates. */
+export const WORKSPACE_PREVIEW_WORKER_TABULAR_COUNT_BYTES = 32 * 1024 * 1024
 
 export type WorkspacePreviewWorkerClientOptions = {
   maxTextBytes?: number
@@ -279,15 +286,19 @@ export class WorkspacePreviewWorkerClient {
       }
     }
 
-    const text = await this.readTextPrefix(input.file)
+    const text = await this.readTabularText(input.file)
+    const exactDataRowCount = text.exactText === undefined
+      ? undefined
+      : this.countExactTabularDataRows(input.file, text.text, text.exactText)
     const result = service.preview({
       text: text.text,
       format: 'auto',
       path: input.file.relativePath ?? input.file.path,
       workspaceRoot: input.file.workspaceRoot,
       mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
+      size: text.observedSize,
+      mtimeMs: text.observedMtimeMs,
+      ...(exactDataRowCount === undefined ? {} : { exactDataRowCount })
     })
     const workerObservation = result.observation
     const readOnly = isReadOnlyTabularPreviewFormat(result.format)
@@ -303,7 +314,7 @@ export class WorkspacePreviewWorkerClient {
         tabular: {
           header: result.header,
           rows: result.previewRows,
-          truncatedRows: result.truncatedRows,
+          truncatedRows: text.truncated || result.truncatedRows,
           truncatedColumns: result.truncatedColumns
         },
         annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
@@ -311,6 +322,69 @@ export class WorkspacePreviewWorkerClient {
         readOnly
       })
     }
+  }
+
+  /** Prefix and optional exact count share one descriptor and one bounded read budget. */
+  private async readTabularText(file: WorkspacePreviewFileState): Promise<{text: string; bytesRead: number; truncated: boolean; observedSize: number; observedMtimeMs: number; exactText?: string}> {
+    const handle = await open(file.path, 'r')
+    try {
+      const before = await handle.stat()
+      if (!before.isFile()) throw new Error('Tabular preview requires a regular file.')
+      const prefix = Buffer.alloc(Math.min(before.size, this.maxTextBytes))
+      const first = await handle.read(prefix, 0, prefix.length, 0)
+      const text = prefix.subarray(0, first.bytesRead).toString('utf8')
+      let bytesRead = first.bytesRead
+      let exactText: string | undefined
+      // Advertised size is not a budget: only descriptor metadata controls allocation.
+      if (before.size > first.bytesRead && before.size <= WORKSPACE_PREVIEW_WORKER_TABULAR_COUNT_BYTES &&
+          before.size === file.size && before.mtimeMs === file.mtimeMs) {
+        const complete = Buffer.alloc(before.size + 1)
+        prefix.copy(complete, 0, 0, first.bytesRead)
+        let offset = first.bytesRead
+        while (offset < complete.length) {
+          const part = await handle.read(complete, offset, complete.length - offset, offset)
+          bytesRead += part.bytesRead
+          offset += part.bytesRead
+          if (part.bytesRead === 0) break
+        }
+        const after = await handle.stat()
+        const current = await stat(file.path).catch(() => undefined)
+        if (current && offset === before.size && after.size === before.size && after.mtimeMs === before.mtimeMs &&
+            after.ctimeMs === before.ctimeMs && current.dev === before.dev && current.ino === before.ino &&
+            current.size === before.size && current.mtimeMs === before.mtimeMs) {
+          try { exactText = new TextDecoder('utf-8', { fatal: true }).decode(complete.subarray(0, offset)) } catch { /* bounded estimate remains available */ }
+        }
+      }
+      return { text, bytesRead, truncated: before.size > first.bytesRead, observedSize: before.size, observedMtimeMs: before.mtimeMs, ...(exactText === undefined ? {} : {exactText}) }
+    } finally { await handle.close() }
+  }
+
+  private countExactTabularDataRows(
+    file: WorkspacePreviewFileState,
+    prefixText: string,
+    fullText: string
+  ): number | undefined {
+    const path = (file.relativePath ?? file.path).toLowerCase()
+    const mime = file.mimeType?.trim().toLowerCase() ?? ''
+    if (
+      path.endsWith('.jsonl') ||
+      path.endsWith('.ndjson') ||
+      mime.includes('jsonl') ||
+      mime.includes('ndjson')
+    ) {
+      return countJsonlDataRows(fullText)
+    }
+    if (path.endsWith('.tsv') || mime.includes('tab-separated-values')) {
+      return countDelimitedDataRows(fullText, '\t', true)
+    }
+    if (path.endsWith('.csv') || mime.includes('csv')) {
+      return countDelimitedDataRows(fullText, ',', true)
+    }
+    const sample = prefixText.slice(0, 8_192)
+    if (sample.trimStart().startsWith('{') || sample.trimStart().startsWith('[')) {
+      return countJsonlDataRows(fullText)
+    }
+    return countDelimitedDataRows(fullText, detectTabularDelimiter(prefixText), true)
   }
 
   private async observeDeck(

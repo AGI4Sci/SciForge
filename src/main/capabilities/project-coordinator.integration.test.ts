@@ -82,6 +82,7 @@ import {
 } from './registry'
 
 const created: ProjectCoordinatorProjectCreateResult = {
+  initializationState: 'ready',
   createIntentId: 'pct_HostCreateIntent0001',
   createdProjectId: TEST_IDS.projectId,
   workspace: {
@@ -224,6 +225,14 @@ describe('Project Coordinator Host capability integration', () => {
       }
     })
     const transport: AuthenticatedCloudTransport = Object.freeze({
+      lookupDocumentShare: async () => { throw new Error('Unexpected document share lookup.') },
+      createDocumentShare: async () => { throw new Error('Unexpected document share creation.') },
+      revokeDocumentShare: async () => { throw new Error('Unexpected document share revocation.') },
+      readDocumentComments: async () => { throw new Error('Unexpected document comments read.') },
+      mutateDocumentComments: async () => { throw new Error('Unexpected document comments mutation.') },
+      listCloudSpaces: async () => { throw new Error('Unexpected cloud spaces list.') },
+      ensureCloudSpace: async () => { throw new Error('Unexpected cloud space provision.') },
+      createCloudSpaceSession: async () => { throw new Error('Unexpected cloud space session.') },
       status: () => ({
         state: 'ready' as const,
         baseUrl: 'https://cloud.host-integration.invalid/',
@@ -324,6 +333,7 @@ describe('Project Coordinator Host capability integration', () => {
       input
     })
     const firstOutput = projectCoordinatorProjectCreateResultSchema.parse(first.output)
+    if (firstOutput.initializationState !== 'ready') throw new Error('Expected a prepared Project Session.')
 
     expect(first).toMatchObject({ changed: false, replayed: false })
     expect(firstOutput).toMatchObject({

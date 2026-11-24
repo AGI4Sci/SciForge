@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X } from 'lucide-react'
+import { GripVertical, MoveUpRight, RotateCcw, X } from 'lucide-react'
 import {
   WORKBENCH_MAIN_AREA_LOCATION,
+  type DomainRendererWorkbenchSession,
   type DomainRendererWorkbenchMainAreaContract,
   type DomainRendererWorkbenchMainAreaValue,
   type DomainRendererWorkbenchSurfaceActivation,
@@ -15,9 +16,11 @@ import {
   type RendererSlotRegistrationDisposable
 } from './renderer-slot-registry'
 import {
-  fitPageDockSizes, PAGE_DOCK_EDGES, type PageDockEdge, type PageDockPosition,
+  fitPageDockSizes, fitPageFloatingBounds, isPageDockLocation, PAGE_DOCK_EDGES, type PageDockEdge, type PageDockPosition,
   type WorkbenchPageLayout
 } from '../components/workbench-page-layout'
+import { WorkbenchPageSurface } from './workbench-page-surface'
+import { useWorkbenchPageGestures } from './workbench-page-gestures'
 import './workbench-page-dock.css'
 
 export type WorkbenchMainAreaContribution =
@@ -81,7 +84,8 @@ export type WorkbenchSessionDockHost = Readonly<{
  * pages. Only the foreground page may dock a Session, so the Session UI is
  * never mounted twice.
  */
-export function WorkbenchMainAreaOutlet({ pages, activePageId, activations, dock, layout, children, rightPanel, visible = true, centerRef }: {
+export function WorkbenchMainAreaOutlet({ session, pages, activePageId, activations, dock, layout, children, rightPanel, visible = true, centerRef }: {
+  session?: DomainRendererWorkbenchSession
   pages: readonly RegisteredWorkbenchMainAreaContribution[]
   activePageId: string | null
   activations?: Readonly<Record<string, DomainRendererWorkbenchSurfaceActivation>>
@@ -97,6 +101,9 @@ export function WorkbenchMainAreaOutlet({ pages, activePageId, activations, dock
   const newlyVisited = pages.filter(({ id }) => (id === activePageId || layout?.isOpen(id)) && !visited.includes(id))
   if (newlyVisited.length) setVisited([...visited, ...newlyVisited.map(({ id }) => id)])
   const root = useRef<HTMLDivElement>(null)
+  const gestures = useWorkbenchPageGestures(root, layout)
+  const [frontPage, setFrontPage] = useState<string | null>(null)
+  const [windowError, setWindowError] = useState(false)
   const [bounds, setBounds] = useState({ width: 0, height: 0 })
   useLayoutEffect(() => {
     const element = root.current!
@@ -150,17 +157,49 @@ export function WorkbenchMainAreaOutlet({ pages, activePageId, activations, dock
       <div className="workbench-page-dock-previews">{rightPanel}</div>
       {pages.filter(({ id }) => visited.includes(id)).map(({ id, contribution }) => {
         const position = layout?.state.pages[id]?.position ?? 'main'
-        const active = visible && (position === 'main' ? id === activePageId : layout?.selectedPage(position) === id)
-        const tabs = position === 'main' ? pages.filter(page => page.id === id) : layout?.edgePages(position) ?? []
+        const floating = position === 'floating'
+        const external = position === 'window'
+        const shown = external ? Boolean(layout?.state.pages[id]?.open)
+          : visible && (position === 'main' ? id === activePageId : floating ? layout?.isOpen(id) : layout?.selectedPage(position) === id)
+        const active = Boolean(shown)
+        const tabs = isPageDockLocation(position) && position !== 'main' ? layout?.edgePages(position) ?? [] : pages.filter(page => page.id === id)
+        const floatBounds = fitPageFloatingBounds(layout?.state.floating[id] ?? { x: 60, y: 44, width: 600, height: 460 }, bounds.width, bounds.height)
+        const movePage = (next: PageDockPosition) => {
+          layout?.movePage(id, next, next === 'floating' ? floatBounds : undefined)
+          setFrontPage(id)
+        }
         return (
-          <div key={id} hidden={!active} className={active ? 'workbench-page-dock-page' : 'hidden'}
-            style={{ gridArea: position }} data-dock-page={id} data-dock-position={position}>
+          <WorkbenchPageSurface key={id} id={id} title={t(contribution.label)} external={external && Boolean(shown)} hidden={!shown}
+            focusKey={layout?.state.pages[id]}
+            bounds={layout?.state.windows[id]} onBounds={next => layout?.setFloatingBounds(id, next, true)}
+            onReturn={() => layout?.movePage(id, layout.state.docked[id] ?? contribution.docking?.defaultPosition ?? 'main')}
+            onError={() => setWindowError(true)}
+            style={floating ? { position: 'absolute', left: floatBounds.x, top: floatBounds.y,
+              width: floatBounds.width, height: floatBounds.height, zIndex: id === frontPage ? 42 : 40 } : { gridArea: isPageDockLocation(position) ? position : undefined }}>
+          {ownerDocument => (
+          <div key={id} hidden={!shown} className={shown ? 'workbench-page-dock-page' : 'hidden'}
+            data-dock-page={id} data-dock-position={position} onPointerDownCapture={() => { if (floating) setFrontPage(id) }}>
             {contribution.docking && layout ? (
-              <header className="workbench-page-dock-header ds-no-drag">
+              <header className="workbench-page-dock-header ds-no-drag" title={t('pageDockDragHint')}
+                onPointerDown={event => {
+                  const target = event.target as HTMLElement
+                  const tab = target.closest<HTMLElement>('[data-page-drag-id]')
+                  if (!tab && target.closest('button, select')) return
+                  gestures.start(event, tab?.dataset.pageDragId ?? id)
+                }}
+                onDoubleClick={event => {
+                  if ((event.target as HTMLElement).closest('button, select')) return
+                  movePage(floating || external ? layout.state.docked[id] ?? contribution.docking!.defaultPosition : 'floating')
+                }}>
+                <GripVertical className="workbench-page-dock-grip h-3.5 w-3.5" aria-hidden="true" />
                 <div className="workbench-page-dock-tabs" role="tablist" aria-label={t('pageDockPanels')}>
                   {tabs.map(page => <button key={page.id} type="button" role="tab"
+                    data-page-drag-id={page.id}
                     aria-selected={page.id === id} tabIndex={page.id === id ? 0 : -1}
-                    aria-controls={`dock-page-${page.id}`} onClick={() => layout.openPage(page.id)}
+                    aria-controls={`dock-page-${page.id}`} onClick={() => {
+                      if (gestures.suppressClick.current) { gestures.suppressClick.current = false; return }
+                      layout.openPage(page.id)
+                    }}
                     onKeyDown={event => {
                       const index = tabs.findIndex(tab => tab.id === page.id)
                       const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
@@ -173,22 +212,39 @@ export function WorkbenchMainAreaOutlet({ pages, activePageId, activations, dock
                     }}>{t(page.contribution.label)}</button>)}
                 </div>
                 <select aria-label={t('pageDockPosition')} title={t('pageDockPosition')} value={position}
-                  onChange={event => layout.movePage(id, event.target.value as PageDockPosition)}>
-                  {(['left', 'right', 'bottom', 'main'] as const).map(value => <option key={value} value={value}>{t(`pageDockPosition_${value}`)}</option>)}
+                  onChange={event => movePage(event.target.value as PageDockPosition)}>
+                  {(['left', 'right', 'bottom', 'main', 'floating', 'window'] as const).map(value => <option key={value} value={value}>{t(`pageDockPosition_${value}`)}</option>)}
                 </select>
+                {floating || external ? <button type="button" aria-label={t('pageDockReturn')} title={t('pageDockReturn')}
+                  onClick={() => movePage(layout.state.docked[id] ?? contribution.docking!.defaultPosition)}><RotateCcw className="h-3.5 w-3.5" aria-hidden="true" /></button> : null}
+                {!external ? <button type="button" aria-label={t('pageDockPopOut')} title={t('pageDockPopOut')}
+                  onClick={() => movePage('window')}><MoveUpRight className="h-3.5 w-3.5" aria-hidden="true" /></button> : null}
                 <button type="button" aria-label={t('close')} title={t('close')} onClick={() => layout.closePage(id)}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>
               </header>
             ) : null}
             <div className="workbench-page-dock-content" id={`dock-page-${id}`}>
             {contribution.render({
               active,
+              session,
+              ownerDocument,
               ...(activations?.[id] ? { activation: activations[id] } : {}),
               className: 'flex min-h-0 min-w-0 flex-1',
               renderSessionDock: (request) =>
                 <WorkbenchSessionDock request={request} dock={active && position === 'main' ? dock : null} />
             })}
             </div>
+            {floating ? <button type="button" className="workbench-page-float-resize ds-no-drag" aria-label={t('pageDockResizeFloating')}
+              onPointerDown={event => gestures.start(event, id, 'resize')}
+              onKeyDown={event => {
+                const dx = event.key === 'ArrowRight' ? 24 : event.key === 'ArrowLeft' ? -24 : 0
+                const dy = event.key === 'ArrowDown' ? 24 : event.key === 'ArrowUp' ? -24 : 0
+                if (!dx && !dy) return
+                event.preventDefault()
+                layout?.setFloatingBounds(id, fitPageFloatingBounds({ ...floatBounds, width: floatBounds.width + dx, height: floatBounds.height + dy }, bounds.width, bounds.height))
+              }} /> : null}
           </div>
+          )}
+          </WorkbenchPageSurface>
         )
       })}
       {PAGE_DOCK_EDGES.filter(edge => openEdges[edge]).map(edge => <div key={edge}
@@ -210,7 +266,14 @@ export function WorkbenchMainAreaOutlet({ pages, activePageId, activations, dock
           event.preventDefault()
           layout?.resize(edge, sizes[edge] + delta)
         }} />)}
-      {resizing ? <div className="workbench-page-dock-resize-shield" style={{ cursor: resizing === 'bottom' ? 'row-resize' : 'col-resize' }} aria-hidden="true" /> : null}
+      {resizing ? <div data-native-view-occluder="true" className="workbench-page-dock-resize-shield" style={{ cursor: resizing === 'bottom' ? 'row-resize' : 'col-resize' }} aria-hidden="true" /> : null}
+      {gestures.preview ? <div className="workbench-page-drag-overlay" data-native-view-occluder="true" role="dialog" aria-label={t('pageDockDragHint')}>
+        {gestures.preview.target ? <div className={`workbench-page-drop-preview is-${gestures.preview.target}`} /> : null}
+        <div className="workbench-page-drag-ghost" style={{ left: gestures.preview.x, top: gestures.preview.y,
+          width: gestures.preview.width, height: gestures.preview.height }}>{t(pages.find(page => page.id === gestures.preview!.id)!.contribution.label)}</div>
+        <div className="workbench-page-drag-hint">{t('pageDockDragHint')}</div>
+      </div> : null}
+      {windowError ? <div className="workbench-page-window-error" role="alert">{t('pageDockWindowError')} <button type="button" onClick={() => setWindowError(false)}>{t('close')}</button></div> : null}
     </div>
   )
 }
@@ -230,7 +293,7 @@ function WorkbenchSessionDock({ request, dock }: {
   return (
     <div
       className="workbench-session-dock"
-      role="dialog"
+      data-native-view-occluder="true" role="dialog"
       aria-modal="true"
       aria-label={request.label}
       onMouseDown={(event) => {
@@ -259,7 +322,7 @@ function WorkbenchSessionDock({ request, dock }: {
                 </button>
               </div>
               {!owned ? (
-                <p role="alert" className="m-4 text-[13px] text-ds-ink">{dock.labels.refused}</p>
+                <p role="alert" className="m-4 text-ds-md text-ds-ink">{dock.labels.refused}</p>
               ) : shown ? dock.sessionView : null}
             </>
           ) : null}

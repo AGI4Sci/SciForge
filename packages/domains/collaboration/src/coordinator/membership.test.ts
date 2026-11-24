@@ -45,6 +45,14 @@ function setup(
   })
   const transport: AuthenticatedCloudTransport = {
     status: () => ({ state: 'ready', baseUrl: 'https://cloud.test', userId: principal, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('No staging in Project launch.') },
     readObject: async () => { throw new Error('No byte transfer in Project launch.') },
     execute
@@ -154,6 +162,14 @@ test('accepting a confirmed-requirements invitation does not dispatch from the W
   })
   const transport: AuthenticatedCloudTransport = {
     status: () => ({ state: 'ready', baseUrl: 'https://cloud.test', userId: TEST_IDS.secondUserId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('No object staging.') },
     readObject: async () => { throw new Error('No object read.') },
     execute: async (request) => {
@@ -217,6 +233,14 @@ test('accepting a draft-requirements invitation is rejected before the Cloud wri
   const transport: AuthenticatedCloudTransport = {
     status: () => ({ state: 'ready', baseUrl: 'https://cloud.test', userId: TEST_IDS.secondUserId,
       deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('No object staging.') },
     readObject: async () => { throw new Error('No object read.') },
     execute: async () => { executeCalls += 1; throw new Error('Cloud acceptance must not run.') }

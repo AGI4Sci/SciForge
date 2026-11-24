@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { isStructuredOutputContractField } from './response-compat';
+import { isClientToolCall, isClientToolOutput } from './response-tool-transcript';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -37,6 +38,7 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
     }));
   }
   if (!isRecord(value)) return value;
+  if (isClientToolOutput(value) || (isClientToolCall(value) && value.type !== 'function_call')) return value;
   if (isStructuredImagePart(value)) return value;
 
   const role = stringField(value.role) || (context.role === 'tool' ? context.role : '');
@@ -126,7 +128,6 @@ function hygienizeText(value: string, context: HygieneContext): string {
 
 function isToolOutputContext(context: HygieneContext): boolean {
   return (context.role === 'tool' && context.key === 'content')
-    || (context.recordType === 'function_call_output' && context.key === 'output')
     || (context.recordType === 'tool_result' && context.key === 'content');
 }
 
