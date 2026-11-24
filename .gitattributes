@@ -17,3 +17,10 @@ packages/workers/dsh-runtime/docs/release-review/safe-acp.yml text eol=lf
 plugins/scientific-plotting/src/worker/** text eol=lf
 plugins/scientific-plotting/src/ports/** text eol=lf
 plugins/scientific-plotting/src/fixture/** text eol=lf
+
+# Migration fixtures and license sidecars are authenticated as exact Git bytes.
+test-fixtures/migration-plugins/** text eol=lf
+
+# Original license archives and inert provenance fixtures also have fixed hashes.
+**/LICENSE text eol=lf
+plugins/project-dag/tests/fixtures/legacy-runtime* text eol=lf

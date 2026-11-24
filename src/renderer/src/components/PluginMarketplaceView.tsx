@@ -3,14 +3,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Check,
+  Blocks,
+  ChevronLeft,
   ChevronDown,
   FolderOpen,
   Info,
   Loader2,
   Plus,
   RefreshCw,
-  Search,
-  Settings
+  Search
 } from 'lucide-react'
 import {
   joinFsPath,
@@ -50,8 +51,8 @@ export type SkillCatalogItem = {
   description?: string
   group: 'recommended' | 'personal'
   sourceLabel?: string
-  statusTone?: 'default' | 'success' | 'warning' | 'error'
   skillInstructions?: string
+  location?: string
 }
 
 type SkillRootOption = {
@@ -104,7 +105,8 @@ export function skillCatalogItemsFromDiscoveredSkills(
     title: skill.name,
     description: skill.description ?? skill.root,
     group: 'personal' as const,
-    sourceLabel: skill.scope === 'project' ? labels.project : labels.global
+    sourceLabel: skill.scope === 'project' ? labels.project : labels.global,
+    location: skill.entryPath
   }))
 }
 
@@ -170,6 +172,8 @@ export function PluginMarketplaceView(): ReactElement {
   const [filter, setFilter] = useState<SkillFilter>('all')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [notice, setNotice] = useState<MarketplaceNotice | null>(null)
+  const [expandedSkillGroups, setExpandedSkillGroups] = useState({ recommended: false, personal: false })
+  const [selectedSkill, setSelectedSkill] = useState<SkillCatalogItem | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [customName, setCustomName] = useState('')
   const [customDescription, setCustomDescription] = useState('')
@@ -515,20 +519,12 @@ export function PluginMarketplaceView(): ReactElement {
             <h1 className="text-ds-6xl font-semibold text-ds-ink md:text-[36px]">
               {t('extensionCenterTitle')}
             </h1>
-            <p className="mt-2 max-w-2xl text-ds-lg leading-6 text-ds-muted">
+            {activeTab !== 'skills' ? <p className="mt-2 max-w-2xl text-ds-lg leading-6 text-ds-muted">
               {t('extensionCenterDescription')}
-            </p>
+            </p> : null}
           </div>
           {activeTab === 'skills' ? (
             <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void openManageTarget()}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-ds-md font-semibold text-ds-ink transition hover:bg-ds-hover"
-              >
-                <Settings className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
-                {t('pluginManageSkills')}
-              </button>
               <button
                 type="button"
                 onClick={() => setCustomOpen((value) => !value)}
@@ -609,13 +605,6 @@ export function PluginMarketplaceView(): ReactElement {
             role="tabpanel"
             aria-labelledby="extension-center-skills-tab"
           >
-            <div className="mt-7">
-              <h2 className="text-ds-5xl font-semibold text-ds-ink">{t('pluginSkillTitle')}</h2>
-              <p className="mt-1 text-ds-md leading-5 text-ds-muted">
-                {t('pluginSkillPageDescription')}
-              </p>
-            </div>
-
             <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center">
               <label className="relative min-w-0 flex-1">
                 <span className="sr-only">{t('pluginSearchSkill')}</span>
@@ -648,7 +637,9 @@ export function PluginMarketplaceView(): ReactElement {
               </label>
             </div>
 
-            <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+            <details className="mt-3 text-ds-sm text-ds-muted">
+              <summary className="cursor-pointer hover:text-ds-ink">{t('pluginSkillManagement')}</summary>
+            <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
               <select
                 value={selectedSkillRoot?.id ?? ''}
                 aria-label={t('pluginSkillRootLabel')}
@@ -682,16 +673,9 @@ export function PluginMarketplaceView(): ReactElement {
                 )}
                 {t('pluginSkillRefresh')}
               </button>
-              {skillListError ? (
-                <span className="text-ds-sm text-red-700 dark:text-red-300">
-                  {skillListError}
-                </span>
-              ) : (
-                <span className="text-ds-sm text-ds-faint">
-                  {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
-                </span>
-              )}
             </div>
+            </details>
+            {skillListError ? <p role="alert" className="mt-2 text-ds-sm text-red-700 dark:text-red-300">{skillListError}</p> : null}
 
             {customOpen ? (
               <CustomSkillPanel
@@ -708,25 +692,50 @@ export function PluginMarketplaceView(): ReactElement {
 
             {notice ? <NoticeView notice={notice} /> : null}
 
-            <SkillSection
-              title={t('pluginSkillTemplates')}
-              emptyText={t('pluginNoSkillResults')}
-              items={recommendedItems}
-              busyId={busyId}
-              isInstalled={isInstalled}
-              onAdd={addItem}
-              t={t}
-            />
+            {selectedSkill ? (
+              <article data-skill-details className="mt-6 py-4">
+                <button type="button" onClick={() => setSelectedSkill(null)} className="inline-flex items-center gap-1.5 text-ds-sm text-ds-muted hover:text-ds-ink">
+                  <ChevronLeft className="h-4 w-4" aria-hidden="true" />{t('pluginBackToSkills')}
+                </button>
+                <h3 className="mt-5 text-ds-3xl font-semibold text-ds-ink">{itemTitle(selectedSkill, t)}</h3>
+                <p className="mt-3 whitespace-pre-wrap text-ds-lg leading-6 text-ds-muted">{itemDescription(selectedSkill, t)}</p>
+                {selectedSkill.sourceLabel ? <p className="mt-3 text-ds-sm text-ds-faint">{selectedSkill.sourceLabel}</p> : null}
+                {selectedSkill.location ? <p className="mt-3 break-all font-mono text-ds-sm text-ds-faint">{selectedSkill.location}</p> : null}
+                {selectedSkill.skillInstructions ? <pre className="mt-5 whitespace-pre-wrap rounded-xl bg-ds-subtle p-4 font-mono text-ds-sm leading-6 text-ds-muted">{selectedSkill.skillInstructions}</pre> : null}
+                {selectedSkill.group === 'recommended' ? (
+                  <button type="button" disabled={isInstalled(selectedSkill) || busyId !== null} onClick={() => void addItem(selectedSkill)} className="mt-5 rounded-lg bg-ds-userbubble px-4 py-2 text-ds-sm font-semibold text-ds-userbubbleFg disabled:opacity-50">
+                    {isInstalled(selectedSkill) ? t('pluginAdded') : t('pluginAdd')}
+                  </button>
+                ) : null}
+              </article>
+            ) : (
+              <>
+                {recommendedItems.length + personalItems.length === 0 ? <p className="py-8 text-ds-sm text-ds-faint">{t('pluginNoSkillResults')}</p> : null}
+                <SkillSection
+                  title={t('pluginSkillTemplates')}
+                  expanded={expandedSkillGroups.recommended}
+                  onToggleExpanded={() => setExpandedSkillGroups(current => ({ ...current, recommended: !current.recommended }))}
+                  items={recommendedItems}
+                  busyId={busyId}
+                  isInstalled={isInstalled}
+                  onOpen={setSelectedSkill}
+                  onAdd={addItem}
+                  t={t}
+                />
 
-            <SkillSection
-              title={t('pluginPersonalSkills')}
-              emptyText={t('pluginPersonalSkillEmpty')}
-              items={personalItems}
-              busyId={busyId}
-              isInstalled={isInstalled}
-              onAdd={addItem}
-              t={t}
-            />
+                <SkillSection
+                  title={t('pluginPersonalSkills')}
+                  expanded={expandedSkillGroups.personal}
+                  onToggleExpanded={() => setExpandedSkillGroups(current => ({ ...current, personal: !current.personal }))}
+                  items={personalItems}
+                  busyId={busyId}
+                  isInstalled={isInstalled}
+                  onOpen={setSelectedSkill}
+                  onAdd={addItem}
+                  t={t}
+                />
+              </>
+            )}
           </section>
         )}
       </div>
@@ -734,96 +743,50 @@ export function PluginMarketplaceView(): ReactElement {
   )
 }
 
-function skillSourceTone(tone: SkillCatalogItem['statusTone']): string {
-  switch (tone) {
-    case 'success':
-      return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
-    case 'warning':
-      return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-200'
-    case 'error':
-      return 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'
-    case 'default':
-    default:
-      return 'bg-ds-subtle text-ds-muted'
-  }
-}
-
 function SkillSection({
-  title,
-  emptyText,
-  items,
-  busyId,
-  isInstalled,
-  onAdd,
-  t
+  title, items, expanded, onToggleExpanded, busyId, isInstalled, onAdd, onOpen, t
 }: {
   title: string
-  emptyText: string
   items: SkillCatalogItem[]
+  expanded: boolean
+  onToggleExpanded: () => void
   busyId: string | null
   isInstalled: (item: Pick<SkillCatalogItem, 'id'>) => boolean
   onAdd: (item: SkillCatalogItem) => Promise<void>
+  onOpen: (item: SkillCatalogItem) => void
   t: (key: string, values?: Record<string, unknown>) => string
-}): ReactElement {
+}): ReactElement | null {
+  if (items.length === 0) return null
+  const shown = expanded ? items : items.slice(0, 6)
   return (
-    <section className="mt-8">
-      <h2 className="border-b border-ds-border-muted pb-3 text-ds-3xl font-semibold text-ds-ink">
-        {title}
+    <section className="mt-7">
+      <h2 className="mb-2 flex items-center gap-2 text-ds-md font-semibold text-ds-muted">
+        {title}<span className="text-ds-xs font-normal text-ds-faint">{items.length}</span>
       </h2>
-      {items.length === 0 ? (
-        <div className="py-8 text-ds-lg text-ds-faint">{emptyText}</div>
-      ) : (
-        <div className="grid gap-x-14 md:grid-cols-2">
-          {items.map((item) => {
-            const itemKey = skillItemKey(item.id)
-            const installed = isInstalled(item)
-            const busy = busyId === itemKey
-            return (
-              <div
-                key={itemKey}
-                className="flex min-h-[92px] items-center gap-5 border-b border-ds-border-muted py-5"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-ds-2xl font-semibold text-ds-ink">
-                      {itemTitle(item, t)}
-                    </span>
-                    {item.sourceLabel ? (
-                      <span
-                        className={`shrink-0 rounded-md px-2 py-0.5 text-ds-xs font-semibold ${skillSourceTone(item.statusTone)}`}
-                      >
-                        {item.sourceLabel}
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-ds-lg leading-5 text-ds-muted">
-                    {itemDescription(item, t)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={installed || busy}
-                  onClick={() => void onAdd(item)}
-                  title={installed ? t('pluginAdded') : t('pluginAdd')}
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition ${
-                    installed
-                      ? 'text-ds-faint'
-                      : 'bg-ds-subtle text-ds-ink hover:bg-ds-hover disabled:opacity-60'
-                  }`}
-                >
-                  {busy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
-                  ) : installed ? (
-                    <Check className="h-4 w-4" strokeWidth={2} />
-                  ) : (
-                    <Plus className="h-4 w-4" strokeWidth={2} />
-                  )}
-                </button>
+      <div className="grid gap-x-4 gap-y-1 md:grid-cols-2">
+        {shown.map(item => {
+          const installed = isInstalled(item)
+          const busy = busyId === skillItemKey(item.id)
+          return (
+            <article key={skillItemKey(item.id)} className="group relative flex min-h-[80px] items-center gap-3 rounded-xl border border-transparent p-3 transition-colors hover:border-ds-border-muted hover:bg-ds-hover focus-within:border-ds-border-muted focus-within:bg-ds-hover">
+              <button type="button" aria-label={t('catalogOpenDetails', { name: itemTitle(item, t) })} onClick={() => onOpen(item)} className="ds-button-plain absolute inset-0 z-10 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/50" />
+              <span className="pointer-events-none relative z-20 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ds-subtle text-accent" aria-hidden="true"><Blocks className="h-5 w-5" /></span>
+              <div className="pointer-events-none relative z-20 min-w-0 flex-1">
+                <h3 className="truncate text-ds-xl font-semibold text-ds-ink">{itemTitle(item, t)}</h3>
+                <p className="mt-1 truncate text-ds-sm text-ds-muted">{itemDescription(item, t)}</p>
               </div>
-            )
-          })}
-        </div>
-      )}
+              {installed ? (
+                <span className="pointer-events-none relative z-20 flex h-8 w-8 shrink-0 items-center justify-center text-ds-faint" aria-label={t('pluginAdded')}><Check className="h-4 w-4" aria-hidden="true" /></span>
+              ) : (
+                <button type="button" disabled={busyId !== null} aria-label={t('pluginAddNamed', { name: itemTitle(item, t) })} onClick={() => void onAdd(item)} title={t('pluginAdd')} className="ds-button-plain relative z-30 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
+                </button>
+              )}
+            </article>
+          )
+        })}
+      </div>
+      {items.length > 6 ? <button type="button" onClick={onToggleExpanded} className="ds-button-plain mt-2 rounded-lg px-3 py-2 text-ds-sm text-ds-faint hover:text-ds-ink">{expanded ? t('pluginSkillShowLess') : t('pluginSkillShowAll', { count: items.length })}</button> : null}
     </section>
   )
 }

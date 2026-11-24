@@ -3,9 +3,10 @@
  * block is hoisted into the emitted base layer (which keeps utilities winning).
  */
 @import './styles/ui-affordance.css';
+@import './styles/select-controls.css';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Design tokens: light keeps the existing OpenBridge feel; dark follows the Codex-style theme-v1 palette. */
+/* Design tokens: light keeps the existing OpenBridge feel; dark follows the DSH neutral palette. */

@@ -192,18 +192,19 @@ export function ExtensionCard({
   const status = runtimeStatus ?? extensionStatus(extension, t)
 
   return (
-    <article className="rounded-2xl border border-ds-border bg-ds-card p-4 shadow-sm transition-shadow hover:shadow-md">
-      <div className="flex min-w-0 items-center gap-3">
-        <button type="button" onClick={() => onOpenDetails?.(extension)} aria-label={`Show details for ${extension.displayName}`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ds-subtle text-ds-muted transition hover:bg-ds-border-muted hover:text-ds-ink">
+    <article className="group relative rounded-xl border border-transparent bg-transparent p-4 transition-colors hover:border-ds-border-muted hover:bg-ds-hover focus-within:border-ds-border-muted focus-within:bg-ds-hover">
+      <button type="button" onClick={() => onOpenDetails?.(extension)} aria-label={t('catalogOpenDetails', { name: extension.displayName })} className="ds-button-plain absolute inset-0 z-10 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/50" />
+      <div className="pointer-events-none relative z-20 flex min-w-0 items-center gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ds-subtle text-ds-muted">
           <Box className="h-4 w-4" strokeWidth={1.7} aria-hidden="true" />
-        </button>
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <button type="button" onClick={() => onOpenDetails?.(extension)} aria-label={`Show details for ${extension.displayName}`} className="min-w-0 truncate text-left text-ds-xl font-semibold text-ds-ink hover:text-accent">
+            <h3 className="min-w-0 truncate text-left text-ds-xl font-semibold text-ds-ink">
               {extension.displayName}
-            </button>
+            </h3>
             {extension.official ? (
-              <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-ds-2xs font-semibold text-blue-700 dark:bg-blue-950/30 dark:text-blue-200">
+              <span className="inline-flex items-center gap-1 text-ds-2xs text-ds-faint">
                 <ShieldCheck className="h-3 w-3" aria-hidden="true" />
                 {t('extensionOfficial')}
               </span>
@@ -224,8 +225,8 @@ export function ExtensionCard({
               {status.label}
             </span>
           </div>
-          <div className="mt-0.5 truncate font-mono text-ds-2xs text-ds-faint">
-            {extension.packageName}
+          <div className="mt-1 truncate text-ds-sm text-ds-faint">
+            {extension.publisher} · {extension.version}
           </div>
         </div>
       </div>
@@ -352,14 +353,14 @@ export function ExtensionCatalog({
       aria-labelledby="extension-center-extensions-tab"
       className="mt-7"
     >
-      <div className="flex flex-col gap-3 rounded-2xl border border-ds-border bg-ds-card/75 p-4 text-ds-md leading-5 text-ds-muted sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="font-semibold text-ds-ink">{t('extensionTrustTitle')}</div>
+      <div className="flex flex-col gap-3 text-ds-md leading-5 text-ds-muted sm:flex-row sm:items-start sm:justify-between">
+        <details>
+          <summary className="cursor-pointer text-ds-sm text-ds-muted hover:text-ds-ink">{t('extensionTrustTitle')}</summary>
           <p className="mt-1">{t('extensionTrustBody')}</p>
           <p className="mt-1 text-amber-700 dark:text-amber-300">
             {t('extensionStateChangesNotice')}
           </p>
-        </div>
+        </details>
         {onInstall ? (
           <button
             type="button"
@@ -399,7 +400,7 @@ export function ExtensionCatalog({
       </label>
 
       <div className="mt-4 flex items-center justify-between border-b border-ds-border-muted pb-3">
-        <h2 className="text-ds-3xl font-semibold text-ds-ink">{t('extensionInstalledTitle')}</h2>
+        <h2 className="text-ds-xl font-semibold text-ds-ink">{t('extensionInstalledTitle')}</h2>
         <span className="text-ds-sm text-ds-faint">
           {loading ? t('extensionLoading') : t('extensionCount', { count: visibleExtensions.length })}
         </span>

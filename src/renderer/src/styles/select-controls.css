@@ -1,0 +1,121 @@
+/* Shared single-choice selects: Electron renders the picker in the top layer.
+ * Keep native value, form, disabled-option and keyboard behavior.
+ * Multiple/size listboxes are intentionally outside the dropdown contract.
+ */
+@supports (appearance: base-select) {
+  select:not([multiple]):not([size]),
+  select:not([multiple]):not([size])::picker(select) {
+    appearance: base-select;
+  }
+
+  select:not([multiple]):not([size]) {
+    min-inline-size: 0;
+    gap: 12px;
+    padding-block: 6px;
+    padding-inline: 12px;
+    border: 1px solid transparent;
+    border-radius: var(--ds-radius-xl, 12px);
+    background-color: var(--ds-surface-subtle);
+    color: var(--ds-text);
+    cursor: pointer;
+    text-overflow: ellipsis;
+    transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  select:not([multiple]):not([size]):hover:not(:disabled),
+  select:not([multiple]):not([size]):open {
+    background-color: var(--ds-surface-hover);
+    border-color: var(--ds-border-muted);
+  }
+
+  select:not([multiple]):not([size]):focus-visible {
+    outline: 2px solid var(--ds-accent);
+    outline-offset: 2px;
+  }
+
+  select:not([multiple]):not([size]):disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  select:not([multiple]):not([size])::picker-icon {
+    content: '';
+    inline-size: 7px;
+    block-size: 7px;
+    flex: none;
+    margin-inline-start: auto;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-2px) rotate(45deg);
+    color: var(--ds-text-muted);
+  }
+
+  /* Some compact pickers already render a sibling chevron. */
+  select:not([multiple]):not([size]):has(+ svg) {
+    padding-inline-end: 32px;
+  }
+
+  select:not([multiple]):not([size]):has(+ svg)::picker-icon {
+    display: none;
+  }
+
+  select:not([multiple]):not([size])::picker(select) {
+    min-inline-size: anchor-size(width);
+    max-inline-size: min(480px, calc(100vw - 24px));
+    max-block-size: min(360px, 60vh);
+    margin-block-start: 6px;
+    padding: 6px;
+    border: 1px solid var(--ds-border-muted);
+    border-radius: 14px;
+    background: var(--ds-surface-elevated);
+    color: var(--ds-text);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  select:not([multiple]):not([size]) option {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-block-size: 36px;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--ds-text);
+    font: inherit;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  select:not([multiple]):not([size]) option:checked {
+    font-weight: 500;
+  }
+
+  select:not([multiple]):not([size]) option:is(:hover, :focus-visible) {
+    background: var(--ds-surface-hover);
+    outline: none;
+  }
+
+  select:not([multiple]):not([size]) option:disabled {
+    color: var(--ds-text-faint);
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  select:not([multiple]):not([size]) option::checkmark {
+    order: 1;
+    margin-inline-start: auto;
+    content: '✓';
+    color: currentColor;
+    font-size: 14px;
+  }
+
+  select:not([multiple]):not([size]) optgroup {
+    padding: 4px 0;
+    color: var(--ds-text-muted);
+    font-weight: 600;
+  }
+}

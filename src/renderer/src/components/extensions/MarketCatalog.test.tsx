@@ -169,7 +169,7 @@ describe('market catalog version installation', () => {
   it('shows the actual installed version and requires approval of catalog tools before replacing it', async () => {
     await render()
     expect(container.textContent).toContain('Installed: v1')
-    expect(container.textContent).toContain(`${versionPlugin.name} · ${versionPlugin.version}`)
+    expect(container.textContent).toContain(`${versionPlugin.name}@${versionPlugin.version}`)
     expect(button('Disable')?.disabled).toBe(false)
     expect(button('Uninstall')?.disabled).toBe(false)
 
@@ -234,6 +234,28 @@ describe('market catalog version installation', () => {
     })
   })
 
+  it('prevents another plugin operation or refresh while an operation is in flight', async () => {
+    let finish!: () => void
+    market.list.mockResolvedValue({ ...marketView(current), plugins: [current, { ...current, name: '@example/second', title: 'Second plugin' }] })
+    market.setEnabled.mockImplementation(() => new Promise<void>(resolve => { finish = resolve }))
+    await render()
+    await act(async () => button('Disable')!.click())
+    expect(market.setEnabled).toHaveBeenCalledTimes(1)
+    expect(button('Refresh')!.disabled).toBe(true)
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('article button')).every(item => item.disabled)).toBe(true)
+    await act(async () => finish())
+    expect(button('Refresh')!.disabled).toBe(false)
+  })
+
+  it('keeps installed capability details collapsed and shows concise version metadata', async () => {
+    await render()
+    const details = container.querySelector<HTMLDetailsElement>('article details')
+    expect(details).not.toBeNull()
+    expect(details!.open).toBe(false)
+    expect(details!.querySelector('summary')!.textContent).toBe('How to use it')
+    expect(container.querySelector('article h3')!.textContent).toBe(versionPlugin.title)
+  })
+
   it('translates both differing-version labels in Chinese', async () => {
     await i18n.changeLanguage('zh')
     await render()
@@ -280,11 +302,22 @@ describe('market states never leave an unexplained empty panel', () => {
   it('explains that this build has no market and retries the same call', async () => {
     const market = stubMarket(async () => { throw new Error('The plugin market is unavailable in this Host.') })
     await render()
-    expect(container.textContent).toContain('Plugin market is not available in this build')
+    expect(container.textContent).toContain('Could not load the plugin market')
     expect(container.textContent).toContain('The plugin market is unavailable in this Host.')
     expect(button('Refresh')).toBeDefined()
     await act(async () => button('Refresh')!.click())
     expect(market.list).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a failed list request once and clears the error after a successful retry', async () => {
+    const market = stubMarket(async () => { throw new Error('Temporary catalog failure') })
+    await render()
+    expect(container.textContent!.split('Temporary catalog failure')).toHaveLength(2)
+    expect(container.textContent).not.toContain('Plugin market is not available in this build')
+    market.list.mockResolvedValue(marketView(versionPlugin))
+    await act(async () => button('Refresh')!.click())
+    expect(container.textContent).not.toContain('Temporary catalog failure')
+    expect(container.textContent).toContain(versionPlugin.title)
   })
 
   it('shows the bundled catalog as local-only with a retry instead of an empty panel', async () => {
@@ -319,6 +352,19 @@ describe('market states never leave an unexplained empty panel', () => {
     expect(container.textContent).toContain('ENOENT: no such file or directory')
     expect(container.textContent).toContain('The catalog file is missing or unreadable')
     expect(button('Refresh')).toBeDefined()
+  })
+
+  it('collapses catalog metadata and unpublished entries with only one refresh action', async () => {
+    stubMarket(async () => ({ ...marketView(versionPlugin),
+      source: { kind: 'file', location: '/catalog/index.json' },
+      fallback: true,
+      notInstallable: [{ name: '@example/pending', plugin: 'pending', version: '1.0.0', reason: 'Not published', detail: null, runtimeGap: null }]
+    }))
+    await render()
+    expect(Array.from(container.querySelectorAll('button')).filter(item => item.textContent === 'Refresh')).toHaveLength(1)
+    const details = Array.from(container.querySelectorAll<HTMLDetailsElement>('details'))
+    expect(details.some(item => item.textContent?.includes('/catalog/index.json') && !item.open)).toBe(true)
+    expect(details.some(item => item.textContent?.includes('Not published') && !item.open)).toBe(true)
   })
 
   it('keeps the search miss message when the catalog has entries', async () => {

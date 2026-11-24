@@ -445,7 +445,9 @@ export function createDshMarketSurface(deps: Readonly<{
         generatedAt: catalog.index.generatedAt,
         dshRuntimeVersion: catalog.index.dshRuntimeVersion,
         plugins: catalog.index.plugins.map((entry) => decorate(entry, installed)),
-        notInstallable: catalog.index.blocked,
+        notInstallable: catalog.index.blocked.map(({ name, plugin, version, reason, detail, runtimeGap }) => ({
+          name, plugin, version, reason, detail, runtimeGap
+        })),
         error: null,
         fallback
       }

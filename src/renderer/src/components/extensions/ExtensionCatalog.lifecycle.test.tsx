@@ -60,6 +60,14 @@ describe('extension details lifecycle controls', () => {
     )!.click())
   }
 
+  it('offers one card-wide details action instead of separate icon and title targets', async () => {
+    await render({ extensions: [plugin] })
+    const actions = container.querySelectorAll('[aria-label="Show details for Example UI"]')
+    expect(actions).toHaveLength(1)
+    await act(async () => (actions[0] as HTMLButtonElement).click())
+    expect(button('Back to extensions')).toBeDefined()
+  })
+
   it('enables a disabled plugin and uses refreshed host state to disable it without reopening details', async () => {
     const onSetEnabled = vi.fn()
     await render({ extensions: [plugin], onSetEnabled })
