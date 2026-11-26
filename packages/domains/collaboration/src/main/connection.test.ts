@@ -6,7 +6,8 @@ import {
 } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
-  defineAuthenticatedCloudTransport
+  defineAuthenticatedCloudTransport,
+  type AuthenticatedCloudTransportStatus
 } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import {
   agentInboxMessageSchema,
@@ -1155,6 +1156,49 @@ function dashboardProjection(project: typeof projectFixture) {
     revoked: false
   }
 }
+
+test('the Dashboard cache is discarded when the verified User or Device is lost', async () => {
+  const store = await localStore([agentNodeFixture])
+  const ready = { state: 'ready', baseUrl: BASE_URL, userId: TEST_IDS.userId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 } as const
+  let authority: AuthenticatedCloudTransportStatus = ready
+  const transport = userTransport(BASE_URL, async (request) => {
+    if (request.type === 'project.list') return {
+      protocolVersion: '1.0', type: 'rest.project_page', requestId: request.requestId,
+      limit: 250, projects: [projectFixture], observedAt: TEST_LATER_TIMESTAMP
+    }
+    assert.equal(request.type, 'project.coordination.read')
+    return {
+      protocolVersion: '1.0', type: 'rest.project_coordination', requestId: request.requestId,
+      project: projectFixture, observedAt: TEST_LATER_TIMESTAMP,
+      pages: [{ collection: 'project_records', limit: 250, items: [] }], finalSummary: null,
+      dashboard: dashboardProjection(projectFixture),
+      notifications: [{
+        schemaVersion: 1, type: 'notification_projection', notificationId: 'ntf_PriorOwner0001', projectId: projectFixture.projectId, taskId: null,
+        recipientUserId: ready.userId, kind: 'system', summary: 'private inbox item', actionRequired: false,
+        expiresAt: null, readAt: null, sourceEventId: 'evt_PriorOwner0001', revision: 1,
+        createdAt: TEST_LATER_TIMESTAMP, updatedAt: TEST_LATER_TIMESTAMP
+      }]
+    }
+  })
+  const connection = new CollaborationConnection({
+    store, settings: new CollaborationSettingsService(settingsHost()), outbox: lifecycleOutbox(),
+    authenticatedCloudTransport: { ...transport, status: () => authority },
+    agentCloudRuntime: createTestAgentCloudRuntime({}), inboxHandler: { handle: async () => undefined }
+  })
+  try {
+    await connection.refreshDashboards()
+    assert.equal(connection.cloudDashboards().length, 1)
+    assert.equal(connection.publicCoordinationSlices().notifications.length, 1)
+    authority = { state: 'device_required', baseUrl: BASE_URL, reason: 'Unbound Device' }
+    assert.deepEqual(connection.publicCoordinationSlices().notifications, [])
+    authority = ready
+    assert.deepEqual(connection.cloudDashboards(), [], 'restoring authority does not re-expose an old cache')
+    await connection.refreshDashboards()
+    authority = { ...ready, deviceId: 'dev_AnotherDevice0001' }
+    assert.deepEqual(connection.cloudDashboards(), [])
+    assert.deepEqual(connection.publicCoordinationSlices().notifications, [])
+  } finally { await connection.dispose() }
+})
 
 test('Dashboard reads make bounded parallel progress and publish projects in list order', async () => {
   const store = await localStore([agentNodeFixture])

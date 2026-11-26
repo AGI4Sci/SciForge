@@ -112,6 +112,7 @@ export class CollaborationConnection {
   private authorityRecoveryRun: Promise<void> | undefined
   private authorityRecoveryStopped = false
   private authorityRecoveryDelayMs = 1_000
+  private dashboardAuthority: string | null = null
   private dashboardRefresh: Promise<void> | null = null
   private dashboardRefreshQueued = false
   private dashboardController: AbortController | null = null
@@ -129,6 +130,7 @@ export class CollaborationConnection {
   }
 
   cloudDashboards(): readonly CloudProjectDashboard[] {
+    if (!this.isDashboardAuthorityCurrent()) return []
     return [...this.dashboards.values()].map((dashboard) => structuredClone(dashboard))
   }
 
@@ -137,11 +139,29 @@ export class CollaborationConnection {
     devices: readonly DeviceReadinessProjection[]
     notifications: readonly NotificationProjection[]
   }> {
+    if (!this.isDashboardAuthorityCurrent()) return { agentProfiles: [], devices: [], notifications: [] }
     return {
       agentProfiles: structuredClone(this.publicAgentProfiles),
       devices: structuredClone(this.deviceReadiness),
       notifications: structuredClone(this.notifications)
     }
+  }
+
+  private isDashboardAuthorityCurrent(): boolean {
+    const authority = this.dashboardAuthorityKey()
+    if (authority !== this.dashboardAuthority) {
+      this.dashboardAuthority = null
+      this.dashboards.clear()
+      this.publicAgentProfiles = []
+      this.deviceReadiness = []
+      this.notifications = []
+    }
+    return authority !== null && authority === this.dashboardAuthority
+  }
+
+  private dashboardAuthorityKey(): string | null {
+    const status = this.options.authenticatedCloudTransport.status()
+    return status.state === 'ready' ? JSON.stringify([status.baseUrl, status.userId, status.deviceId, status.deviceRevision]) : null
   }
 
   async executeAsUser(request: RestRequest, options?: Readonly<{ signal?: AbortSignal }>) {
@@ -714,11 +734,12 @@ export class CollaborationConnection {
       devices.push(...(response.devices ?? []))
       notifications.push(...(response.notifications ?? []))
     }
+    this.dashboardAuthority = this.dashboardAuthorityKey()
     this.dashboards.clear()
     for (const [projectId, dashboard] of next) this.dashboards.set(projectId, dashboard)
     this.publicAgentProfiles = profiles
     this.deviceReadiness = devices
-    this.notifications = notifications
+    this.notifications = notifications.filter((notification) => notification.recipientUserId === identity.userId)
   }
 
   private async refreshProviderCatalog(): Promise<void> {
