@@ -1,3 +1,5 @@
+[简体中文](./README.md) | **English**
+
 # SciForge · The Human Control Plane and Evidence Layer for Research Agents
 
 <p align="center">
@@ -10,7 +12,6 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
   <a href="https://agi4sci.github.io/sciforge-docs-v2/en/">User Manual</a> ·
   <a href="https://agi4sci.github.io/SciForge/submit/">Submit a Research Request</a>
 </p>
